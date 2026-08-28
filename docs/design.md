@@ -193,8 +193,10 @@ Volumes: `dcx-claude-<name>` → `/home/node/.claude`, `dcx-history-<name>` →
 ## Images and plugin baking
 
 `images/base/Containerfile` forks
-`~/Projects/Github/claude-code/.devcontainer/Dockerfile` — reuse its `node:20` base,
-`node` user, zsh/powerlevel10k, `git-delta`, `gh`, `/commandhistory` persistence.
+`~/Projects/Github/claude-code/.devcontainer/Dockerfile` — reuse its base image
+(bumped from `node:20` to `node:24-trixie`, since Node 20 went EOL on
+2026-04-30), `node` user, zsh/powerlevel10k, `git-delta`, `gh`,
+`/commandhistory` persistence.
 **Drop** `init-firewall.sh`, `NET_ADMIN`, `NET_RAW`, and the `iptables`/`ipset`
 packages; egress is open by decision.
 

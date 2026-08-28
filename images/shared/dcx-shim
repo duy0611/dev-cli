@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Credential-expiry gate. Installed as /usr/local/bin/{kubectl,gcloud,aws,...}
+# symlinks pointing here; the real binaries live in /usr/local/bin/real/.
+#
+# Dispatches on argv[0], checks the matching expiry sidecar, and either execs
+# the real tool or tells you what to run on the host. Nothing is refreshed from
+# in here: the container holds no credential capable of minting another.
+set -euo pipefail
+
+tool="$(basename "$0")"
+real="/usr/local/bin/real/$tool"
+
+[ -x "$real" ] || { printf 'dcx: %s is not installed in this image\n' "$tool" >&2; exit 127; }
+
+case "$tool" in
+  kubectl|helm|k9s)   kind=k8s ;;
+  gcloud|gsutil|bq)   kind=gcp ;;
+  aws)                kind=aws ;;
+  *)                  exec "$real" "$@" ;;   # unknown tool: no gate
+esac
+
+# Exits 0 when live OR when this profile has no credential of that kind, so a
+# base image with a stray symlink still works.
+if ! status="$(dcx-credcheck "$kind" 2>/dev/null)"; then
+  instance="${DCX_INSTANCE:-<unknown>}"
+  {
+    printf 'dcx: %s for instance %s.\n' "$status" "$instance"
+    printf '     Run on the HOST:  dccred refresh %s\n' "$instance"
+  } >&2
+  exit 1
+fi
+
+exec "$real" "$@"

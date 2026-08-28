@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+# dcx - run a command (default: interactive zsh) inside a devcontainer.
+#
+# Two modes, one downstream path:
+#
+#   project mode   the folder ships a .devcontainer/    (original behaviour)
+#   profile mode   it does not, so use a prebuilt sandbox image instead
+#
+# The only thing that differs between them is how $folder is derived. In
+# project mode it is the repo. In profile mode it is the instance's state dir,
+# which holds a generated devcontainer.json whose workspaceMount points at the
+# real project. Everything after that — the liveness check, `devcontainer up`,
+# `devcontainer exec` — is identical, and because the state dir is unique per
+# instance, so is the devcontainer.local_folder label the liveness check filters
+# on. Two sandboxes on one project therefore do not collide.
+set -euo pipefail
+
+DCX_PROG=dcx
+LIB="$(cd -P "$(dirname "$( \
+  src="${BASH_SOURCE[0]}"
+  while [ -L "$src" ]; do
+    d="$(cd -P "$(dirname "$src")" && pwd)"; src="$(readlink "$src")"
+    case "$src" in /*) ;; *) src="$d/$src" ;; esac
+  done
+  printf '%s' "$src")")/../lib" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$LIB/common.sh"
+. "$LIB/instance.sh"
+. "$LIB/pick.sh"
+. "$LIB/mint.sh"
+. "$LIB/env.sh"
+. "$LIB/render.sh"
+. "$LIB/seed.sh"
+
+usage() {
+  cat <<'EOF'
+dcx - run a command (default: interactive zsh) inside a devcontainer.
+
+Usage:
+  dcx [-f FOLDER] [-p PROFILE] [--as NAME] [OPTIONS] [--] [COMMAND ...]
+  dcx --rm NAME
+  dcx --list
+
+Options:
+  -f, --folder FOLDER   Workspace folder. Default: DCX_FOLDER, else the nearest
+                        ancestor of $PWD holding .devcontainer/ (project mode),
+                        else $PWD (profile mode).
+  -p, --profile NAME    base | k8s | gcp | full. Forces profile mode.
+      --as NAME         Instance name. Default: basename of the folder.
+      --auth MODE       litellm (default) | oauth. Recorded at create.
+      --gitconfig       Snapshot the host ~/.gitconfig into the instance.
+      --gpg             Export the GPG public key for signing (see README).
+      --rm NAME         Remove an instance: container, volumes, and state.
+      --list            List instances.
+  -h, --help            Show this help.
+  --                    End dcx options; everything after is the command.
+
+Mode selection:
+  1. -p given                     -> profile mode
+  2. .devcontainer found above    -> project mode (unchanged)
+  3. neither                      -> pick a profile
+
+Examples:
+  dcx                                   Shell in the current repo's devcontainer
+  dcx -p base --as scratch              Sandbox with no cloud credentials
+  dcx -p k8s --as sk8s-debug            Sandbox with a minted k8s SA token
+  dcx -p k8s --as sk8s-debug -- kubectl get pods
+  dcx --rm scratch
+
+Notes:
+  Scope (cluster/namespace/service account/project) is picked once, at instance
+  create, and reused on every later launch. Re-pick with `dccred pick NAME`.
+  Related: dcclaude (Claude Code), dcws (Herdr workspace), dccred (credentials).
+EOF
+}
+
+folder="${DCX_FOLDER:-}"
+profile=""
+instance=""
+auth="litellm"
+want_gitconfig=0
+want_gpg=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -f|--folder)  [ $# -ge 2 ] || die "-f needs a path"; folder="$2"; shift 2 ;;
+    -p|--profile) [ $# -ge 2 ] || die "-p needs a profile"; profile="$2"; shift 2 ;;
+    --as)         [ $# -ge 2 ] || die "--as needs a name"; instance="$2"; shift 2 ;;
+    --auth)       [ $# -ge 2 ] || die "--auth needs a mode"; auth="$2"; shift 2 ;;
+    --gitconfig)  want_gitconfig=1; shift ;;
+    --gpg)        want_gpg=1; shift ;;
+    --rm)         [ $# -ge 2 ] || die "--rm needs a name"
+                  need docker; dcx_check_name "$2"
+                  dcx_instance_exists "$2" || die "no such instance: $2"
+                  dcx_instance_rm "$2"; exit 0 ;;
+    --list)       need jq
+                  for i in $(dcx_list_instances); do
+                    printf '%-24s %-6s %s\n' "$i" "$(dcx_meta "$i" '.profile')" "$(dcx_meta "$i" '.workspace')"
+                  done
+                  exit 0 ;;
+    -h|--help)    usage; exit 0 ;;
+    --)           shift; break ;;
+    *)            break ;;
+  esac
+done
+
+find_folder() {
+  local dir="$PWD"
+  while [ "$dir" != "/" ]; do
+    if [ -f "$dir/.devcontainer/devcontainer.json" ] || [ -f "$dir/.devcontainer.json" ]; then
+      printf '%s\n' "$dir"
+      return 0
+    fi
+    dir="$(dirname "$dir")"
+  done
+  return 1
+}
+
+# --- mode selection ----------------------------------------------------------
+
+mode=""
+if [ -n "$profile" ]; then
+  mode=profile
+elif [ -n "$folder" ] && { [ -f "$folder/.devcontainer/devcontainer.json" ] || [ -f "$folder/.devcontainer.json" ]; }; then
+  mode=project
+elif [ -z "$folder" ] && project_folder="$(find_folder)"; then
+  mode=project
+  folder="$project_folder"
+else
+  # No devcontainer anywhere above. This is where dcx used to die.
+  profile="$(dcx_pick_profile)" || die "no profile selected"
+  mode=profile
+fi
+
+# --- profile mode: build or reuse the instance -------------------------------
+
+if [ "$mode" = profile ]; then
+  need docker; need jq
+
+  dcx_valid_profile "$profile" || die "unknown profile '$profile' (one of: $DCX_PROFILES)"
+  case "$auth" in litellm|oauth) ;; *) die "unknown --auth '$auth' (litellm|oauth)" ;; esac
+
+  workspace="$(dcx_abspath "${folder:-$PWD}")" || die "not a directory: ${folder:-$PWD}"
+  [ -n "$instance" ] || instance="$(basename "$workspace")"
+  dcx_check_name "$instance"
+
+  if dcx_instance_exists "$instance"; then
+    recorded="$(dcx_meta "$instance" '.profile')"
+    [ "$recorded" = "$profile" ] || die \
+      "instance '$instance' already exists with profile '$recorded'. Use a different --as, or dcx --rm $instance"
+    recorded_ws="$(dcx_meta "$instance" '.workspace')"
+    [ "$recorded_ws" = "$workspace" ] && : || warn \
+      "instance '$instance' is bound to $recorded_ws, not $workspace (using the recorded one)"
+  else
+    info "creating instance '$instance' (profile $profile) for $workspace"
+
+    k8s_json=null; gcp_json=null; aws_json=null
+
+    if dcx_profile_has_k8s "$profile"; then
+      need kubectl
+      ctx="$(dcx_pick_kube_context)" || die "no cluster selected"
+      ns="$(dcx_pick_namespace "$ctx")" || die "no namespace selected"
+      sa="$(dcx_pick_serviceaccount "$ctx" "$ns")" || die "no service account selected"
+      k8s_json="$(jq -n --arg c "$ctx" --arg n "$ns" --arg s "$sa" \
+        '{context:$c, namespace:$n, serviceaccount:$s}')"
+    fi
+
+    if dcx_profile_has_gcp "$profile"; then
+      need gcloud
+      proj="$(dcx_pick_gcp_project)" || die "no GCP project selected"
+      gsa="$(dcx_pick_gcp_sa "$proj")" || die "GCP service account selection cancelled"
+      gcp_json="$(jq -n --arg p "$proj" --arg s "$gsa" '{project:$p, serviceaccount:$s}')"
+    fi
+
+    if dcx_profile_has_aws "$profile"; then
+      role="$(dcx_pick_aws_role)" || die "AWS role selection cancelled"
+      aws_json="$(jq -n --arg r "$role" --arg g "${DCX_AWS_REGION:-eu-west-1}" \
+        '{role_arn:$r, region:$g}')"
+    fi
+
+    dcx_instance_init "$instance"
+    dcx_instance_write_meta "$instance" "$profile" "$workspace" "$auth" \
+      "$([ "$want_gitconfig" -eq 1 ] && echo true || echo false)" \
+      "$([ "$want_gpg" -eq 1 ] && echo true || echo false)" \
+      "$k8s_json" "$gcp_json" "$aws_json"
+
+    dcx_instance_create_volumes "$instance"
+    [ "$want_gitconfig" -eq 1 ] && dcx_stage_gitconfig "$instance" || true
+    [ "$want_gpg" -eq 1 ] && dcx_stage_gpg "$instance" || true
+    [ "$auth" = oauth ] && dcx_seed_oauth "$instance" || true
+
+    dcx_mint_all "$instance" || warn "some credentials could not be minted; run 'dccred refresh $instance' once fixed"
+  fi
+
+  dcx_render_devcontainer "$instance"
+  folder="$(dcx_instance_dir "$instance")"
+fi
+
+# --- shared path -------------------------------------------------------------
+
+[ -d "$folder" ] || die "not a directory: $folder"
+folder="$(cd "$folder" && pwd -P)"
+
+if [ -z "$(docker ps -q --filter "label=devcontainer.local_folder=$folder" 2>/dev/null)" ]; then
+  printf 'dcx: starting devcontainer for %s\n' "$folder" >&2
+  devcontainer up --workspace-folder "$folder" >/dev/null || die "devcontainer up failed"
+fi
+
+if [ $# -eq 0 ]; then
+  set -- zsh
+fi
+
+exec devcontainer exec --workspace-folder "$folder" "$@"

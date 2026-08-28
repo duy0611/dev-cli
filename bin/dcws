@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# dcws - bootstrap a Herdr workspace for a devcontainer or a profile sandbox.
+#
+# Creates a workspace with two panes:
+#   left   shell:<label>    -> dcx        (shell inside the container)
+#   right  claude:<label>   -> dcclaude   (Claude Code inside the container)
+#
+# In project mode the label is the repo name, as before. In profile mode it is
+# the instance name, so several sandboxes on one project stay distinguishable.
+#
+# After a server restart or reboot Herdr restores layout but not processes;
+# `dcws -r` refills the panes. After a plain detach/reattach nothing is needed.
+set -euo pipefail
+
+die() { printf 'dcws: %s\n' "$1" >&2; exit 1; }
+
+usage() {
+  cat <<'EOF'
+dcws - bootstrap a Herdr workspace for a devcontainer or a profile sandbox.
+
+Usage:
+  dcws [-n NAME] [-r] [--no-claude] [-p PROFILE [--as INSTANCE]] [FOLDER]
+
+Creates a Herdr workspace with two panes:
+  left   shell:<label>    -> dcx        (shell inside the container)
+  right  claude:<label>   -> dcclaude   (Claude Code inside the container)
+If the workspace already exists it is focused instead of duplicated.
+
+Options:
+  -n, --name NAME    Workspace label. Default: instance name in profile mode,
+                     else basename of FOLDER.
+  -r, --restart      Reuse the existing workspace and relaunch panes that have
+                     no foreground process. Panes still running are left alone.
+      --no-claude    Shell pane only; skip the Claude pane.
+  -p, --profile P    base | k8s | gcp | full. Profile mode: no .devcontainer
+                     needed in FOLDER.
+      --as INSTANCE  Instance name. Default: basename of FOLDER.
+      --auth MODE    litellm (default) | oauth. Passed through on create.
+      --gitconfig    Passed through to dcx.
+      --gpg          Passed through to dcx.
+  -h, --help         Show this help.
+
+Arguments:
+  FOLDER             Project folder. Default: $PWD. In project mode it must
+                     hold a devcontainer config.
+
+Examples:
+  dcws                                      Bootstrap for the current repo
+  dcws -p k8s --as sk8s-debug               Sandbox workspace with k8s creds
+  dcws -r -p k8s --as sk8s-debug            Refill panes after a server restart
+
+Notes:
+  Detach/reattach keeps processes alive - nothing to rerun. A server restart or
+  reboot restores layout but not processes; that is what -r is for.
+  Related: dcx (shell/command), dcclaude (agent), dccred (credentials).
+EOF
+}
+
+command -v jq >/dev/null || die "jq is required"
+command -v dcx >/dev/null || die "dcx not found on PATH"
+
+name=""
+restart=0
+want_claude=1
+folder=""
+profile=""
+instance=""
+passthru=()
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -n|--name)    [ $# -ge 2 ] || die "-n needs a value"; name="$2"; shift 2 ;;
+    -r|--restart) restart=1; shift ;;
+    --no-claude)  want_claude=0; shift ;;
+    -p|--profile) [ $# -ge 2 ] || die "-p needs a profile"; profile="$2"; shift 2 ;;
+    --as)         [ $# -ge 2 ] || die "--as needs a name"; instance="$2"; shift 2 ;;
+    --auth)       [ $# -ge 2 ] || die "--auth needs a mode"; passthru+=("$1" "$2"); shift 2 ;;
+    --gitconfig|--gpg) passthru+=("$1"); shift ;;
+    -h|--help)    usage; exit 0 ;;
+    -*)           usage >&2; die "unknown option: $1" ;;
+    *)            folder="$1"; shift ;;
+  esac
+done
+
+[ -n "$folder" ] || folder="$PWD"
+[ -d "$folder" ] || die "not a directory: $folder"
+folder="$(cd "$folder" && pwd -P)"
+
+# Build the dcx/dcclaude argument list once; both panes run the same scope.
+launch_args=()
+if [ -n "$profile" ]; then
+  [ -n "$instance" ] || instance="$(basename "$folder")"
+  launch_args+=(-p "$profile" --as "$instance" -f "$folder")
+  launch_args+=(${passthru[@]+"${passthru[@]}"})
+  [ -n "$name" ] || name="$instance"
+else
+  # Project mode keeps the original precondition: without a devcontainer config
+  # there is nothing to attach to, and -p is how you say "make one".
+  [ -f "$folder/.devcontainer/devcontainer.json" ] || [ -f "$folder/.devcontainer.json" ] \
+    || die "no devcontainer config in $folder (use -p PROFILE for a sandbox)"
+  launch_args+=(-f "$folder")
+  [ -n "$name" ] || name="$(basename "$folder")"
+fi
+
+# Quote for `herdr pane run`, which takes a command line rather than an argv.
+shell_cmd="dcx"
+claude_cmd="dcclaude"
+for a in ${launch_args[@]+"${launch_args[@]}"}; do
+  shell_cmd="$shell_cmd $(printf '%q' "$a")"
+  claude_cmd="$claude_cmd $(printf '%q' "$a")"
+done
+
+herdr workspace list >/dev/null 2>&1 || die "no Herdr server reachable - run 'herdr' first"
+
+existing="$(herdr workspace list | jq -r --arg n "$name" \
+  '.result.workspaces[] | select(.label == $n) | .workspace_id' | head -1)"
+
+pane_by_label() { # <workspace> <label>
+  herdr pane list --workspace "$1" | jq -r --arg l "$2" \
+    '.result.panes[] | select(.label == $l) | .pane_id' | head -1
+}
+pane_busy() { # <pane> - true if anything is running in the foreground
+  local n
+  n="$(herdr pane process-info --pane "$1" \
+    | jq -r '.result.process_info.foreground_processes | length')"
+  [ "${n:-0}" -gt 0 ]
+}
+
+if [ -n "$existing" ]; then
+  if [ "$restart" -eq 1 ]; then
+    relaunch() { # <pane> <command>
+      [ -n "$1" ] || return 0
+      if pane_busy "$1"; then
+        printf 'dcws: %s still busy, left alone\n' "$1"
+      else
+        herdr pane run "$1" "$2" >/dev/null
+        printf 'dcws: %s -> %s\n' "$1" "$2"
+      fi
+    }
+    relaunch "$(pane_by_label "$existing" "shell:$name")" "$shell_cmd"
+    if [ "$want_claude" -eq 1 ]; then
+      relaunch "$(pane_by_label "$existing" "claude:$name")" "$claude_cmd"
+    fi
+  else
+    printf 'dcws: workspace %s (%s) already exists - focusing (use -r to relaunch panes)\n' \
+      "$name" "$existing"
+  fi
+  herdr workspace focus "$existing" >/dev/null
+  exit 0
+fi
+
+created="$(herdr workspace create --cwd "$folder" --label "$name" --no-focus)"
+ws="$(printf '%s' "$created" | jq -r '.result.workspace.workspace_id')"
+root="$(printf '%s' "$created" | jq -r '.result.root_pane.pane_id')"
+
+herdr pane rename "$root" "shell:$name" >/dev/null
+herdr pane run "$root" "$shell_cmd" >/dev/null
+
+if [ "$want_claude" -eq 1 ]; then
+  right="$(herdr pane split "$root" --direction right --cwd "$folder" --no-focus \
+    | jq -r '.result.pane.pane_id')"
+  herdr pane rename "$right" "claude:$name" >/dev/null
+  herdr pane run "$right" "$claude_cmd" >/dev/null
+fi
+
+herdr workspace focus "$ws" >/dev/null
+printf 'dcws: workspace %s (%s) ready for %s\n' "$name" "$ws" "$folder"

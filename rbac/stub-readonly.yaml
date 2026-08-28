@@ -1,0 +1,40 @@
+# P1 stub RBAC — apply BY HAND to a stage cluster only.
+#
+#   kubectl --context gcp-cen-st-sk8s apply -f rbac/stub-readonly.yaml
+#
+# Its only job is to make the mint -> inject -> expire -> refresh loop
+# demonstrable end to end with a credential that is genuinely weaker than your
+# own. It is not gitops-managed, has no tiering, and covers no prod cluster.
+# P2 replaces it wholesale.
+#
+# `view` is the built-in read-only ClusterRole: it can read most namespaced
+# objects but not Secrets, and cannot mutate anything. That is what makes the
+# verification meaningful — `kubectl get pods` must succeed and
+# `kubectl delete pod` must be DENIED. A success alone proves nothing, because
+# your own credentials would also succeed.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dcx-sandbox-readonly
+  namespace: default
+  labels:
+    app.kubernetes.io/managed-by: dcx-stub
+---
+# RoleBinding, not ClusterRoleBinding: read-only across one namespace is enough
+# to prove the path, and there is no reason to hand a stub cluster-wide read.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dcx-sandbox-readonly
+  namespace: default
+  labels:
+    app.kubernetes.io/managed-by: dcx-stub
+subjects:
+  - kind: ServiceAccount
+    name: dcx-sandbox-readonly
+    namespace: default
+roleRef:
+  kind: ClusterRole
+  name: view
+  apiGroup: rbac.authorization.k8s.io
