@@ -13,6 +13,7 @@
 
 : "${DCX_K8S_TOKEN_TTL:=1h}"
 : "${DCX_AWS_TTL_SECONDS:=3600}"
+: "${DCX_GCP_TTL_SECONDS:=3600}"
 
 # macOS date. BSD syntax, no GNU -d.
 dcx_iso_to_epoch() { # <iso8601, e.g. 2026-08-28T09:00:00Z>
@@ -99,10 +100,10 @@ dcx_mint_gcp() { # <instance>
   creds="$(dcx_creds_dir "$name")"
 
   if [ -n "$sa" ]; then
-    token="$(gcloud auth print-access-token --impersonate-service-account="$sa" 2>&1)" || {
+    token="$(gcloud auth print-access-token --impersonate-service-account="$sa" --lifetime="$DCX_GCP_TTL_SECONDS" 2>&1)" || {
       warn "gcp: impersonation failed: $token"; return 1; }
   else
-    token="$(gcloud auth print-access-token 2>&1)" || {
+    token="$(gcloud auth print-access-token --lifetime="$DCX_GCP_TTL_SECONDS" 2>&1)" || {
       warn "gcp: $token"; return 1; }
   fi
 
