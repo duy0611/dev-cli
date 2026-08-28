@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Reads the expiry sidecar for one credential kind. Installed in the images and
+# used both by dcx-shim and directly, e.g. `dcx-credcheck k8s`.
+#
+# Exit codes:
+#   0  live, or no credential of this kind is configured (nothing to block on)
+#   1  expired
+#
+# Prints a human-readable line to stdout in both cases; prints nothing when the
+# credential is not configured.
+set -euo pipefail
+
+kind="${1:?usage: dcx-credcheck <k8s|gcp|aws>}"
+creds="${DCX_CREDS_DIR:-/run/dcx-creds}"
+expiry_file="$creds/$kind.expiry"
+
+# Not configured for this profile. A base container has no creds at all, and a
+# k8s container has no gcp.expiry; neither is an error.
+[ -f "$expiry_file" ] || exit 0
+
+expires="$(cat "$expiry_file" 2>/dev/null || echo 0)"
+now="$(date +%s)"
+delta=$(( expires - now ))
+
+# Always given a non-negative duration; the caller supplies the direction in
+# its wording ("expired X ago" / "valid for X").
+human_delta() { # <seconds>
+  local s=$1
+  if [ "$s" -ge 3600 ]; then printf '%dh%dm' $(( s / 3600 )) $(( (s % 3600) / 60 ))
+  elif [ "$s" -ge 60 ]; then printf '%dm' $(( s / 60 ))
+  else printf '%ds' "$s"
+  fi
+}
+
+if [ "$delta" -le 0 ]; then
+  printf '%s token expired %s ago\n' "$kind" "$(human_delta $(( -delta )))"
+  exit 1
+fi
+
+printf '%s token valid for %s\n' "$kind" "$(human_delta "$delta")"
+exit 0

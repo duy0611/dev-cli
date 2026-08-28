@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# dcclaude - run Claude Code inside a devcontainer, visible to Herdr.
+#
+# A thin wrapper over dcx: it forwards dcx's own options, sets HERDR_AGENT so
+# the pane is classified correctly behind the `devcontainer exec` wrapper, and
+# hands everything after `--` to claude.
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+dcclaude - run Claude Code inside a devcontainer, visible to Herdr.
+
+Usage:
+  dcclaude [DCX_OPTIONS] [--] [CLAUDE_ARGS ...]
+
+Dcx options forwarded as-is:
+  -f, --folder FOLDER   Workspace folder.
+  -p, --profile NAME    base | k8s | gcp | full. Forces profile mode.
+      --as NAME         Instance name.
+      --auth MODE       litellm (default) | oauth.
+      --gitconfig       Snapshot the host ~/.gitconfig into the instance.
+      --gpg             Export the GPG public key for signing.
+
+Other:
+  -h, --help            Show this help (dcclaude's own; see below for Claude's).
+  --                    End dcclaude options; everything after goes to claude.
+
+Examples:
+  dcclaude                              Claude in the current repo's devcontainer
+  dcclaude -p k8s --as sk8s-debug       Claude in a k8s sandbox
+  dcclaude --resume                     Args pass through to claude
+  dcclaude -- --help                    Claude Code's own help
+
+Notes:
+  Sets HERDR_AGENT=claude so Herdr classifies the pane as Claude Code behind the
+  `devcontainer exec` wrapper. Lifecycle state (working/blocked/idle) comes from
+  Herdr's screen-buffer detection and works the same either way.
+  Related: dcx (shell/command), dcws (Herdr workspace), dccred (credentials).
+EOF
+}
+
+# Collect dcx's options; stop at `--` or the first thing that is not one of
+# ours. Anything left over belongs to claude.
+dcx_args=()
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    -f|--folder|-p|--profile|--as|--auth)
+      [ $# -ge 2 ] || { usage >&2; printf 'dcclaude: %s needs a value\n' "$1" >&2; exit 1; }
+      dcx_args+=("$1" "$2"); shift 2 ;;
+    --gitconfig|--gpg)
+      dcx_args+=("$1"); shift ;;
+    --) shift; break ;;
+    *) break ;;
+  esac
+done
+
+export HERDR_AGENT=claude
+
+# ${arr[@]+...} guard: bash 3.2 (macOS system bash) treats an empty array as
+# unbound under `set -u`.
+exec dcx ${dcx_args[@]+"${dcx_args[@]}"} -- claude "$@"

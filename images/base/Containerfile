@@ -1,0 +1,109 @@
+# dcx-base — Claude Code sandbox with no cloud tooling.
+#
+# Forked from ~/Projects/Github/claude-code/.devcontainer/Dockerfile (Anthropic's
+# reference sandbox). Differences:
+#   - no init-firewall.sh, no iptables/ipset, no NET_ADMIN: egress is open here
+#     by decision, so the firewall would be dead weight
+#   - Claude plugins baked at build time (see the staging dance below)
+#   - dcx-post-create / dcx-credcheck / dcx-shim installed
+#
+# Build context is the repo root, so images/shared/ is reachable:
+#   docker build -f images/base/Containerfile -t localhost/dcx-base:latest .
+FROM node:20
+
+ARG TZ
+ENV TZ="$TZ"
+ARG USERNAME=node
+ARG CLAUDE_CODE_VERSION=latest
+ARG GIT_DELTA_VERSION=0.18.2
+ARG ZSH_IN_DOCKER_VERSION=1.2.0
+
+# gh is not in Debian bookworm, so use GitHub's own apt repo rather than hoping.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl gnupg2 \
+ && install -m 0755 -d /etc/apt/keyrings \
+ && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+ && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+ && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list \
+ && apt-get update && apt-get install -y --no-install-recommends \
+      less git procps sudo fzf zsh man-db unzip gh jq nano vim wget \
+      iproute2 dnsutils \
+ && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# post-create needs to chown the Claude config volume, which the runtime creates
+# root:root. Unrestricted sudo inside the container is the devcontainer norm:
+# the trust boundary is the container, not privilege within it.
+RUN echo "$USERNAME ALL=(root) NOPASSWD: ALL" > /etc/sudoers.d/"$USERNAME" \
+ && chmod 0440 /etc/sudoers.d/"$USERNAME"
+
+RUN ARCH="$(dpkg --print-architecture)" \
+ && wget -q "https://github.com/dandavison/delta/releases/download/${GIT_DELTA_VERSION}/git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb" \
+ && dpkg -i "git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb" \
+ && rm "git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb"
+
+RUN mkdir -p /usr/local/share/npm-global /commandhistory /workspace /home/$USERNAME/.claude \
+ && touch /commandhistory/.bash_history \
+ && chown -R $USERNAME:$USERNAME /usr/local/share/npm-global /commandhistory /workspace /home/$USERNAME/.claude
+
+RUN mkdir -p /usr/local/bin/real
+
+ENV DEVCONTAINER=true \
+    NPM_CONFIG_PREFIX=/usr/local/share/npm-global \
+    PATH=$PATH:/usr/local/share/npm-global/bin \
+    SHELL=/bin/zsh \
+    EDITOR=nano \
+    VISUAL=nano \
+    CLAUDE_CONFIG_DIR=/home/node/.claude
+
+WORKDIR /workspace
+USER $USERNAME
+
+RUN sh -c "$(wget -O- https://github.com/deluan/zsh-in-docker/releases/download/v${ZSH_IN_DOCKER_VERSION}/zsh-in-docker.sh)" -- \
+      -p git -p fzf \
+      -a "source /usr/share/doc/fzf/examples/key-bindings.zsh" \
+      -a "source /usr/share/doc/fzf/examples/completion.zsh" \
+      -a "export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhistory/.bash_history" \
+      -x
+
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
+
+# --- plugin baking -----------------------------------------------------------
+#
+# $CLAUDE_CONFIG_DIR is a volume mount at runtime, so anything left there in the
+# image is shadowed and invisible. Copying from some other directory does not
+# work either: Claude's marketplace cache stores absolute paths, so a plugin
+# tree installed anywhere but its final home fails to load with
+# 'Failed to load marketplace: cache-miss'.
+#
+# So: install at the final path, then move the whole tree aside to /opt/claude-seed.
+# dcx-post-create copies it back to that same path on first create, and the
+# cached paths are still correct.
+COPY --chown=node:node images/shared/install-plugins.sh /tmp/install-plugins.sh
+COPY --chown=node:node images/base/claude-plugins.txt /tmp/claude-plugins.txt
+RUN chmod +x /tmp/install-plugins.sh \
+ && /tmp/install-plugins.sh /tmp/claude-plugins.txt \
+ && sudo mv /home/node/.claude /opt/claude-seed \
+ && sudo chown -R node:node /opt/claude-seed \
+ && mkdir -p /home/node/.claude \
+ && rm -f /tmp/install-plugins.sh /tmp/claude-plugins.txt
+
+# --- dcx runtime scripts -----------------------------------------------------
+#
+# Last on purpose. These change far more often than the plugin manifest, and a
+# COPY invalidates every layer after it: putting them above the bake would make
+# every shim tweak reinstall all the plugins.
+#
+# The shims are harmless in this image, which installs no cloud tools: the shim
+# execs /usr/local/bin/real/<tool> and exits 127 when it is absent. Derived
+# images add the binaries and the symlinks.
+USER root
+COPY images/shared/dcx-shim images/shared/dcx-credcheck images/shared/post-create.sh /tmp/dcxbin/
+RUN install -m 0755 /tmp/dcxbin/dcx-shim       /usr/local/bin/dcx-shim \
+ && install -m 0755 /tmp/dcxbin/dcx-credcheck  /usr/local/bin/dcx-credcheck \
+ && install -m 0755 /tmp/dcxbin/post-create.sh /usr/local/bin/dcx-post-create \
+ && rm -rf /tmp/dcxbin
+USER node
+
+CMD ["zsh"]
