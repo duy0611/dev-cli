@@ -12,6 +12,11 @@
 ARG BASE=localhost/dcx-base:latest
 FROM ${BASE}
 
+# Every RUN below pipes (curl | tar, curl | gpg). Without pipefail the exit
+# status is the last command's, so a failed download would be silently packaged
+# as an empty archive rather than failing the build.
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 USER root
 
 # The SDK reads its access token from CLOUDSDK_AUTH_ACCESS_TOKEN_FILE on every

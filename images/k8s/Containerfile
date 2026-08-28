@@ -10,6 +10,11 @@ ARG KUBECTL_VERSION=v1.31.4
 ARG HELM_VERSION=v3.16.3
 ARG K9S_VERSION=v0.32.7
 
+# Every RUN below pipes (curl | tar, curl | gpg). Without pipefail the exit
+# status is the last command's, so a failed download would be silently packaged
+# as an empty archive rather than failing the build.
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 USER root
 
 # Real binaries go in real/; /usr/local/bin/<tool> is a symlink to the shim,

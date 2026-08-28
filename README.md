@@ -152,6 +152,34 @@ cannot pass a unix socket through the Podman VM. Expect `No secret key` on the
 | Host shell and processes | Network egress (open, by design) |
 | Other instances' state | |
 
+## Development
+
+```sh
+make              # help
+make lint         # shellcheck, yamllint, plutil, hadolint, devcontainer.json render
+make test         # smoke-test the base profile end to end
+make build        # all four images
+make build k8s    # one image (base | k8s | gcp | full); deps built first
+make k8s          # same, without the `build` word
+make install      # ./install.sh
+make clean        # remove the smoke test's instance only
+```
+
+Image targets encode the real dependencies — `k8s` and `gcp` are built `FROM
+base`, `full` `FROM k8s` — so `make build gcp` rebuilds `base` first. That is a
+few seconds when nothing changed, and it stops a stale base from silently
+persisting into a derived image.
+
+`make lint` renders a `devcontainer.json` for every profile into a throwaway
+directory and validates it, rather than trusting the `jq` in `lib/render.sh` by
+eye. `make test` creates a real instance and asserts the things that have
+actually broken here: plugins loading from the seed without a cache-miss, the
+workspace bind reaching the host in both directions, no locale warning, and the
+container label being the state dir.
+
+hadolint runs from its own image and is skipped, not failed, when it cannot be
+fetched. Suppressed rules are listed with reasons at the top of `lint-docker`.
+
 ## Design
 
 See [docs/design.md](docs/design.md) for the full rationale, the container
