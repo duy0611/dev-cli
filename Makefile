@@ -33,14 +33,15 @@ SHELLCHECK ?= shellcheck
 SH_FILES := bin/dcx bin/dcclaude bin/dcws bin/dccred install.sh \
             $(wildcard lib/*.sh) \
             images/shared/install-plugins.sh images/shared/post-create.sh \
-            images/shared/dcx-shim images/shared/dcx-credcheck
+            images/shared/dcx-shim images/shared/dcx-credcheck \
+            $(wildcard skills/*/templates/*.sh)
 
 CONTAINERFILES := images/base/Containerfile images/k8s/Containerfile images/gcp/Containerfile
 
 .DEFAULT_GOAL := help
 .PHONY: help lint test build install install-images install-watch clean \
         $(PROFILES) $(addprefix image-,$(PROFILES)) \
-        lint-shell lint-yaml lint-plist lint-docker lint-render
+        lint-shell lint-yaml lint-plist lint-docker lint-render lint-skills
 
 help:
 	@sed -n '3,9p' $(MAKEFILE_LIST) | sed 's/^# \{0,1\}//'
@@ -82,7 +83,7 @@ image-full: image-k8s
 
 # --- lint --------------------------------------------------------------------
 
-lint: lint-shell lint-yaml lint-plist lint-render lint-docker
+lint: lint-shell lint-yaml lint-plist lint-render lint-skills lint-docker
 	@echo "lint: all checks passed"
 
 # -S warning, not the default: the only info-level finding is SC2015 on the
@@ -131,6 +132,25 @@ lint-render:
 	   rm -rf "$$tmp/instances/lintcheck"; \
 	   echo "    $$p OK"; \
 	 done
+
+# Skill templates are copied verbatim into other people's projects, so a broken
+# one is discovered a long way from here. The shell halves are already covered
+# by SH_FILES; this checks the JSON parses and still carries the placeholder the
+# skill substitutes, which is the one edit that would silently ship un-done.
+lint-skills:
+	@echo "==> skill templates"
+	@for f in $(wildcard skills/*/templates/devcontainer.json); do \
+	  jq -e . "$$f" >/dev/null || { echo "    $$f is not valid JSON"; exit 1; }; \
+	  jq -e '.name == "PROJECT_NAME"' "$$f" >/dev/null \
+	    || { echo "    $$f lost its PROJECT_NAME placeholder"; exit 1; }; \
+	  echo "    $$f OK"; \
+	done
+	@for f in $(wildcard skills/*/SKILL.md); do \
+	  head -1 "$$f" | grep -qx -- '---' || { echo "    $$f has no frontmatter"; exit 1; }; \
+	  grep -qE '^name: ' "$$f" && grep -qE '^description: ' "$$f" \
+	    || { echo "    $$f frontmatter needs name and description"; exit 1; }; \
+	  echo "    $$f OK"; \
+	done
 
 # Ignored rules, all deliberate:
 #   DL3007  `:latest` on FROM - these are our own locally-built images in a

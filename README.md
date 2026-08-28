@@ -16,6 +16,26 @@ dcws       Herdr workspace with a shell pane and a Claude pane
 dccred     credential lifecycle: mint, refresh, status, watch
 ```
 
+## Prerequisites
+
+| Requirement | Why | Needed by |
+|---|---|---|
+| [Podman](https://podman.io) (or Docker) | Builds and runs the images. Podman is the default; `DOCKER_HOST` points the docker CLI at its socket. | everything |
+| [`devcontainer` CLI](https://github.com/devcontainers/cli) | `dcx` shells out to `devcontainer up` / `devcontainer exec` — it is the whole run path. | everything |
+| [Herdr](https://github.com/herdrdev/herdr) | Workspace/pane orchestration and the expiry notifications. | `dcws` (hard), `dccred watch` (notifications only) |
+| `jq` | JSON everywhere: `devcontainer.json` rendering, `instance.json`, credential parsing. | everything |
+| [`fzf`](https://github.com/junegunn/fzf) | Nicer pickers. Optional — without it they fall back to a numbered menu. | optional |
+
+```sh
+brew install podman jq fzf
+npm install -g @devcontainers/cli
+podman machine init && podman machine start
+```
+
+`dcws` refuses to run without a reachable Herdr server (`no Herdr server
+reachable - run 'herdr' first`). `dcclaude` only sets `HERDR_AGENT=claude` so
+Herdr classifies the pane, and works fine without Herdr installed.
+
 ## Install
 
 ```sh
@@ -27,10 +47,6 @@ dccred     credential lifecycle: mint, refresh, status, watch
 
 An existing non-symlink `~/.local/bin/dcx` is moved to `dcx.pre-dcx-repo`
 rather than overwritten.
-
-Requires `docker` (pointed at Podman via `DOCKER_HOST`), the `devcontainer`
-CLI, and `jq`. `fzf` is used for the pickers when present; without it they fall
-back to a numbered menu.
 
 Image *builds* prefer `podman` when it is on PATH and fall back to `docker`,
 because the docker CLI drops to its deprecated classic builder without the
@@ -159,11 +175,28 @@ cannot pass a unix socket through the Podman VM. Expect `No secret key` on the
 | Host shell and processes | Network egress (open, by design) |
 | Other instances' state | |
 
+## Skills
+
+`skills/devcontainer-init/` is a Claude Code skill that writes a
+`.devcontainer/` for a Python, Node.js, or Go project — `devcontainer.json`,
+an `initializeCommand`, a `postCreateCommand`, and an editable copy of the
+Claude plugin manifest. Ask Claude to "add a devcontainer to this project".
+
+Its output is deliberately **not** built on this repo's images. It targets
+`mcr.microsoft.com/devcontainers/base:ubuntu` with devcontainer Features, so it
+works for someone who has never run `make build`, and it runs under `dcx`
+project mode, a bare `devcontainer up`, or VS Code alike. Plugins install on
+first container create rather than being baked, which trades instant start for
+that portability. Cloud credentials stay out of scope — that remains
+`dcx -p k8s --as NAME`.
+
+It refuses to touch a project that already has a devcontainer.
+
 ## Development
 
 ```sh
 make              # help
-make lint         # shellcheck, yamllint, plutil, hadolint, devcontainer.json render
+make lint         # shellcheck, yamllint, plutil, render check, skills, hadolint
 make test         # smoke-test the base profile end to end
 make build        # all four images
 make build k8s    # one image (base | k8s | gcp | full); deps built first

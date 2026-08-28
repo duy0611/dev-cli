@@ -13,7 +13,7 @@ manager, no CI.
 
 ```sh
 make                 # help (prints the header comment of the Makefile)
-make lint            # shellcheck + bash -n, yamllint, plutil, hadolint, render check
+make lint            # shellcheck + bash -n, yamllint, plutil, render check, skills, hadolint
 make test            # smoke-test the base profile end to end (builds dcx-base first)
 make build           # all four images
 make build k8s       # one image (base | k8s | gcp | full); its deps build first
@@ -26,7 +26,7 @@ There is no unit-test framework and no way to run "a single test". `make test`
 runs `test/smoke-base.sh`, a sequence of `check` assertions against one real
 container; run it directly (`./test/smoke-base.sh`) to skip the image rebuild.
 Individual lint stages are separate targets: `lint-shell`, `lint-yaml`,
-`lint-plist`, `lint-render`, `lint-docker`.
+`lint-plist`, `lint-render`, `lint-skills`, `lint-docker`.
 
 `make lint` is the fast feedback loop — `lint-render` actually generates a
 `devcontainer.json` for every profile in a temp dir and validates it, so it
@@ -72,6 +72,7 @@ Mode selection order: `-p` given → profile; else `.devcontainer` found above
 | Shared libs | `lib/*.sh` | Sourced, never executed; all real logic |
 | Build-time | `images/*/Containerfile`, `images/shared/install-plugins.sh` | Bake tools + Claude plugins |
 | Run-time (in container) | `images/shared/post-create.sh`, `dcx-shim`, `dcx-credcheck` | Volume/git setup, expiry gate |
+| Skills | `skills/*/SKILL.md` + `templates/` | Claude Code skills shipped with the repo |
 
 `lib/` split: `common.sh` (die/warn/need, state paths, profile predicates,
 atomic secret write) · `instance.sh` (state dir, `instance.json`, volumes) ·
@@ -156,6 +157,22 @@ helm,k9s,aws,gcloud,gsutil,bq}` are symlinks to `dcx-shim`, which dispatches on
   with `# shellcheck shell=bash` and are sourced, never executed.
 - New shell files must be added to `SH_FILES` in the Makefile or they are not
   linted.
+
+## Skills
+
+`skills/devcontainer-init/` generates a portable `.devcontainer/` for a
+Python/Node/Go project. Note the deliberate inversion: it targets
+`mcr.microsoft.com/devcontainers/base:ubuntu` and installs Claude plugins at
+**create** time, where this repo's own images target `dcx-base` and bake them
+at **build** time. Both are correct for their context — the skill's output must
+work for someone who has never built these images, so it trades instant start
+for portability, and the `/opt/claude-seed` staging dance becomes unnecessary
+because there is no build step to shadow.
+
+Skill template shell files are picked up by the `skills/*/templates/*.sh`
+wildcard in `SH_FILES`, so they are shellchecked like everything else. Keep them
+placeholder-free and complete — per-project behaviour belongs in runtime
+detection, not text substitution.
 
 ## Docs
 
