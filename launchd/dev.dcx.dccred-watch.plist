@@ -12,7 +12,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>dev.dnguyen.dccred-watch</string>
+  <string>dev.dcx.dccred-watch</string>
 
   <key>ProgramArguments</key>
   <array>

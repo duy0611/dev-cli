@@ -9,7 +9,9 @@ set -euo pipefail
 
 REPO="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN="${DCX_BIN_DIR:-$HOME/.local/bin}"
-PLIST_LABEL="dev.dnguyen.dccred-watch"
+# Label doubles as the filename in launchd/, so the two must stay in sync with
+# the <key>Label</key> string inside the plist itself.
+PLIST_LABEL="dev.dcx.dccred-watch"
 PLIST_DEST="$HOME/Library/LaunchAgents/$PLIST_LABEL.plist"
 
 die()  { printf 'install: %s\n' "$1" >&2; exit 1; }

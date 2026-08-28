@@ -125,7 +125,7 @@ devcontainer-claude-setup/
       dcx-shim                 # argv[0]-dispatching wrapper for kubectl/gcloud/aws
       dcx-credcheck            # expiry reader
   rbac/stub-readonly.yaml
-  launchd/dev.dnguyen.dccred-watch.plist
+  launchd/dev.dcx.dccred-watch.plist
   README.md
 ```
 
@@ -397,7 +397,7 @@ herdr notification show "dcx: k8s token expired" \
 ```
 
    So it reaches you even when the pane isn't focused. Loaded via
-   `launchd/dev.dnguyen.dccred-watch.plist` with `KeepAlive`.
+   `launchd/dev.dcx.dccred-watch.plist` with `KeepAlive`.
 5. `dccred refresh <name>` re-mints and atomically replaces the files. The next
    invocation works. The container is never restarted and the Claude session is
    never lost.
