@@ -32,6 +32,13 @@ Requires `docker` (pointed at Podman via `DOCKER_HOST`), the `devcontainer`
 CLI, and `jq`. `fzf` is used for the pickers when present; without it they fall
 back to a numbered menu.
 
+Image *builds* prefer `podman` when it is on PATH and fall back to `docker`,
+because the docker CLI drops to its deprecated classic builder without the
+buildx plugin. Both write to the same local storage. Set `DCX_RUNTIME=docker`
+to force the old behaviour; it applies to `make build` and `install.sh
+--images` alike. Running instances still go through `docker`, since that is
+what the `devcontainer` CLI speaks.
+
 ## Profiles
 
 | Profile | Tooling | Credentials |

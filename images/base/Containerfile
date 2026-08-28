@@ -6,19 +6,22 @@
 #     by decision, so the firewall would be dead weight
 #   - Claude plugins baked at build time (see the staging dance below)
 #   - dcx-post-create / dcx-credcheck / dcx-shim installed
+#   - node:24-trixie rather than node:20: Node 20 went EOL on 2026-04-30, and
+#     24 is the Active LTS. Trixie over bookworm because the bookworm variants
+#     will be dropped upstream before Debian 12 itself expires.
 #
 # Build context is the repo root, so images/shared/ is reachable:
 #   docker build -f images/base/Containerfile -t localhost/dcx-base:latest .
-FROM node:20
+FROM node:24-trixie
 
 ARG TZ
 ENV TZ="$TZ"
 ARG USERNAME=node
 ARG CLAUDE_CODE_VERSION=latest
-ARG GIT_DELTA_VERSION=0.18.2
-ARG ZSH_IN_DOCKER_VERSION=1.2.0
+ARG GIT_DELTA_VERSION=0.19.2
+ARG ZSH_IN_DOCKER_VERSION=1.2.1
 
-# gh is not in Debian bookworm, so use GitHub's own apt repo rather than hoping.
+# gh is not in Debian, so use GitHub's own apt repo rather than hoping.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl gnupg2 \
  && install -m 0755 -d /etc/apt/keyrings \

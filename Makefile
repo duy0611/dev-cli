@@ -16,8 +16,17 @@ SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 
 PROFILES   := base k8s gcp full
-DOCKER     ?= docker
-HADOLINT   ?= hadolint/hadolint:latest
+
+# podman first, docker second. The backend is a podman machine either way, but
+# reaching it through the docker CLI drops to the deprecated classic builder
+# when the buildx plugin is absent. `podman build` is buildah, needs no plugin,
+# and writes to the same local storage, so `FROM localhost/dcx-base` still
+# resolves. Override with `make build DOCKER=docker`, or DCX_RUNTIME=docker to
+# override the Makefile and install.sh at once.
+DOCKER     ?= $(if $(DCX_RUNTIME),$(DCX_RUNTIME),$(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker))
+# Fully qualified: podman resolves short names against its own search-registry
+# list, docker always means docker.io. Spelling it out means both agree.
+HADOLINT   ?= docker.io/hadolint/hadolint:latest
 SHELLCHECK ?= shellcheck
 
 # Everything that is a shell script, whether or not it ends in .sh.

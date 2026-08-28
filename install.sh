@@ -55,26 +55,40 @@ fi
 # --- images ------------------------------------------------------------------
 
 if [ "$do_images" -eq 1 ]; then
-  command -v docker >/dev/null || die "docker (podman-backed) is required"
+  # podman first, docker second. The backend is a podman machine either way, but
+  # reaching it through the docker CLI drops to the deprecated classic builder
+  # when the buildx plugin is absent. `podman build` is buildah, needs no
+  # plugin, and writes to the same local storage, so `FROM localhost/dcx-base`
+  # still resolves. Override with DCX_RUNTIME=docker.
+  RUNTIME="${DCX_RUNTIME:-}"
+  if [ -z "$RUNTIME" ]; then
+    if   command -v podman >/dev/null 2>&1; then RUNTIME=podman
+    elif command -v docker >/dev/null 2>&1; then RUNTIME=docker
+    else die "podman or docker is required"
+    fi
+  else
+    command -v "$RUNTIME" >/dev/null 2>&1 || die "DCX_RUNTIME=$RUNTIME not found"
+  fi
+  info "building with $RUNTIME"
   cd "$REPO"
 
   info "building dcx-base (installs Claude plugins; takes a while)"
-  docker build -f images/base/Containerfile -t localhost/dcx-base:latest .
+  "$RUNTIME" build -f images/base/Containerfile -t localhost/dcx-base:latest .
 
   info "building dcx-k8s"
-  docker build -f images/k8s/Containerfile -t localhost/dcx-k8s:latest .
+  "$RUNTIME" build -f images/k8s/Containerfile -t localhost/dcx-k8s:latest .
 
   info "building dcx-gcp"
-  docker build -f images/gcp/Containerfile \
+  "$RUNTIME" build -f images/gcp/Containerfile \
     --build-arg BASE=localhost/dcx-base:latest -t localhost/dcx-gcp:latest .
 
   # full is exactly k8s plus the gcp layer, so it reuses the same Containerfile.
   info "building dcx-full"
-  docker build -f images/gcp/Containerfile \
+  "$RUNTIME" build -f images/gcp/Containerfile \
     --build-arg BASE=localhost/dcx-k8s:latest -t localhost/dcx-full:latest .
 
   info "images built:"
-  docker images --format '  {{.Repository}}:{{.Tag}}  {{.Size}}' | grep dcx- || true
+  "$RUNTIME" images --format '  {{.Repository}}:{{.Tag}}  {{.Size}}' | grep dcx- || true
 fi
 
 # --- watcher -----------------------------------------------------------------
