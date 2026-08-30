@@ -5,7 +5,7 @@
 #   - no init-firewall.sh, no iptables/ipset, no NET_ADMIN: egress is open here
 #     by decision, so the firewall would be dead weight
 #   - Claude plugins baked at build time (see the staging dance below)
-#   - dcx-post-create / dcx-credcheck / dcx-shim installed
+#   - dcx-post-create / dcx-credcheck / dcx-shim / dcx-enable-signing installed
 #   - node:24-trixie rather than node:20: Node 20 went EOL on 2026-04-30, and
 #     24 is the Active LTS. Trixie over bookworm because the bookworm variants
 #     will be dropped upstream before Debian 12 itself expires.
@@ -120,10 +120,11 @@ USER node
 # execs /usr/local/bin/real/<tool> and exits 127 when it is absent. Derived
 # images add the binaries and the symlinks.
 USER root
-COPY images/shared/dcx-shim images/shared/dcx-credcheck images/shared/post-create.sh /tmp/dcxbin/
-RUN install -m 0755 /tmp/dcxbin/dcx-shim       /usr/local/bin/dcx-shim \
- && install -m 0755 /tmp/dcxbin/dcx-credcheck  /usr/local/bin/dcx-credcheck \
- && install -m 0755 /tmp/dcxbin/post-create.sh /usr/local/bin/dcx-post-create \
+COPY images/shared/dcx-shim images/shared/dcx-credcheck images/shared/post-create.sh images/shared/dcx-enable-signing /tmp/dcxbin/
+RUN install -m 0755 /tmp/dcxbin/dcx-shim           /usr/local/bin/dcx-shim \
+ && install -m 0755 /tmp/dcxbin/dcx-credcheck      /usr/local/bin/dcx-credcheck \
+ && install -m 0755 /tmp/dcxbin/post-create.sh     /usr/local/bin/dcx-post-create \
+ && install -m 0755 /tmp/dcxbin/dcx-enable-signing /usr/local/bin/dcx-enable-signing \
  && rm -rf /tmp/dcxbin
 USER node
 

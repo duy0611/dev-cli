@@ -14,11 +14,17 @@
 #                            must map the uid; a wrong path silently mounts an
 #                            empty directory inside the VM instead
 #   - label is the state dir all instance isolation depends on it
+#   - commits work unsigned   the host's commit.gpgsign used to be forwarded
+#                             into every instance, so every commit failed with
+#                             "No secret key" in sandboxes that never asked
+#                             for signing
 set -euo pipefail
 
 REPO="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DCX="$REPO/bin/dcx"
+DCCRED="$REPO/bin/dccred"
 NAME=dcx-smoketest
+SIGN_NAME=dcx-smoketest-sign
 WS="$(mktemp -d "$HOME/.dcx-smoketest.XXXXXX")"
 
 pass=0 fail=0
@@ -31,6 +37,7 @@ check() { # <description> <expected-substring> <actual>
 cleanup() {
   printf '\n==> teardown\n'
   "$DCX" --rm "$NAME" >/dev/null 2>&1 || true
+  "$DCX" --rm "$SIGN_NAME" >/dev/null 2>&1 || true
   rm -rf "$WS"
 }
 trap cleanup EXIT
@@ -57,6 +64,10 @@ check "runs as non-root"           "uid=1000" "$(run 'id')"
 check "instance name is exported"  "$NAME"    "$(run 'echo $DCX_INSTANCE')"
 check "LiteLLM base url is set"    "litellm"  "$(run 'echo $ANTHROPIC_BASE_URL')"
 check "git identity present"       "@"        "$(run 'git config --get user.email')"
+check "signing off without --sign" "false"    "$(run 'git config --get commit.gpgsign')"
+# The regression itself: not the config value, but whether a commit completes.
+check "unsigned commit succeeds"   "COMMIT_OK" \
+      "$(run 'cd "$(mktemp -d)" && git init -q . && git commit -q --allow-empty -m probe && echo COMMIT_OK')"
 
 # The warning went to stderr on every command before the locale was generated.
 locale_out="$(LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 run 'echo LOCALE_DONE')"
@@ -73,6 +84,48 @@ label="$(docker ps --filter "label=devcontainer.local_folder=$HOME/.local/state/
 
 # The host must see what the container wrote.
 [ -f "$WS/.probe" ] && ok "container writes land on the host" || bad "container writes land on the host"
+
+# --- signing ------------------------------------------------------------------
+#
+# A second instance, because --sign is decided at create. Skipped rather than
+# failed when no sandbox key exists: `dccred signing-key` is a deliberate,
+# one-time act on a machine, and generating one here would leave key material
+# behind on any host that runs `make test`.
+if [ -f "$HOME/.local/state/dcx/signing/sandbox-signing" ]; then
+  printf '\n==> signing (--sign)\n'
+  "$DCX" --rm "$SIGN_NAME" >/dev/null 2>&1 || true
+  "$DCX" -p base --as "$SIGN_NAME" -f "$WS" --sign -- true
+  runs() { "$DCX" -p base --as "$SIGN_NAME" -f "$WS" -- bash -lc "$1" 2>&1; }
+
+  check "signing format is ssh"  "ssh"      "$(runs 'git config --get gpg.format')"
+  check "signing key is mounted" "PRESENT"  "$(runs 'test -r /run/dcx-creds/sandbox-signing && echo PRESENT')"
+  # End to end: sign a commit, then verify it with the allowed_signers file
+  # post-create wrote. A key git can read but not verify against still reads as
+  # broken to anyone using --show-signature.
+  check "commit signs and verifies" 'Good "git" signature' \
+        "$(runs 'cd "$(mktemp -d)" && git init -q . && git commit -q --allow-empty -m signed && git log --show-signature -1')"
+
+  # --sign applied to an instance created without it, with no recreate. This is
+  # the regression: the key reaches a live container through the creds/ bind
+  # mount, but the git config pointing at it used to be written only by
+  # post-create, so the flag silently did nothing until the container was
+  # destroyed. $NAME is reused precisely because it was created unsigned and
+  # asserted "false" above.
+  before="$(docker ps -q --filter "label=devcontainer.local_folder=$HOME/.local/state/dcx/instances/$NAME")"
+  "$DCX" -p base --as "$NAME" -f "$WS" --sign -- true >/dev/null
+  after="$(docker ps -q --filter "label=devcontainer.local_folder=$HOME/.local/state/dcx/instances/$NAME")"
+
+  check "--sign lands on a live instance" "true" "$(run 'git config --get commit.gpgsign')"
+  check "--sign signs without a recreate" 'Good "git" signature' \
+        "$(run 'cd "$(mktemp -d)" && git init -q . && git commit -q --allow-empty -m retro && git log --show-signature -1')"
+  # The point of the change: same container throughout. A recreate would also
+  # produce a signed commit, and would hide the bug.
+  [ -n "$before" ] && [ "$before" = "$after" ] \
+    && ok "--sign reused the running container" \
+    || bad "--sign reused the running container (before=$before after=$after)"
+else
+  printf '\n==> signing: skipped (no key; run: %s signing-key)\n' "$DCCRED"
+fi
 
 printf '\n==> %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

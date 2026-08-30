@@ -161,10 +161,39 @@ Identity and `safe.directory` are always set up, so commits work out of the box.
 `--gitconfig` additionally snapshots your `~/.gitconfig` (rewriting the
 Homebrew-path `gh` credential helpers).
 
-`--gpg` is **opt-in and unproven**. Signing needs the host `gpg-agent` socket
-forwarded; VS Code does that, plain `devcontainer exec` does not, and virtiofs
-cannot pass a unix socket through the Podman VM. Expect `No secret key` on the
-`dcx` path and commit unsigned, signing on the host afterwards.
+`--sign` signs commits made inside the container, using **SSH signing** with a
+dedicated sandbox key rather than your GPG key. One-time setup:
+
+```sh
+dccred signing-key                          # generates ~/.local/state/dcx/signing/
+gh ssh-key add --type signing --title dcx-sandbox \
+  ~/.local/state/dcx/signing/sandbox-signing.pub
+dcx -p base --as scratch --sign
+```
+
+The key is staged into the instance's `creds/` dir and reached at
+`/run/dcx-creds/sandbox-signing`, exactly like the cloud credentials, so a
+rotation (`dccred signing-key --rotate`) lands without recreating anything.
+
+**Why not GPG.** Signing with your real key needs the host `gpg-agent` socket
+forwarded into the container. A devcontainer mount path is resolved inside the
+Podman VM, and virtiofs cannot carry a unix socket; every workaround (a socat
+TCP relay, `ssh -R` into the machine) is tied to a local hypervisor and would
+have to be rebuilt for a remote container host. A key file behind a fixed path
+is the only design that ports. `--gpg` is kept as a deprecated alias for
+`--sign`; the old behaviour only ever exported the *public* key, so it could
+never sign at all.
+
+**Treat the key as sandbox-only.** It sits inside a container with open egress
+running Claude with `--dangerously-skip-permissions`, so assume it can leak.
+Register it as a **signing** key and never as an authentication key: the loss is
+then forged commit signatures — recoverable by deleting one key from the forge —
+and not repository write access or SSH login. It carries a 90-day rotation
+sidecar (`DCX_SIGNING_TTL_DAYS`), which `dccred signing-key` reports.
+
+Without `--sign`, `commit.gpgsign` is forced **off** inside the container. Your
+host almost certainly signs by default, and inheriting that setting made every
+commit in every sandbox fail with `No secret key`.
 
 ## What the sandbox protects
 

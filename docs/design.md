@@ -51,7 +51,7 @@ prod coverage.
 | Profiles | `base`, `k8s`, `gcp`, `full` |
 | Plugins | Baked into the image at build. No picker, no per-instance variation |
 | Claude auth | LiteLLM by default; `--auth oauth` opts into seeding the OAuth credential |
-| Git | Identity + `safe.directory` always; `--gitconfig` and `--gpg` opt in |
+| Git | Identity + `safe.directory` always; `--gitconfig` and `--sign` opt in |
 | Scope selection | Interactive fzf picker on first launch of an instance; recorded and reused after |
 | Instance identity | Explicit name via `--as`, defaulting to `basename $PWD` |
 | Persistence | Named volumes per instance; survive restart, isolated between instances |
@@ -157,7 +157,8 @@ New flags, threaded identically through `dcclaude` and `dcws`:
     --as NAME            instance name (default: basename of the workspace folder)
     --auth MODE          litellm (default) | oauth
     --gitconfig          snapshot the host ~/.gitconfig into the instance
-    --gpg                attempt GPG signing setup (see caveat below)
+    --sign               stage the sandbox SSH commit-signing key
+                         (--gpg is a deprecated alias)
 ```
 
 Resolution order becomes:
@@ -168,7 +169,7 @@ Resolution order becomes:
 
 On a **new** instance, profile mode runs the scope pickers, mints, renders the
 config. On an **existing** instance it reuses the recorded selections and skips
-straight to `devcontainer up`. The `--auth`/`--gitconfig`/`--gpg` choices are
+straight to `devcontainer up`. The `--auth`/`--gitconfig`/`--sign` choices are
 recorded in `instance.json` at create and need not be repeated.
 
 ## State
@@ -179,12 +180,20 @@ recorded in `instance.json` at create and need not be repeated.
   devcontainer.env                  # 0600; LiteLLM token + git identity
   .devcontainer/devcontainer.json   # generated
   gitconfig-host                    # only with --gitconfig
-  gpg-public-key.asc                # only with --gpg
   creds/                            # 0700
     kubeconfig.yaml
     k8s.token         k8s.expiry
     gcp.token         gcp.expiry
     aws-credentials   aws.expiry
+    sandbox-signing[.pub]           # only with --sign
+    signing.expiry
+```
+
+The signing key itself is shared, so it lives one level up, outside `instances/`:
+
+```
+~/.local/state/dcx/signing/
+  sandbox-signing  sandbox-signing.pub  sandbox-signing.expiry
 ```
 
 Volumes: `dcx-claude-<name>` → `/home/node/.claude`, `dcx-history-<name>` →
@@ -282,16 +291,31 @@ copies it to `$HOME/.gitconfig` and rewrites `!/opt/homebrew/bin/gh ` to `!gh ` 
 the credential helpers resolve. Copied, not mounted, so the rewrite never touches
 the host file. Must run **before** the `safe.directory` line.
 
-**`--gpg` — opt-in and unproven.** In `my-home-lab` this works because **VS Code
-forwards the host `gpg-agent` socket**. `dcx` uses plain `devcontainer exec`, where
-nothing forwards it, and the host socket cannot be bind-mounted through the podman
-VM — virtiofs does not pass unix sockets. So the public-key import and
-`gpgconf --kill gpg-agent` steps port cleanly, but the signing path itself probably
-does not.
+**`--gpg` was unworkable; `--sign` replaces it.** The original design exported only
+the host's *public* key and relied on **VS Code forwarding the host `gpg-agent`
+socket**, which is how it worked in `my-home-lab`. `dcx` uses plain
+`devcontainer exec`, nothing forwards the socket, and it cannot be bind-mounted
+through the podman VM either — virtiofs does not pass unix sockets. Signing always
+failed with `No secret key`. Verification step 6 was the gate for exactly this, and
+the flag failed it.
 
-Build it, then **verify it early** (step 6). If signing fails, drop the flag rather
-than carrying dead code: commit from the host, or commit unsigned from the sandbox
-and sign on the host afterwards.
+The replacement is **SSH commit signing** (`gpg.format=ssh`) with a dedicated
+sandbox key: `dccred signing-key` generates it once, you register it with the forge
+as a signing key, and `--sign` stages it into the instance's `creds/`. That makes
+signing a *file at a fixed path* — the same shape as the kubeconfig, the gcloud
+token and the AWS credentials — instead of a live channel back to the host. The
+decisive property is portability: every agent-forwarding variant (socat over TCP to
+`host.containers.internal`, `ssh -R` of the socket into the podman machine) is tied
+to a local hypervisor and would need rewriting for a remote container host, while a
+staged key file needs nothing from the host at run time.
+
+The cost is stated plainly rather than hidden: private key material now lives inside
+a sandbox with open egress that runs Claude with `--dangerously-skip-permissions`.
+It is contained by scope, not by secrecy — the key is registered for signing only
+and never for authentication, so a leak yields forged commit signatures and no
+repository access, and it carries a 90-day rotation sidecar.
+
+`--gpg` remains as a deprecated alias that warns.
 
 ## Generated devcontainer.json
 
@@ -454,12 +478,14 @@ building past them.
    `ls /opt/claude-seed` still present in the image.
 5. **LiteLLM auth** — Claude starts in that container and answers a prompt. Confirm
    `ANTHROPIC_BASE_URL` is the gateway and no OAuth login is requested.
-6. **Gate — GPG** — `dcx -p base --as gpgtest --gpg` in a git repo, then
-   `git commit -S --allow-empty` inside. If it fails with `No secret key`, the flag
-   is unworkable on the `dcx` path; delete it from the design rather than shipping
-   it broken.
-7. **Git identity** — `git commit --allow-empty` inside (unsigned) succeeds and is
-   authored as you. No `dubious ownership`.
+6. **Signing** — `dccred signing-key`, register the printed key with the forge,
+   then `dcx -p base --as signtest --sign` and `git commit -S --allow-empty`
+   inside. `git log --show-signature` reads `Good "git" signature`, and the pushed
+   commit shows Verified. (The original `--gpg` gate lived here and failed it; see
+   the Git section above.)
+7. **Git identity** — `git commit --allow-empty` inside (unsigned, no `--sign`)
+   succeeds and is authored as you. No `dubious ownership`, and no `No secret key`
+   from a host `commit.gpgsign` leaking in.
 8. **Persistence** — write a memory file, exit, relaunch same name. Still there.
 9. **Isolation** — `dcx -p base --as other`. Empty state; `scratch`'s memory absent.
 10. **Two instances, one project** — launch `--as a` and `--as b` from the same

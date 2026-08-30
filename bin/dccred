@@ -36,12 +36,15 @@ Usage:
   dccred status [NAME]     Show instances and time remaining on each credential
   dccred pick    NAME      Re-run the scope pickers, then mint
   dccred watch             Poll every instance; notify via Herdr when one goes stale
+  dccred signing-key       Show (creating if needed) the shared SSH commit
+                           signing key; --rotate replaces it
   dccred -h                Show this help
 
 Notes:
   A refresh lands without restarting the container: kubectl, gcloud and aws all
   read their credentials from files on every invocation, and those files are
-  replaced atomically.
+  replaced atomically. Commit signing works the same way — git reads the key
+  file per commit, so `dccred signing-key --rotate` lands live too.
 EOF
 }
 
@@ -67,7 +70,10 @@ cred_ttls() { # <name>
 human() { # <seconds>
   local s=$1 sign=""
   [ "$s" -lt 0 ] && { s=$(( -s )); sign="-"; }
-  if   [ "$s" -ge 3600 ]; then printf '%s%dh%02dm' "$sign" $(( s / 3600 )) $(( (s % 3600) / 60 ))
+  # Days only ever show up for the signing key's rotation window; cloud tokens
+  # are minted for an hour or two.
+  if   [ "$s" -ge 172800 ]; then printf '%s%dd' "$sign" $(( s / 86400 ))
+  elif [ "$s" -ge 3600 ]; then printf '%s%dh%02dm' "$sign" $(( s / 3600 )) $(( (s % 3600) / 60 ))
   elif [ "$s" -ge 60 ];   then printf '%s%dm' "$sign" $(( s / 60 ))
   else                         printf '%s%ds' "$sign" "$s"
   fi
@@ -106,6 +112,68 @@ $(cred_ttls "$name")
 EOF
     printf '%-20s %-6s %-8s %s\n' "$name" "$(dcx_meta "$name" '.profile')" "$state" "${line# }"
   done
+}
+
+# --- commit signing -----------------------------------------------------------
+
+# One key shared by every instance, not one per instance: it only counts as a
+# signature once the forge knows it (`gh ssh-key add --type signing`), and one
+# manual registration is the difference between this being usable and being a
+# chore.
+#
+# Registered as a SIGNING key and never as an authentication key. The sandbox
+# has open egress and runs Claude with --dangerously-skip-permissions, so treat
+# a leak as possible: the loss is then forged commit signatures, recoverable by
+# deleting one key from the forge, and not repository write access or SSH login.
+#
+# SSH rather than GPG because GPG signing needs the host gpg-agent socket, and
+# no devcontainer can reach it — see lib/env.sh:dcx_stage_signing.
+cmd_signing_key() {
+  need ssh-keygen
+  local rotate=0 key dir exp ttl
+  [ "${1:-}" = "--rotate" ] && rotate=1 || true
+  key="$(dcx_signing_key)"
+  dir="$(dcx_signing_dir)"
+
+  if [ -f "$key" ] && [ "$rotate" -eq 0 ]; then
+    info "existing key: $key"
+  else
+    [ "$rotate" -eq 1 ] && [ -f "$key" ] \
+      && warn "rotating: delete the old key from the forge once the new one is registered" || true
+    mkdir -p "$dir"
+    chmod 700 "$dir"
+    rm -f "$key" "$key.pub"
+    # No passphrase: git signs non-interactively, so a passphrase would have to
+    # be stored beside the key to be usable, which protects nothing. The expiry
+    # sidecar below is the real bound on exposure.
+    ssh-keygen -q -t ed25519 -N '' -C "dcx sandbox signing key" -f "$key"
+    printf '%s\n' "$(( $(date +%s) + ${DCX_SIGNING_TTL_DAYS:-90} * 86400 ))" >"$key.expiry"
+    info "created $key"
+
+    # Re-stage into every instance that was launched with --sign. git reads the
+    # key file on each commit, so a rotation lands without recreating anything —
+    # the same property the cloud credentials have.
+    local name
+    for name in $(dcx_list_instances); do
+      [ "$(dcx_meta "$name" '.sign')" = "true" ] || continue
+      dcx_stage_signing "$name"
+      info "  restaged into $name"
+    done
+  fi
+
+  exp="$(cat "$key.expiry" 2>/dev/null || echo 0)"
+  ttl=$(( exp - $(date +%s) ))
+  if [ "$ttl" -le 0 ]; then
+    warn "this key is past its rotation date; regenerate with: dccred signing-key --rotate"
+  else
+    info "rotation due in $(human "$ttl")"
+  fi
+
+  printf '\n'
+  cat "$key.pub"
+  printf '\nRegister it as a SIGNING key (never an authentication key):\n'
+  printf '  gh ssh-key add --type signing --title dcx-sandbox %s\n' "$key.pub"
+  printf 'Then launch with --sign. Instances created before this need a re-create.\n'
 }
 
 cmd_pick() {
@@ -191,6 +259,7 @@ case "${1:-}" in
   env)           shift; cmd_env "${1:-}" ;;
   status)        shift; cmd_status "${1:-}" ;;
   pick)          shift; cmd_pick "${1:-}" ;;
+  signing-key)   shift; cmd_signing_key "${1:-}" ;;
   watch)         shift; cmd_watch ;;
   -h|--help|'')  usage ;;
   *)             usage >&2; die "unknown subcommand: $1" ;;

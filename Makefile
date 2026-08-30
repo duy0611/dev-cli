@@ -34,6 +34,7 @@ SH_FILES := bin/dcx bin/dcclaude bin/dcws bin/dccred install.sh \
             $(wildcard lib/*.sh) \
             images/shared/install-plugins.sh images/shared/post-create.sh \
             images/shared/dcx-shim images/shared/dcx-credcheck \
+            images/shared/dcx-enable-signing \
             $(wildcard skills/*/templates/*.sh)
 
 CONTAINERFILES := images/base/Containerfile images/k8s/Containerfile images/gcp/Containerfile

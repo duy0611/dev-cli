@@ -49,7 +49,9 @@ Options:
       --as NAME         Instance name. Default: basename of the folder.
       --auth MODE       litellm (default) | oauth. Recorded at create.
       --gitconfig       Snapshot the host ~/.gitconfig into the instance.
-      --gpg             Export the GPG public key for signing (see README).
+      --sign            Stage the sandbox SSH signing key so commits made in
+                        the container are signed (see: dccred signing-key).
+      --gpg             Deprecated alias for --sign.
       --rm NAME         Remove an instance: container, volumes, and state.
       --list            List instances.
   -h, --help            Show this help.
@@ -79,7 +81,7 @@ profile=""
 instance=""
 auth="litellm"
 want_gitconfig=0
-want_gpg=0
+want_sign=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -88,7 +90,11 @@ while [ $# -gt 0 ]; do
     --as)         [ $# -ge 2 ] || die "--as needs a name"; instance="$2"; shift 2 ;;
     --auth)       [ $# -ge 2 ] || die "--auth needs a mode"; auth="$2"; shift 2 ;;
     --gitconfig)  want_gitconfig=1; shift ;;
-    --gpg)        want_gpg=1; shift ;;
+    --sign)       want_sign=1; shift ;;
+    # --gpg named a design that never worked: only the public key was ever
+    # exported, so signing always failed with "No secret key". Kept as an alias
+    # rather than removed so existing aliases and scripts do not break.
+    --gpg)        want_sign=1; warn "--gpg is deprecated; use --sign (SSH signing)"; shift ;;
     --rm)         [ $# -ge 2 ] || die "--rm needs a name"
                   need docker; dcx_check_name "$2"
                   dcx_instance_exists "$2" || die "no such instance: $2"
@@ -151,8 +157,27 @@ if [ "$mode" = profile ]; then
     recorded_ws="$(dcx_meta "$instance" '.workspace')"
     [ "$recorded_ws" = "$workspace" ] && : || warn \
       "instance '$instance' is bound to $recorded_ws, not $workspace (using the recorded one)"
+
+    # The one create-time choice that can be made later. Everything else in
+    # instance.json feeds the generated devcontainer.json and would need a
+    # recreate to matter; a signing key is just a file the container reads, and
+    # creds/ is a bind mount, so staging it lands in a running container at
+    # once. The matching git config is applied further down, after the container
+    # is up — see the dcx-enable-signing call in the shared path.
+    if [ "$want_sign" -eq 1 ]; then
+      dcx_stage_signing "$instance"
+      [ "$(dcx_meta "$instance" '.sign')" = "true" ] || \
+        dcx_instance_patch "$instance" '{"sign":true}'
+    fi
   else
     info "creating instance '$instance' (profile $profile) for $workspace"
+
+    # Before anything is written, and before the pickers: staging happens at the
+    # end of create, so failing there would leave a recorded instance that the
+    # next run treats as existing — skipping create, and silently dropping
+    # --sign for good.
+    [ "$want_sign" -eq 1 ] && [ ! -f "$(dcx_signing_key)" ] \
+      && die "no sandbox signing key yet; create one with: dccred signing-key" || true
 
     k8s_json=null; gcp_json=null; aws_json=null
 
@@ -181,12 +206,12 @@ if [ "$mode" = profile ]; then
     dcx_instance_init "$instance"
     dcx_instance_write_meta "$instance" "$profile" "$workspace" "$auth" \
       "$([ "$want_gitconfig" -eq 1 ] && echo true || echo false)" \
-      "$([ "$want_gpg" -eq 1 ] && echo true || echo false)" \
+      "$([ "$want_sign" -eq 1 ] && echo true || echo false)" \
       "$k8s_json" "$gcp_json" "$aws_json"
 
     dcx_instance_create_volumes "$instance"
     [ "$want_gitconfig" -eq 1 ] && dcx_stage_gitconfig "$instance" || true
-    [ "$want_gpg" -eq 1 ] && dcx_stage_gpg "$instance" || true
+    [ "$want_sign" -eq 1 ] && dcx_stage_signing "$instance" || true
     [ "$auth" = oauth ] && dcx_seed_oauth "$instance" || true
 
     dcx_mint_all "$instance" || warn "some credentials could not be minted; run 'dccred refresh $instance' once fixed"
@@ -204,6 +229,20 @@ folder="$(cd "$folder" && pwd -P)"
 if [ -z "$(docker ps -q --filter "label=devcontainer.local_folder=$folder" 2>/dev/null)" ]; then
   printf 'dcx: starting devcontainer for %s\n' "$folder" >&2
   devcontainer up --workspace-folder "$folder" >/dev/null || die "devcontainer up failed"
+fi
+
+# Signing config lives in ~/.gitconfig, which post-create writes only on create.
+# Re-applying it on every --sign launch is what lets the flag land on an
+# already-running instance with no recreate; the script is idempotent, so doing
+# it again on a container post-create just configured costs nothing and keeps
+# one code path. Older images have no such script — warn rather than die, since
+# the container is otherwise fine and the fix is a rebuild, not a relaunch.
+#
+# Profile mode only: a project devcontainer has no creds/ bind, so the script
+# would find no key and helpfully turn signing *off* in someone else's image.
+if [ "$want_sign" -eq 1 ] && [ "$mode" = profile ]; then
+  devcontainer exec --workspace-folder "$folder" dcx-enable-signing >/dev/null 2>&1 \
+    || warn "could not enable signing in the container; rebuild the image: make build"
 fi
 
 if [ $# -eq 0 ]; then

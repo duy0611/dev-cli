@@ -76,8 +76,11 @@ emit ANTHROPIC_BASE_URL "${ANTHROPIC_BASE_URL:-}"
 emit_git() { # <VAR> <git-config-key>
   emit "$1" "$(git config --get "$2" 2>/dev/null || true)"
 }
-emit_git DEVCONTAINER_GIT_NAME       user.name
-emit_git DEVCONTAINER_GIT_EMAIL      user.email
-emit_git DEVCONTAINER_GIT_SIGNINGKEY user.signingkey
+#
+# Identity only, deliberately: the host's signing key is not in the container,
+# so passing user.signingkey through would only produce commits that fail to
+# sign. post-create turns signing off inside for the same reason.
+emit_git DEVCONTAINER_GIT_NAME  user.name
+emit_git DEVCONTAINER_GIT_EMAIL user.email
 
 log "wrote $(basename "$out")"

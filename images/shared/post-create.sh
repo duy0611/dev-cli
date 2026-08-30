@@ -3,9 +3,9 @@
 # after it is created (postCreateCommand).
 #
 # Inputs, all optional, all supplied by the launcher:
-#   env  DEVCONTAINER_GIT_NAME / _EMAIL / _SIGNINGKEY / _GPGSIGN
-#   file /run/dcx-share/gitconfig-host      (only with --gitconfig)
-#   file /run/dcx-share/gpg-public-key.asc  (only with --gpg)
+#   env  DEVCONTAINER_GIT_NAME / _EMAIL
+#   file /run/dcx-share/gitconfig-host       (only with --gitconfig)
+#   file /run/dcx-creds/sandbox-signing[.pub] (only with --sign)
 set -euo pipefail
 
 config_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
@@ -66,8 +66,6 @@ fi
 # rather than skip the line.
 [ -n "${DEVCONTAINER_GIT_NAME:-}" ] && git config --global user.name "$DEVCONTAINER_GIT_NAME" || true
 [ -n "${DEVCONTAINER_GIT_EMAIL:-}" ] && git config --global user.email "$DEVCONTAINER_GIT_EMAIL" || true
-[ -n "${DEVCONTAINER_GIT_SIGNINGKEY:-}" ] && git config --global user.signingkey "$DEVCONTAINER_GIT_SIGNINGKEY" || true
-[ -n "${DEVCONTAINER_GIT_GPGSIGN:-}" ] && git config --global commit.gpgsign "$DEVCONTAINER_GIT_GPGSIGN" || true
 
 # --- git repo trust ----------------------------------------------------------
 
@@ -82,36 +80,16 @@ if [ -d /workspace ]; then
   git config --global --add safe.directory /workspace
 fi
 
-# --- GPG public key ----------------------------------------------------------
+# --- commit signing ------------------------------------------------------------
 
-# git will not sign without the public key in the local keyring, even when the
-# private key stays on the host behind a forwarded agent. The private key is
-# never imported: signing requests travel over the forwarded socket and only
-# the signature comes back.
+# Delegated so `dcx --sign` can apply the same config to an already-running
+# instance over devcontainer exec, without a container recreate. Keeping one
+# copy is the point: two would drift, and the failure mode is a sandbox that
+# signs with a key git cannot verify against.
 #
-# Whether anything forwards that socket is the open question. VS Code does;
-# plain `devcontainer exec` does not, and the host socket cannot be bind-mounted
-# through the podman VM because virtiofs does not pass unix sockets. Expect
-# signing to fail on the dcx path.
-if [ -f "$share/gpg-public-key.asc" ]; then
-  gpg --batch --import "$share/gpg-public-key.asc" 2>/dev/null || true
-
-  # An imported key is "unknown" trust by default, which makes gpg refuse to
-  # use it non-interactively. Mark your own key ultimately trusted.
-  if [ -n "${DEVCONTAINER_GIT_SIGNINGKEY:-}" ]; then
-    fpr="$(gpg --list-keys --with-colons "$DEVCONTAINER_GIT_SIGNINGKEY" 2>/dev/null |
-      awk -F: '/^fpr:/ { print $10; exit }')"
-    if [ -n "$fpr" ]; then
-      printf '%s:6:\n' "$fpr" | gpg --batch --import-ownertrust 2>/dev/null || true
-      echo "post-create: imported and trusted GPG public key $DEVCONTAINER_GIT_SIGNINGKEY"
-    fi
-  fi
-
-  # Running gpg above started a container-local agent holding a socket at the
-  # default path with no private key. Kill it so it cannot shadow a forwarded
-  # agent — otherwise signing fails with "No secret key" even when forwarding
-  # works. Harmless when the socket is a bind mount: no local process to kill.
-  gpgconf --kill gpg-agent 2>/dev/null || true
-fi
+# Must come AFTER the gitconfig copy for the same reason safe.directory does:
+# a host snapshot that sets commit.gpgsign would otherwise win, and the host's
+# GPG key is not here.
+/usr/local/bin/dcx-enable-signing
 
 echo "post-create: done"

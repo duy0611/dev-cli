@@ -37,7 +37,7 @@ Options:
       --as INSTANCE  Instance name. Default: basename of FOLDER.
       --auth MODE    litellm (default) | oauth. Passed through on create.
       --gitconfig    Passed through to dcx.
-      --gpg          Passed through to dcx.
+      --sign         Passed through to dcx (--gpg is an alias).
   -h, --help         Show this help.
 
 Arguments:
@@ -75,7 +75,7 @@ while [ $# -gt 0 ]; do
     -p|--profile) [ $# -ge 2 ] || die "-p needs a profile"; profile="$2"; shift 2 ;;
     --as)         [ $# -ge 2 ] || die "--as needs a name"; instance="$2"; shift 2 ;;
     --auth)       [ $# -ge 2 ] || die "--auth needs a mode"; passthru+=("$1" "$2"); shift 2 ;;
-    --gitconfig|--gpg) passthru+=("$1"); shift ;;
+    --gitconfig|--sign|--gpg) passthru+=("$1"); shift ;;
     -h|--help)    usage; exit 0 ;;
     -*)           usage >&2; die "unknown option: $1" ;;
     *)            folder="$1"; shift ;;

@@ -93,9 +93,14 @@ fi
 # The trailing `|| true` is load-bearing under `set -e`: with an unset variable
 # the `[ -n ] && git config` list returns 1, which would abort the script here
 # rather than skip the line.
-[ -n "${DEVCONTAINER_GIT_NAME:-}" ]       && git config --global user.name       "$DEVCONTAINER_GIT_NAME"       || true
-[ -n "${DEVCONTAINER_GIT_EMAIL:-}" ]      && git config --global user.email      "$DEVCONTAINER_GIT_EMAIL"      || true
-[ -n "${DEVCONTAINER_GIT_SIGNINGKEY:-}" ] && git config --global user.signingkey "$DEVCONTAINER_GIT_SIGNINGKEY" || true
+[ -n "${DEVCONTAINER_GIT_NAME:-}" ]  && git config --global user.name  "$DEVCONTAINER_GIT_NAME"  || true
+[ -n "${DEVCONTAINER_GIT_EMAIL:-}" ] && git config --global user.email "$DEVCONTAINER_GIT_EMAIL" || true
+
+# No signing key reaches this container — the host agent socket cannot be
+# forwarded through a devcontainer mount — so signing is off explicitly. Left
+# unset, a host that signs by default would make every commit in here fail with
+# "No secret key".
+git config --global commit.gpgsign false
 
 # Must come after any gitconfig write, which would otherwise overwrite it.
 # Without it the bind-mounted repo fails git's ownership check and every git
