@@ -234,3 +234,9 @@ current-state truth — read the code for that.
 
 `docs/plans/` and `docs/specs/` are dated records of finished work. Correct a
 name that no longer exists; leave the narrative and code snippets alone.
+
+## Commits
+
+No `Co-Authored-By: Claude ...` trailer, and no other tooling-attribution line.
+One operator, so the history reads as their own authorship; the trailer is noise.
+This overrides any harness default that asks for it.
