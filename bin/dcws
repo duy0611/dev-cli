@@ -96,10 +96,23 @@ dcws_slugify() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-'; }
 
 # The checkout for a branch, straight from git. Herdr's worktree record is the
 # faster source but its field names are not documented; git is authoritative.
-wt_path_for_branch() { # <repo> <branch>
+# Works from anywhere in the repo or any of its worktrees - `git worktree list`
+# reports the whole set whichever one you ask from.
+wt_path_for_branch() { # <repo-or-worktree> <branch>
   git -C "$1" worktree list --porcelain \
     | awk -v b="refs/heads/$2" '/^worktree /{p=$2} /^branch /{if ($2==b) print p}' \
     | head -1
+}
+
+# The instance bound to a given workspace path, empty when none is. dcx --list
+# prints `name profile workspace`, padded with %-24s %-6s; the workspace is
+# everything from the third field on, so it is reassembled rather than read as
+# $3 - a path with a space in it would otherwise match nothing.
+instance_for_checkout() { # <abs-checkout-path>
+  [ -n "$1" ] || return 0
+  dcx --list 2>/dev/null | awk -v w="$1" '
+    { ws = $3; for (i = 4; i <= NF; i++) ws = ws " " $i
+      if (ws == w) { print $1; exit } }'
 }
 
 name=""
@@ -154,12 +167,23 @@ folder="$(cd "$folder" && pwd -P)"
 # and inheriting it beats surprising anyone with a second policy here.
 if [ -n "$rm_branch" ]; then
   need_herdr
+
+  # Look the instance up by the checkout it is bound to, rather than
+  # recomputing the name from $PWD. Re-deriving means the name only matches
+  # when this runs from the same directory create did, and a miss removes
+  # nothing while still reporting success - which is how orphaned containers
+  # and volumes accumulate. The recorded workspace path is the reliable key.
+  [ -n "$instance" ] || instance="$(instance_for_checkout "$(wt_path_for_branch "$folder" "$rm_branch")")"
+  # No match means the checkout is already gone, or was never containered.
+  # Fall back to the create-time naming rule so the old behaviour still applies.
   [ -n "$instance" ] || instance="$(dcws_slugify "$(basename "$folder")-$rm_branch")"
   [ -n "$name" ] || name="$instance"
 
-  # Tolerated failing: an instance that was never created is not an error here,
-  # but `dcx --rm` dies on an unknown name.
-  dcx --rm "$instance" >/dev/null 2>&1 || true
+  # Deliberately not silenced: dcx --rm names each container, volume and state
+  # dir it removes, and a removal that quietly did nothing is exactly the
+  # failure this path was reported for.
+  dcx --rm "$instance" \
+    || printf 'dcws: no dcx instance %s to remove\n' "$instance" >&2
 
   ws_id="$(herdr_workspace_id "$name")"
   if [ -n "$ws_id" ]; then

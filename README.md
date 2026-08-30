@@ -71,7 +71,7 @@ dcclaude -p k8s --as sk8s-debug             # Claude in that sandbox
 dcws -p k8s --as sk8s-debug                 # ...as a Herdr workspace
 dcws --worktree feat/thing                  # ...on a Herdr worktree of feat/thing
 dcws --worktree feat/thing --base main      # ...branched from main rather than HEAD
-dcws --rm-worktree feat/thing               # instance first, then the checkout (run from the repo root)
+dcws --rm-worktree feat/thing               # instance first, then the checkout
 dcx -p k8s  --as sk8s-debug -- kubectl get pods
 dcx --list
 dcx --rm scratch
@@ -88,14 +88,18 @@ other's checkout. Normal instances are unaffected. `dcx` detects a linked
 worktree on its own, so this also covers checkouts made by hand or from the
 Herdr sidebar — not only ones `dcws --worktree` created.
 
-**Run `--worktree` and `--rm-worktree` from the main repo, not from inside a
-checkout.** Both derive the instance name from the folder they are given, which
-defaults to `$PWD`. From the repo root that is the repo name, giving
-`<repo>-<branch>`; from inside a checkout it is the checkout's own directory
-name, giving a different instance — so `dcws --rm-worktree` run in the worktree
-reports that the instance does not exist and removes nothing. Pass the repo
-explicitly (`dcws --rm-worktree feat/thing /path/to/repo`) or `--as` the
-instance name if you need to run it from elsewhere.
+**Run `--worktree` from the main repo, not from inside a checkout.** It names
+the instance `<basename FOLDER>-<branch>`, and FOLDER defaults to `$PWD` — from
+the repo root that is the repo name, from inside a checkout it is the
+checkout's own directory name. Pass the repo explicitly
+(`dcws --worktree feat/thing /path/to/repo`) or `--as` the instance name if you
+need to run it from elsewhere.
+
+`--rm-worktree` has no such constraint: it finds the instance by the checkout
+path recorded in `instance.json`, so it works from anywhere in the repo or any
+of its worktrees. It also reports what it removed — if no instance matched, it
+says so instead of claiming success, which is how orphaned containers and
+volumes used to go unnoticed.
 
 ## Instances
 

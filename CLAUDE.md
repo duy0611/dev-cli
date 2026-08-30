@@ -91,12 +91,19 @@ Herdr wiring. Any new `dcx` flag must be threaded through both.
 
 `dcws --worktree` / `--rm-worktree` are the exception: they are Herdr-specific
 and deliberately have no `dcx` counterpart, because `dcx` detects a linked
-worktree from the workspace itself. Both derive the instance name as
-`<basename $folder>-<branch>`, so **they must be run from the main repo** — from
-inside a checkout the basename is the checkout directory, the derived name does
-not match the one create used, and `--rm-worktree` silently removes nothing.
-Left as-is rather than normalised: the folder argument is already the documented
-way to say which repo you mean.
+worktree from the workspace itself.
+
+`--worktree` names the instance `<basename $folder>-<branch>`, so **it must be
+run from the main repo** — from inside a checkout the basename is the checkout
+directory. Left as-is rather than normalised: the folder argument is already the
+documented way to say which repo you mean.
+
+`--rm-worktree` deliberately does *not* re-derive that name. It resolves the
+branch to a checkout path and then finds the instance whose recorded
+`.workspace` matches, so teardown is independent of both cwd and the naming
+rule. Re-deriving is what left orphaned containers and volumes behind: a name
+that missed removed nothing, and the `|| true` on `dcx --rm` swallowed the
+error while the command still printed success. Keep that call unsilenced.
 
 ### Credential flow
 
