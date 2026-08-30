@@ -35,6 +35,7 @@ SH_FILES := bin/dcx bin/dcclaude bin/dcws bin/dccred install.sh \
             images/shared/install-plugins.sh images/shared/post-create.sh \
             images/shared/dcx-shim images/shared/dcx-credcheck \
             images/shared/dcx-enable-signing \
+            test/render-check.sh test/smoke-base.sh \
             $(wildcard skills/*/templates/*.sh)
 
 CONTAINERFILES := images/base/Containerfile images/k8s/Containerfile images/gcp/Containerfile
@@ -117,22 +118,7 @@ lint-plist:
 # against a throwaway state dir; nothing is created in docker.
 lint-render:
 	@echo "==> devcontainer.json render"
-	@tmp="$$(mktemp -d)"; trap 'rm -rf "$$tmp"' EXIT; \
-	 for p in $(PROFILES); do \
-	   DCX_STATE="$$tmp" bash -c '\
-	     . lib/common.sh; . lib/instance.sh; . lib/env.sh; . lib/render.sh; \
-	     dcx_instance_init lintcheck; \
-	     dcx_instance_write_meta lintcheck "'"$$p"'" /tmp litellm false false \
-	       "{\"context\":\"c\",\"namespace\":\"n\",\"serviceaccount\":\"s\"}" \
-	       "{\"project\":\"p\",\"serviceaccount\":\"\"}" \
-	       "{\"role_arn\":\"r\",\"region\":\"eu-west-1\"}"; \
-	     dcx_render_devcontainer lintcheck; \
-	     jq -e ".image and .workspaceMount and .containerEnv.CLAUDE_CONFIG_DIR" \
-	       "$$DCX_STATE/instances/lintcheck/.devcontainer/devcontainer.json" >/dev/null' \
-	     || { echo "    FAILED for profile $$p"; exit 1; }; \
-	   rm -rf "$$tmp/instances/lintcheck"; \
-	   echo "    $$p OK"; \
-	 done
+	@test/render-check.sh
 
 # Skill templates are copied verbatim into other people's projects, so a broken
 # one is discovered a long way from here. The shell halves are already covered
