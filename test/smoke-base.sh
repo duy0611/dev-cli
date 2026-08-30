@@ -25,6 +25,7 @@ DCX="$REPO/bin/dcx"
 DCCRED="$REPO/bin/dccred"
 NAME=dcx-smoketest
 SIGN_NAME=dcx-smoketest-sign
+WT_NAME=dcx-smoketest-wt
 WS="$(mktemp -d "$HOME/.dcx-smoketest.XXXXXX")"
 
 pass=0 fail=0
@@ -38,6 +39,7 @@ cleanup() {
   printf '\n==> teardown\n'
   "$DCX" --rm "$NAME" >/dev/null 2>&1 || true
   "$DCX" --rm "$SIGN_NAME" >/dev/null 2>&1 || true
+  "$DCX" --rm "$WT_NAME" >/dev/null 2>&1 || true
   rm -rf "$WS"
 }
 trap cleanup EXIT
@@ -84,6 +86,50 @@ label="$(docker ps --filter "label=devcontainer.local_folder=$HOME/.local/state/
 
 # The host must see what the container wrote.
 [ -f "$WS/.probe" ] && ok "container writes land on the host" || bad "container writes land on the host"
+
+# --- worktree ------------------------------------------------------------------
+#
+# The whole feature is one string equality: the checkout's absolute path must be
+# the same inside the container as on the host. When it is not, worktree
+# metadata written on one side names a path the other does not have, and a
+# host-side `git worktree prune` reaps the container's checkout.
+#
+# A sibling layout is used deliberately - that is where Herdr puts checkouts,
+# and it is the case that needs the second bind.
+printf '\n==> worktree\n'
+WT_REPO="$WS/wtrepo"
+WT_PATH="$WS/wtcheckout"
+git init -q "$WT_REPO"
+git -C "$WT_REPO" -c user.email=smoke@test -c user.name=smoke commit -q --allow-empty -m init
+git -C "$WT_REPO" worktree add -q "$WT_PATH" -b smoke-wt
+
+"$DCX" --rm "$WT_NAME" >/dev/null 2>&1 || true
+"$DCX" -p base --as "$WT_NAME" -f "$WT_PATH" -- true
+runw() { "$DCX" -p base --as "$WT_NAME" -f "$WT_PATH" -- bash -lc "$1" 2>&1; }
+
+check "worktree path matches the host" "$WT_PATH" "$(runw 'git rev-parse --show-toplevel')"
+check "main repo is co-mounted"        "$WT_REPO/.git" \
+      "$(runw 'git rev-parse --path-format=absolute --git-common-dir')"
+
+# Byte-identical, not merely "both non-empty": divergence here is exactly the
+# bug, and it is invisible unless the two outputs are compared directly.
+host_list="$(git -C "$WT_PATH" worktree list)"
+cont_list="$(runw 'git worktree list')"
+[ "$host_list" = "$cont_list" ] \
+  && ok "git worktree list agrees host and container" \
+  || bad "git worktree list agrees host and container (host: $host_list / container: $cont_list)"
+
+# A commit from the container must reach the MAIN repo's object store, which is
+# the read-write half of the co-mount doing its job.
+sha="$(runw 'git -c user.email=smoke@test -c user.name=smoke commit -q --allow-empty -m wtprobe && git rev-parse HEAD' | tail -1)"
+git -C "$WT_REPO" cat-file -e "$sha" 2>/dev/null \
+  && ok "container commit lands in the main object store" \
+  || bad "container commit lands in the main object store (sha: $sha)"
+
+# The isolation invariant, re-asserted under the second mount geometry.
+wtlabel="$(docker ps --filter "label=devcontainer.local_folder=$HOME/.local/state/dcx/instances/$WT_NAME" -q)"
+[ -n "$wtlabel" ] && ok "worktree instance label is the state dir" \
+                  || bad "worktree instance label is the state dir"
 
 # --- signing ------------------------------------------------------------------
 #
