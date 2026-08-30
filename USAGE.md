@@ -18,13 +18,29 @@ outside the project.
 
 ## Install these first
 
+Three things, then two more that matter more than they look.
+
 ```sh
-brew install podman jq fzf
+brew install jq fzf
 npm install -g @devcontainers/cli
-podman machine init && podman machine start
 ```
 
-Plus **Herdr** — <https://github.com/herdrdev/herdr>.
+**A container engine.** The toolchain talks to it through the standard `docker`
+CLI, so anything Docker-compatible works. If you have nothing yet, use Podman —
+it's what this is developed and tested against:
+
+```sh
+brew install podman && podman machine init && podman machine start
+```
+
+| Engine | Status |
+|---|---|
+| Podman | preferred, tested |
+| Docker Desktop | tested — just have the daemon running |
+| Rancher Desktop | should work, not tried yet. **Set Container Engine to `dockerd (moby)`**, not `containerd` — in containerd mode there's no `docker` CLI and nothing here can start |
+
+**Herdr** — <https://github.com/herdrdev/herdr>. Keep reading, this one is not
+optional for `dcws`.
 
 ### The two people skip — don't
 
@@ -52,10 +68,11 @@ have to read all 60 namespaces to find the one you want, then type `37`.
 
 Nothing breaks without `fzf`. It's just worse every single time.
 
-Quick check that both are there:
+Quick check that everything is there:
 
 ```sh
-command -v fzf  || echo "no fzf — pickers will be numbered menus"
+docker info    >/dev/null 2>&1 || echo "no container engine reachable"
+command -v fzf >/dev/null 2>&1 || echo "no fzf — pickers will be numbered menus"
 herdr workspace list >/dev/null 2>&1 || echo "no Herdr server — run: herdr"
 ```
 
@@ -424,7 +441,8 @@ dcx --rm NAME                       # delete an instance (project files untouche
 Profiles: `base` (nothing) · `k8s` (kubectl, helm, k9s) · `cloud` (gcloud,
 gsutil, bq, aws) · `full` (both).
 
-Prerequisites: podman, `devcontainer` CLI, `jq` — all required. **Herdr** —
+Prerequisites: a Docker-compatible container engine, `devcontainer` CLI, `jq` —
+all required. **Herdr** —
 required for `dcws`, and it must be running. **`fzf`** — optional, but every
 picker is better with it.
 
