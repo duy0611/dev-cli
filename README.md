@@ -22,7 +22,7 @@ dccred     credential lifecycle: mint, refresh, status, watch
 |---|---|---|
 | [Podman](https://podman.io) (or Docker) | Builds and runs the images. Podman is the default; `DOCKER_HOST` points the docker CLI at its socket. | everything |
 | [`devcontainer` CLI](https://github.com/devcontainers/cli) | `dcx` shells out to `devcontainer up` / `devcontainer exec` — it is the whole run path. | everything |
-| [Herdr](https://github.com/herdrdev/herdr) | Workspace/pane orchestration and the expiry notifications. | `dcws` (hard), `dccred watch` (notifications only) |
+| [Herdr](https://github.com/herdrdev/herdr) | Workspace/pane orchestration, git worktree checkouts, and the expiry notifications. | `dcws` (hard, including `--worktree`), `dccred watch` (notifications only) |
 | `jq` | JSON everywhere: `devcontainer.json` rendering, `instance.json`, credential parsing. | everything |
 | [`fzf`](https://github.com/junegunn/fzf) | Nicer pickers. Optional — without it they fall back to a numbered menu. | optional |
 
@@ -69,6 +69,9 @@ dcx -p base --as scratch                    # sandbox, no cloud access
 dcx -p k8s  --as sk8s-debug                 # pick cluster/namespace/SA, then shell
 dcclaude -p k8s --as sk8s-debug             # Claude in that sandbox
 dcws -p k8s --as sk8s-debug                 # ...as a Herdr workspace
+dcws --worktree feat/thing                  # ...on a Herdr worktree of feat/thing
+dcws --worktree feat/thing --base main      # ...branched from main rather than HEAD
+dcws --rm-worktree feat/thing               # instance first, then the checkout
 dcx -p k8s  --as sk8s-debug -- kubectl get pods
 dcx --list
 dcx --rm scratch
@@ -76,6 +79,14 @@ dcx --rm scratch
 
 Scope is picked **once**, when the instance is created, and reused on every
 later launch. Re-pick with `dccred pick NAME`.
+
+Worktree instances mirror host absolute paths into the container rather than
+mounting at `/workspace`, and co-mount the main repo. That is what lets one
+checkout be driven from a host session and a container session interchangeably:
+`git worktree list` prints the same thing on both sides, so neither prunes the
+other's checkout. Normal instances are unaffected. `dcx` detects a linked
+worktree on its own, so this also covers checkouts made by hand or from the
+Herdr sidebar — not only ones `dcws --worktree` created.
 
 ## Instances
 
