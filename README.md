@@ -71,7 +71,7 @@ dcclaude -p k8s --as sk8s-debug             # Claude in that sandbox
 dcws -p k8s --as sk8s-debug                 # ...as a Herdr workspace
 dcws --worktree feat/thing                  # ...on a Herdr worktree of feat/thing
 dcws --worktree feat/thing --base main      # ...branched from main rather than HEAD
-dcws --rm-worktree feat/thing               # instance first, then the checkout
+dcws --rm-worktree feat/thing               # instance first, then the checkout (run from the repo root)
 dcx -p k8s  --as sk8s-debug -- kubectl get pods
 dcx --list
 dcx --rm scratch
@@ -87,6 +87,15 @@ checkout be driven from a host session and a container session interchangeably:
 other's checkout. Normal instances are unaffected. `dcx` detects a linked
 worktree on its own, so this also covers checkouts made by hand or from the
 Herdr sidebar — not only ones `dcws --worktree` created.
+
+**Run `--worktree` and `--rm-worktree` from the main repo, not from inside a
+checkout.** Both derive the instance name from the folder they are given, which
+defaults to `$PWD`. From the repo root that is the repo name, giving
+`<repo>-<branch>`; from inside a checkout it is the checkout's own directory
+name, giving a different instance — so `dcws --rm-worktree` run in the worktree
+reports that the instance does not exist and removes nothing. Pass the repo
+explicitly (`dcws --rm-worktree feat/thing /path/to/repo`) or `--as` the
+instance name if you need to run it from elsewhere.
 
 ## Instances
 

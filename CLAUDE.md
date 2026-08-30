@@ -89,6 +89,15 @@ atomic secret write) · `instance.sh` (state dir, `instance.json`, volumes) ·
 `dcclaude` and `dcws` are thin: they forward the same flags to `dcx` and add
 Herdr wiring. Any new `dcx` flag must be threaded through both.
 
+`dcws --worktree` / `--rm-worktree` are the exception: they are Herdr-specific
+and deliberately have no `dcx` counterpart, because `dcx` detects a linked
+worktree from the workspace itself. Both derive the instance name as
+`<basename $folder>-<branch>`, so **they must be run from the main repo** — from
+inside a checkout the basename is the checkout directory, the derived name does
+not match the one create used, and `--rm-worktree` silently removes nothing.
+Left as-is rather than normalised: the folder argument is already the documented
+way to say which repo you mean.
+
 ### Credential flow
 
 Minting runs **on the host** against the operator's own sessions and writes into
