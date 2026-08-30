@@ -44,9 +44,9 @@ dcx_pick_profile() {
   local choice
   choice="$(printf '%s\n' \
       "base   claude only, no cloud credentials" \
-      "k8s    kubectl, helm, k9s, aws  (minted SA token)" \
-      "gcp    gcloud SDK               (impersonated SA token)" \
-      "full   both toolchains, both credentials" \
+      "k8s    kubectl, helm, k9s       (minted SA token)" \
+      "cloud  gcloud SDK, aws CLI      (impersonated SA token, assumed role)" \
+      "full   both toolchains, all credentials" \
     | _dcx_fzf "profile>" )" || return 1
   [ -n "$choice" ] || return 1
   printf '%s\n' "${choice%% *}"

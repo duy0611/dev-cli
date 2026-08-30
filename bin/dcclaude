@@ -15,7 +15,7 @@ Usage:
 
 Dcx options forwarded as-is:
   -f, --folder FOLDER   Workspace folder.
-  -p, --profile NAME    base | k8s | gcp | full. Forces profile mode.
+  -p, --profile NAME    base | k8s | cloud | full. Forces profile mode.
       --as NAME         Instance name.
       --auth MODE       litellm (default) | oauth.
       --gitconfig       Snapshot the host ~/.gitconfig into the instance.

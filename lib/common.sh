@@ -73,7 +73,7 @@ dcx_meta() { # <instance> <jq-path>
 
 # --- profiles ----------------------------------------------------------------
 
-DCX_PROFILES="base k8s gcp full"
+DCX_PROFILES="base k8s cloud full"
 
 dcx_valid_profile() {
   case " $DCX_PROFILES " in
@@ -82,9 +82,13 @@ dcx_valid_profile() {
   esac
 }
 
+# Which credential kinds a profile carries. Note that k8s does NOT carry an AWS
+# session: cluster auth is a minted ServiceAccount token, so nothing in that
+# image ever reads an AWS credential. Both provider credentials live together in
+# `cloud`, which is also the only image holding gcloud and the aws CLI.
 dcx_profile_has_k8s() { case "$1" in k8s|full) return 0 ;; *) return 1 ;; esac; }
-dcx_profile_has_gcp() { case "$1" in gcp|full) return 0 ;; *) return 1 ;; esac; }
-dcx_profile_has_aws() { case "$1" in k8s|full) return 0 ;; *) return 1 ;; esac; }
+dcx_profile_has_gcp() { case "$1" in cloud|full) return 0 ;; *) return 1 ;; esac; }
+dcx_profile_has_aws() { case "$1" in cloud|full) return 0 ;; *) return 1 ;; esac; }
 
 dcx_image() { printf 'localhost/dcx-%s:latest\n' "$1"; }
 

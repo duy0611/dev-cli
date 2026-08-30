@@ -132,7 +132,7 @@ lint-render:
 - [ ] **Step 4: Run it and confirm identical behavior**
 
 Run: `make lint-render`
-Expected: `==> devcontainer.json render` then `base OK`, `k8s OK`, `gcp OK`, `full OK`, exit 0.
+Expected: `==> devcontainer.json render` then `base OK`, `k8s OK`, `cloud OK`, `full OK`, exit 0.
 
 - [ ] **Step 5: Run the shell linters**
 

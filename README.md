@@ -60,13 +60,18 @@ what the `devcontainer` CLI speaks.
 | Profile | Tooling | Credentials |
 |---|---|---|
 | `base` | Claude Code, git, gh | none |
-| `k8s`  | kubectl, helm, k9s, aws | minted k8s SA token, AWS session |
-| `gcp`  | Google Cloud SDK | impersonated SA access token |
+| `k8s`  | kubectl, helm, k9s | minted k8s SA token |
+| `cloud`  | Google Cloud SDK, aws CLI | impersonated GCP SA access token, assumed AWS role |
 | `full` | both | both |
 
+Both provider credentials sit in `cloud`. `k8s` deliberately carries none:
+cluster auth is a minted ServiceAccount token, so nothing in that image reads a
+GCP or AWS credential. Want a cluster *and* a cloud provider? That is `full`.
+
 ```sh
-dcx -p base --as scratch                    # sandbox, no cloud access
-dcx -p k8s  --as sk8s-debug                 # pick cluster/namespace/SA, then shell
+dcx -p base  --as scratch                   # sandbox, no cloud access
+dcx -p k8s   --as sk8s-debug                # pick cluster/namespace/SA, then shell
+dcx -p cloud --as gcp-debug                 # pick GCP project/SA and AWS role
 dcclaude -p k8s --as sk8s-debug             # Claude in that sandbox
 dcws -p k8s --as sk8s-debug                 # ...as a Herdr workspace
 dcws --worktree feat/thing                  # ...on a Herdr worktree of feat/thing
@@ -252,14 +257,14 @@ make              # help
 make lint         # shellcheck, yamllint, plutil, render check, skills, hadolint
 make test         # smoke-test the base profile end to end
 make build        # all four images
-make build k8s    # one image (base | k8s | gcp | full); deps built first
+make build k8s    # one image (base | k8s | cloud | full); deps built first
 make k8s          # same, without the `build` word
 make install      # ./install.sh
 make clean        # remove the smoke test's instance only
 ```
 
-Image targets encode the real dependencies — `k8s` and `gcp` are built `FROM
-base`, `full` `FROM k8s` — so `make build gcp` rebuilds `base` first. That is a
+Image targets encode the real dependencies — `k8s` and `cloud` are built `FROM
+base`, `full` `FROM k8s` — so `make build cloud` rebuilds `base` first. That is a
 few seconds when nothing changed, and it stops a stale base from silently
 persisting into a derived image.
 

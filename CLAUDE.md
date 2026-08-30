@@ -16,7 +16,7 @@ make                 # help (prints the header comment of the Makefile)
 make lint            # shellcheck + bash -n, yamllint, plutil, render check, skills, hadolint
 make test            # smoke-test the base profile end to end (builds dcx-base first)
 make build           # all four images
-make build k8s       # one image (base | k8s | gcp | full); its deps build first
+make build k8s       # one image (base | k8s | cloud | full); its deps build first
 make k8s             # same, without the `build` word
 make install         # ./install.sh (symlinks only)
 make clean           # remove the smoke test's instance only
@@ -139,14 +139,23 @@ plugin, which is why the images need neither `aws eks get-token` nor
 
 ### Image chain
 
-`base` → `k8s`, `base` → `gcp`, `k8s` → `full`. `gcp` and `full` share
-`images/gcp/Containerfile`, parameterised on `--build-arg BASE`; there is no
-second copy to drift. Make targets encode the dependency so a stale base cannot
-silently persist into a derived image.
+`base` → `k8s`, `base` → `cloud`, `k8s` → `full`. `cloud` and `full` share
+`images/cloud/Containerfile`, parameterised on `--build-arg BASE`; there is no
+second copy to drift.
+
+Make targets encode the dependency so a stale base cannot silently persist into
+a derived image.
+
+`cloud` carries **both** the Google Cloud SDK and the aws CLI; `k8s` carries
+neither, and mints neither credential. That split is the point of the name:
+cluster auth is a minted ServiceAccount token, so nothing in the Kubernetes
+image ever reads a provider credential, and an AWS session there would be an
+unrelated grant on a profile that does not mention it. Keeping both providers in
+one image is also what makes `full` equal `k8s` plus a single layer.
 
 Real cloud binaries live in `/usr/local/bin/real/`; `/usr/local/bin/{kubectl,
-helm,k9s,aws,gcloud,gsutil,bq}` are symlinks to `dcx-shim`, which dispatches on
-`argv[0]`.
+helm,k9s}` (in `k8s`) and `/usr/local/bin/{aws,gcloud,gsutil,bq}` (in `cloud`)
+are symlinks to `dcx-shim`, which dispatches on `argv[0]`. `full` has all seven.
 
 ## Invariants — violating these produces failures far from their cause
 
