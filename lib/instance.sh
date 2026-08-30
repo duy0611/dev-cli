@@ -20,7 +20,7 @@ dcx_instance_init() { # <name>
 
 # Create or overwrite instance.json. Selections are passed as pre-built JSON
 # objects (or 'null') so this stays one jq invocation.
-dcx_instance_write_meta() { # <name> <profile> <workspace> <auth> <gitconfig> <gpg> <k8s-json> <gcp-json> <aws-json>
+dcx_instance_write_meta() { # <name> <profile> <workspace> <auth> <gitconfig> <sign> <k8s-json> <gcp-json> <aws-json>
   local name="$1"
   jq -n \
     --arg name "$name" \
@@ -28,13 +28,13 @@ dcx_instance_write_meta() { # <name> <profile> <workspace> <auth> <gitconfig> <g
     --arg workspace "$3" \
     --arg auth "$4" \
     --argjson gitconfig "$5" \
-    --argjson gpg "$6" \
+    --argjson sign "$6" \
     --argjson k8s "$7" \
     --argjson gcp "$8" \
     --argjson aws "$9" \
     --arg created "$(date -u +%FT%TZ)" \
     '{name:$name, profile:$profile, workspace:$workspace, auth:$auth,
-      gitconfig:$gitconfig, gpg:$gpg, k8s:$k8s, gcp:$gcp, aws:$aws,
+      gitconfig:$gitconfig, sign:$sign, k8s:$k8s, gcp:$gcp, aws:$aws,
       created:$created}' \
     > "$(dcx_meta_file "$name")"
 }

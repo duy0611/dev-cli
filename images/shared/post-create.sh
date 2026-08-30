@@ -3,13 +3,14 @@
 # after it is created (postCreateCommand).
 #
 # Inputs, all optional, all supplied by the launcher:
-#   env  DEVCONTAINER_GIT_NAME / _EMAIL / _SIGNINGKEY / _GPGSIGN
-#   file /run/dcx-share/gitconfig-host      (only with --gitconfig)
-#   file /run/dcx-share/gpg-public-key.asc  (only with --gpg)
+#   env  DEVCONTAINER_GIT_NAME / _EMAIL
+#   file /run/dcx-share/gitconfig-host       (only with --gitconfig)
+#   file /run/dcx-creds/sandbox-signing[.pub] (only with --sign)
 set -euo pipefail
 
 config_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 share="/run/dcx-share"
+creds="/run/dcx-creds"
 
 # --- Claude config volume ----------------------------------------------------
 
@@ -66,8 +67,6 @@ fi
 # rather than skip the line.
 [ -n "${DEVCONTAINER_GIT_NAME:-}" ] && git config --global user.name "$DEVCONTAINER_GIT_NAME" || true
 [ -n "${DEVCONTAINER_GIT_EMAIL:-}" ] && git config --global user.email "$DEVCONTAINER_GIT_EMAIL" || true
-[ -n "${DEVCONTAINER_GIT_SIGNINGKEY:-}" ] && git config --global user.signingkey "$DEVCONTAINER_GIT_SIGNINGKEY" || true
-[ -n "${DEVCONTAINER_GIT_GPGSIGN:-}" ] && git config --global commit.gpgsign "$DEVCONTAINER_GIT_GPGSIGN" || true
 
 # --- git repo trust ----------------------------------------------------------
 
@@ -82,36 +81,54 @@ if [ -d /workspace ]; then
   git config --global --add safe.directory /workspace
 fi
 
-# --- GPG public key ----------------------------------------------------------
+# --- commit signing ------------------------------------------------------------
 
-# git will not sign without the public key in the local keyring, even when the
-# private key stays on the host behind a forwarded agent. The private key is
-# never imported: signing requests travel over the forwarded socket and only
-# the signature comes back.
+# Must come AFTER the gitconfig copy for the same reason safe.directory does:
+# a host snapshot that sets commit.gpgsign would otherwise win, and the host's
+# GPG key is not here.
 #
-# Whether anything forwards that socket is the open question. VS Code does;
-# plain `devcontainer exec` does not, and the host socket cannot be bind-mounted
-# through the podman VM because virtiofs does not pass unix sockets. Expect
-# signing to fail on the dcx path.
-if [ -f "$share/gpg-public-key.asc" ]; then
-  gpg --batch --import "$share/gpg-public-key.asc" 2>/dev/null || true
+# SSH signing, not GPG. GPG would need the host gpg-agent socket forwarded into
+# the container, and a devcontainer mount path is resolved inside the podman VM
+# where virtiofs cannot carry a unix socket. A key file at a fixed path is the
+# same shape as the kubeconfig/gcloud/aws credentials and needs nothing from the
+# host at run time.
+signing_key="$creds/sandbox-signing"
 
-  # An imported key is "unknown" trust by default, which makes gpg refuse to
-  # use it non-interactively. Mark your own key ultimately trusted.
-  if [ -n "${DEVCONTAINER_GIT_SIGNINGKEY:-}" ]; then
-    fpr="$(gpg --list-keys --with-colons "$DEVCONTAINER_GIT_SIGNINGKEY" 2>/dev/null |
-      awk -F: '/^fpr:/ { print $10; exit }')"
-    if [ -n "$fpr" ]; then
-      printf '%s:6:\n' "$fpr" | gpg --batch --import-ownertrust 2>/dev/null || true
-      echo "post-create: imported and trusted GPG public key $DEVCONTAINER_GIT_SIGNINGKEY"
-    fi
+if [ -f "$signing_key" ]; then
+  git config --global gpg.format ssh
+  # The private key path, not a `key::ssh-ed25519 ...` literal: the literal form
+  # makes git ask an ssh-agent for the signature, and there is no agent here.
+  git config --global user.signingkey "$signing_key"
+  git config --global commit.gpgsign true
+  git config --global tag.gpgsign true
+
+  # allowed_signers has to live somewhere writable, and /run/dcx-creds is a
+  # read-only mount. Without it `git log --show-signature` reports "No principal
+  # matched" even for signatures it just made.
+  #
+  # The principal is the committer email, so with no identity there is nothing
+  # to match on and the file is pointless rather than wrong to skip.
+  signer_email="$(git config --get user.email 2>/dev/null || true)"
+  if [ -n "$signer_email" ]; then
+    allowed="$HOME/.config/git/allowed_signers"
+    mkdir -p "$(dirname "$allowed")"
+    printf '%s %s\n' "$signer_email" "$(cat "$signing_key.pub")" >"$allowed"
+    git config --global gpg.ssh.allowedSignersFile "$allowed"
   fi
 
-  # Running gpg above started a container-local agent holding a socket at the
-  # default path with no private key. Kill it so it cannot shadow a forwarded
-  # agent — otherwise signing fails with "No secret key" even when forwarding
-  # works. Harmless when the socket is a bind mount: no local process to kill.
-  gpgconf --kill gpg-agent 2>/dev/null || true
+  # Warn, never block: refusing to commit because a rotation date passed would
+  # cost more than the stale key does. Rotation is a host-side action anyway.
+  if [ -f "$creds/signing.expiry" ] \
+     && [ "$(cat "$creds/signing.expiry")" -le "$(date +%s)" ]; then
+    echo "post-create: signing key is past its rotation date — on the HOST: dccred signing-key --rotate"
+  fi
+  echo "post-create: SSH commit signing enabled"
+else
+  # Explicitly false rather than left unset. The host gitconfig snapshot may
+  # carry commit.gpgsign=true, and inheriting it made every commit in every
+  # sandbox fail with "No secret key" — including sandboxes that never asked
+  # for signing.
+  git config --global commit.gpgsign false
 fi
 
 echo "post-create: done"

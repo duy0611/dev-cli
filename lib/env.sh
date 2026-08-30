@@ -48,14 +48,18 @@ dcx_write_env_file() { # <instance>
   # Passed through rather than relying on the gitconfig snapshot, which is
   # opt-in: without an identity the first commit inside fails with "Author
   # identity unknown".
+  #
+  # Identity only. The host's user.signingkey is a GPG key id the container has
+  # no secret for, and forwarding commit.gpgsign along with it used to turn on
+  # signing in every sandbox — including ones launched without --sign — so every
+  # commit died with "No secret key". post-create decides signing on its own,
+  # from what is actually present in /run/dcx-creds.
   _dcx_env_git() { # <VAR> <git-key>
     local v; v="$(git config --get "$2" 2>/dev/null || true)"
     [ -n "$v" ] && printf '%s=%s\n' "$1" "$v" >>"$out" || true
   }
-  _dcx_env_git DEVCONTAINER_GIT_NAME       user.name
-  _dcx_env_git DEVCONTAINER_GIT_EMAIL      user.email
-  _dcx_env_git DEVCONTAINER_GIT_SIGNINGKEY user.signingkey
-  _dcx_env_git DEVCONTAINER_GIT_GPGSIGN    commit.gpgsign
+  _dcx_env_git DEVCONTAINER_GIT_NAME  user.name
+  _dcx_env_git DEVCONTAINER_GIT_EMAIL user.email
   unset -f _dcx_env_git
 }
 
@@ -69,17 +73,24 @@ dcx_stage_gitconfig() { # <instance>
   info "snapshotted ~/.gitconfig"
 }
 
-# Public half only. Not secret — publishing it is the point of a public key —
-# but exported at run time rather than committed so each person gets their own.
-dcx_stage_gpg() { # <instance>
-  local share key; share="$(dcx_share_dir "$1")"
-  key="$(git config --get user.signingkey 2>/dev/null || true)"
-  [ -n "$key" ] || { warn "no user.signingkey on the host; skipping GPG"; return 0; }
-  if command -v gpg >/dev/null 2>&1 && gpg --export --armor "$key" >"$share/gpg-public-key.asc" 2>/dev/null \
-     && [ -s "$share/gpg-public-key.asc" ]; then
-    info "exported GPG public key $key"
-  else
-    rm -f "$share/gpg-public-key.asc"
-    warn "could not export the public key for $key; signing inside will fail"
-  fi
+# Commit signing. Copied into creds/, not share/: this is real private key
+# material, and creds/ is the 0700 directory the read-only /run/dcx-creds mount
+# points at.
+#
+# SSH signing rather than GPG because it is the only design that ports. GPG
+# would need the host gpg-agent socket forwarded, and a devcontainer mount path
+# resolves inside the podman VM, where virtiofs cannot pass a unix socket; every
+# workaround is hypervisor-specific. A key file behind a fixed path is the same
+# model kubectl/gcloud/aws already use here, and it works unchanged wherever the
+# container runs.
+#
+# Both halves are staged: `ssh-keygen -Y sign` looks for <key>.pub next to the
+# private key.
+dcx_stage_signing() { # <instance>
+  local creds key; creds="$(dcx_creds_dir "$1")"; key="$(dcx_signing_key)"
+  [ -f "$key" ] || die "no sandbox signing key yet; create one with: dccred signing-key"
+  dcx_write_secret "$creds/sandbox-signing"     <"$key"
+  dcx_write_secret "$creds/sandbox-signing.pub" <"$key.pub"
+  [ -f "$key.expiry" ] && cp "$key.expiry" "$creds/signing.expiry" || true
+  info "staged the sandbox signing key"
 }

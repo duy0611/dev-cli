@@ -48,6 +48,13 @@ dcx_share_dir()     { printf '%s/instances/%s/share\n' "$DCX_STATE" "$1"; }
 dcx_meta_file()     { printf '%s/instances/%s/instance.json\n' "$DCX_STATE" "$1"; }
 dcx_env_file()      { printf '%s/instances/%s/devcontainer.env\n' "$DCX_STATE" "$1"; }
 
+# The commit-signing key is shared by every instance, so it lives beside
+# instances/ rather than inside one. Deliberately not in ~/.ssh: this is a
+# sandbox-only, signing-only key, and keeping it out of the login key directory
+# is what stops it from ever being offered for authentication.
+dcx_signing_dir()   { printf '%s/signing\n' "$DCX_STATE"; }
+dcx_signing_key()   { printf '%s/signing/sandbox-signing\n' "$DCX_STATE"; }
+
 dcx_instance_exists() { [ -f "$(dcx_meta_file "$1")" ]; }
 
 dcx_list_instances() {

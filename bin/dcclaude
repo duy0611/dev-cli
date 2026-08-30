@@ -19,7 +19,7 @@ Dcx options forwarded as-is:
       --as NAME         Instance name.
       --auth MODE       litellm (default) | oauth.
       --gitconfig       Snapshot the host ~/.gitconfig into the instance.
-      --gpg             Export the GPG public key for signing.
+      --sign            Stage the sandbox SSH signing key (--gpg is an alias).
 
 Other:
   -h, --help            Show this help (dcclaude's own; see below for Claude's).
@@ -49,7 +49,7 @@ while [ $# -gt 0 ]; do
     -f|--folder|-p|--profile|--as|--auth)
       [ $# -ge 2 ] || { usage >&2; printf 'dcclaude: %s needs a value\n' "$1" >&2; exit 1; }
       dcx_args+=("$1" "$2"); shift 2 ;;
-    --gitconfig|--gpg)
+    --gitconfig|--sign|--gpg)
       dcx_args+=("$1"); shift ;;
     --) shift; break ;;
     *) break ;;
