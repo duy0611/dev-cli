@@ -76,8 +76,23 @@ fi
 # here. Under a rootless machine, or a different sharing backend, it does not,
 # and every git command dies with "detected dubious ownership". Costs nothing
 # to keep.
-if [ -d /workspace ]; then
-  git config --global --add safe.directory /workspace
+# Two entries, not one: git ownership-checks the working tree AND the gitdir it
+# links into, so a worktree instance fails on the main repo without both.
+wt_common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+# The ${x:+...} form, not a plain "$x": an empty wt_common must contribute no
+# word at all, where "$wt_common" would add an empty one and `git config
+# safe.directory ""` would land in the global config.
+for d in /workspace "$PWD" ${wt_common:+"$(dirname "$wt_common")"}; do
+  [ -d "$d" ] && git config --global --add safe.directory "$d" || true
+done
+
+# An unshared host path does not fail the bind - the podman machine mounts an
+# empty directory inside the VM instead, silently. Only a linked worktree can
+# hit this (its .git is a file); a plain checkout or a non-git workspace must
+# not trip it.
+if [ -f .git ] && ! [ -e "$(git rev-parse --git-common-dir 2>/dev/null || echo /nonexistent)" ]; then
+  echo "post-create: main repo not mounted - check podman machine host shares" >&2
+  exit 1
 fi
 
 # --- commit signing ------------------------------------------------------------
