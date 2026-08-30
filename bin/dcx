@@ -157,6 +157,18 @@ if [ "$mode" = profile ]; then
     recorded_ws="$(dcx_meta "$instance" '.workspace')"
     [ "$recorded_ws" = "$workspace" ] && : || warn \
       "instance '$instance' is bound to $recorded_ws, not $workspace (using the recorded one)"
+
+    # The one create-time choice that can be made later. Everything else in
+    # instance.json feeds the generated devcontainer.json and would need a
+    # recreate to matter; a signing key is just a file the container reads, and
+    # creds/ is a bind mount, so staging it lands in a running container at
+    # once. The matching git config is applied further down, after the container
+    # is up — see the dcx-enable-signing call in the shared path.
+    if [ "$want_sign" -eq 1 ]; then
+      dcx_stage_signing "$instance"
+      [ "$(dcx_meta "$instance" '.sign')" = "true" ] || \
+        dcx_instance_patch "$instance" '{"sign":true}'
+    fi
   else
     info "creating instance '$instance' (profile $profile) for $workspace"
 
@@ -217,6 +229,20 @@ folder="$(cd "$folder" && pwd -P)"
 if [ -z "$(docker ps -q --filter "label=devcontainer.local_folder=$folder" 2>/dev/null)" ]; then
   printf 'dcx: starting devcontainer for %s\n' "$folder" >&2
   devcontainer up --workspace-folder "$folder" >/dev/null || die "devcontainer up failed"
+fi
+
+# Signing config lives in ~/.gitconfig, which post-create writes only on create.
+# Re-applying it on every --sign launch is what lets the flag land on an
+# already-running instance with no recreate; the script is idempotent, so doing
+# it again on a container post-create just configured costs nothing and keeps
+# one code path. Older images have no such script — warn rather than die, since
+# the container is otherwise fine and the fix is a rebuild, not a relaunch.
+#
+# Profile mode only: a project devcontainer has no creds/ bind, so the script
+# would find no key and helpfully turn signing *off* in someone else's image.
+if [ "$want_sign" -eq 1 ] && [ "$mode" = profile ]; then
+  devcontainer exec --workspace-folder "$folder" dcx-enable-signing >/dev/null 2>&1 \
+    || warn "could not enable signing in the container; rebuild the image: make build"
 fi
 
 if [ $# -eq 0 ]; then

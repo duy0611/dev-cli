@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Installed as /usr/local/bin/dcx-enable-signing. Runs INSIDE the container.
+#
+# Points ~/.gitconfig at the sandbox SSH signing key, or turns signing off when
+# no key is mounted. Idempotent: every line is a `git config --global` set, so
+# running it twice is running it once.
+#
+# Two callers, which is the whole reason this is not inlined in post-create:
+#   - dcx-post-create, on first create
+#   - `dcx --sign` on an already-running instance, via devcontainer exec
+#
+# The second caller is why the retrofit works at all. creds/ is a bind mount, so
+# a key staged on the host appears in /run/dcx-creds immediately — but the git
+# config that points at it is written to ~/.gitconfig, which only post-create
+# touched. Without this script, --sign on a live instance needed a container
+# recreate to take effect.
+#
+# Callers must run this AFTER any host gitconfig copy, for the same reason
+# safe.directory has to: a snapshot that sets commit.gpgsign would otherwise win.
+set -euo pipefail
+
+creds="/run/dcx-creds"
+signing_key="$creds/sandbox-signing"
+
+# SSH signing, not GPG. GPG would need the host gpg-agent socket forwarded into
+# the container, and a devcontainer mount path is resolved inside the podman VM
+# where virtiofs cannot carry a unix socket. A key file at a fixed path is the
+# same shape as the kubeconfig/gcloud/aws credentials and needs nothing from the
+# host at run time.
+if [ ! -f "$signing_key" ]; then
+  # Explicitly false rather than left unset. The host gitconfig snapshot may
+  # carry commit.gpgsign=true, and inheriting it made every commit in every
+  # sandbox fail with "No secret key" — including sandboxes that never asked
+  # for signing.
+  git config --global commit.gpgsign false
+  exit 0
+fi
+
+git config --global gpg.format ssh
+# The private key path, not a `key::ssh-ed25519 ...` literal: the literal form
+# makes git ask an ssh-agent for the signature, and there is no agent here.
+git config --global user.signingkey "$signing_key"
+git config --global commit.gpgsign true
+git config --global tag.gpgsign true
+
+# allowed_signers has to live somewhere writable, and /run/dcx-creds is a
+# read-only mount. Without it `git log --show-signature` reports "No principal
+# matched" even for signatures it just made.
+#
+# The principal is the committer email, so with no identity there is nothing
+# to match on and the file is pointless rather than wrong to skip.
+signer_email="$(git config --get user.email 2>/dev/null || true)"
+if [ -n "$signer_email" ]; then
+  allowed="$HOME/.config/git/allowed_signers"
+  mkdir -p "$(dirname "$allowed")"
+  printf '%s %s\n' "$signer_email" "$(cat "$signing_key.pub")" >"$allowed"
+  git config --global gpg.ssh.allowedSignersFile "$allowed"
+fi
+
+# Warn, never block: refusing to commit because a rotation date passed would
+# cost more than the stale key does. Rotation is a host-side action anyway.
+if [ -f "$creds/signing.expiry" ] \
+   && [ "$(cat "$creds/signing.expiry")" -le "$(date +%s)" ]; then
+  echo "dcx-enable-signing: signing key is past its rotation date — on the HOST: dccred signing-key --rotate"
+fi
+
+echo "dcx-enable-signing: SSH commit signing enabled"

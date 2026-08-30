@@ -104,6 +104,25 @@ if [ -f "$HOME/.local/state/dcx/signing/sandbox-signing" ]; then
   # broken to anyone using --show-signature.
   check "commit signs and verifies" 'Good "git" signature' \
         "$(runs 'cd "$(mktemp -d)" && git init -q . && git commit -q --allow-empty -m signed && git log --show-signature -1')"
+
+  # --sign applied to an instance created without it, with no recreate. This is
+  # the regression: the key reaches a live container through the creds/ bind
+  # mount, but the git config pointing at it used to be written only by
+  # post-create, so the flag silently did nothing until the container was
+  # destroyed. $NAME is reused precisely because it was created unsigned and
+  # asserted "false" above.
+  before="$(docker ps -q --filter "label=devcontainer.local_folder=$HOME/.local/state/dcx/instances/$NAME")"
+  "$DCX" -p base --as "$NAME" -f "$WS" --sign -- true >/dev/null
+  after="$(docker ps -q --filter "label=devcontainer.local_folder=$HOME/.local/state/dcx/instances/$NAME")"
+
+  check "--sign lands on a live instance" "true" "$(run 'git config --get commit.gpgsign')"
+  check "--sign signs without a recreate" 'Good "git" signature' \
+        "$(run 'cd "$(mktemp -d)" && git init -q . && git commit -q --allow-empty -m retro && git log --show-signature -1')"
+  # The point of the change: same container throughout. A recreate would also
+  # produce a signed commit, and would hide the bug.
+  [ -n "$before" ] && [ "$before" = "$after" ] \
+    && ok "--sign reused the running container" \
+    || bad "--sign reused the running container (before=$before after=$after)"
 else
   printf '\n==> signing: skipped (no key; run: %s signing-key)\n' "$DCCRED"
 fi
