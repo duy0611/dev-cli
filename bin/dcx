@@ -147,6 +147,23 @@ if [ "$mode" = profile ]; then
   case "$auth" in litellm|oauth) ;; *) die "unknown --auth '$auth' (litellm|oauth)" ;; esac
 
   workspace="$(dcx_abspath "${folder:-$PWD}")" || die "not a directory: ${folder:-$PWD}"
+
+  # A linked worktree keeps its .git as a FILE pointing into
+  # <main>/.git/worktrees/<n>. That path is absolute and host-written, so both
+  # trees have to be bind-mounted at their host paths or the link dangles inside
+  # the container. Detected rather than flagged: this then also covers worktrees
+  # made by hand or from the Herdr sidebar, and adds no dcx option that would
+  # have to be threaded through dcclaude and dcws.
+  #
+  # --path-format=absolute needs git >= 2.31. Failure is not fatal: a workspace
+  # that is not a git repo at all is a perfectly ordinary sandbox.
+  worktree_main=""
+  wt_common="$(git -C "$workspace" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  case "$wt_common" in
+    ''|"$workspace"/.git) ;;   # not a repo, or the main checkout itself
+    *) worktree_main="$(dcx_abspath "$(dirname "$wt_common")")" || worktree_main="" ;;
+  esac
+
   [ -n "$instance" ] || instance="$(basename "$workspace")"
   dcx_check_name "$instance"
 
@@ -171,6 +188,9 @@ if [ "$mode" = profile ]; then
     fi
   else
     info "creating instance '$instance' (profile $profile) for $workspace"
+    # Surfaced at create: a second bind the operator did not ask for should not
+    # be something they discover by reading the generated devcontainer.json.
+    [ -n "$worktree_main" ] && info "  linked worktree; co-mounting main repo $worktree_main" || true
 
     # Before anything is written, and before the pickers: staging happens at the
     # end of create, so failing there would leave a recorded instance that the
@@ -207,7 +227,7 @@ if [ "$mode" = profile ]; then
     dcx_instance_write_meta "$instance" "$profile" "$workspace" "$auth" \
       "$([ "$want_gitconfig" -eq 1 ] && echo true || echo false)" \
       "$([ "$want_sign" -eq 1 ] && echo true || echo false)" \
-      "$k8s_json" "$gcp_json" "$aws_json"
+      "$k8s_json" "$gcp_json" "$aws_json" "$worktree_main"
 
     dcx_instance_create_volumes "$instance"
     [ "$want_gitconfig" -eq 1 ] && dcx_stage_gitconfig "$instance" || true
