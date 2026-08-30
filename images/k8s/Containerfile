@@ -1,4 +1,4 @@
-# dcx-k8s — kubectl, helm, k9s and the aws CLI, behind expiry shims.
+# dcx-k8s — kubectl, helm and k9s, behind expiry shims.
 #
 # Plugins are inherited: dcx-base already staged them at /opt/claude-seed, and
 # nothing here touches $CLAUDE_CONFIG_DIR, so there is nothing to re-bake.
@@ -22,13 +22,15 @@ USER root
 
 # Real binaries go in real/; /usr/local/bin/<tool> is a symlink to the shim,
 # which checks the credential's expiry sidecar before exec'ing the real one.
-# The aws CLI is here for direct use only — cluster auth uses a minted
-# ServiceAccount token, so kubectl needs no exec credential plugin.
+#
+# No provider CLI here: cluster auth uses a minted ServiceAccount token, so
+# kubectl needs no exec credential plugin and nothing in this image reads an AWS
+# or GCP credential. Those live in dcx-cloud, and therefore in dcx-full.
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in \
-      arm64) k8s_arch=arm64; aws_arch=aarch64 ;; \
-      amd64) k8s_arch=amd64; aws_arch=x86_64  ;; \
+      arm64) k8s_arch=arm64 ;; \
+      amd64) k8s_arch=amd64 ;; \
       *) echo "unsupported arch: $arch" >&2; exit 1 ;; \
     esac; \
     \
@@ -46,15 +48,9 @@ RUN set -eux; \
     install -m 0755 /tmp/k9s /usr/local/bin/real/k9s; \
     rm -f /tmp/k9s; \
     \
-    curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${aws_arch}.zip" -o /tmp/awscliv2.zip; \
-    unzip -q /tmp/awscliv2.zip -d /tmp; \
-    /tmp/aws/install --bin-dir /usr/local/bin/real --install-dir /usr/local/aws-cli; \
-    rm -rf /tmp/awscliv2.zip /tmp/aws; \
-    \
-    for t in kubectl helm k9s aws; do ln -sf /usr/local/bin/dcx-shim "/usr/local/bin/$t"; done; \
+    for t in kubectl helm k9s; do ln -sf /usr/local/bin/dcx-shim "/usr/local/bin/$t"; done; \
     \
     /usr/local/bin/real/kubectl version --client=true --output=yaml >/dev/null; \
-    /usr/local/bin/real/helm version --short >/dev/null; \
-    /usr/local/bin/real/aws --version >/dev/null
+    /usr/local/bin/real/helm version --short >/dev/null
 
 USER node

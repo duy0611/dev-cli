@@ -1,6 +1,6 @@
 # devcontainer-claude-setup
 
-Run Claude Code inside containers on macOS + Podman.
+Run Claude Code inside containers on macOS, with any Docker-compatible engine.
 
 Two ways in, one command family:
 
@@ -20,16 +20,19 @@ dccred     credential lifecycle: mint, refresh, status, watch
 
 | Requirement | Why | Needed by |
 |---|---|---|
-| [Podman](https://podman.io) (or Docker) | Builds and runs the images. Podman is the default; `DOCKER_HOST` points the docker CLI at its socket. | everything |
+| A container engine with a Docker-compatible CLI and socket | Builds and runs the images. [Podman](https://podman.io) (preferred, tested) · Docker Desktop (tested) · Rancher Desktop (not tested — see below). | everything |
 | [`devcontainer` CLI](https://github.com/devcontainers/cli) | `dcx` shells out to `devcontainer up` / `devcontainer exec` — it is the whole run path. | everything |
 | [Herdr](https://github.com/herdrdev/herdr) | Workspace/pane orchestration, git worktree checkouts, and the expiry notifications. | `dcws` (hard, including `--worktree`), `dccred watch` (notifications only) |
 | `jq` | JSON everywhere: `devcontainer.json` rendering, `instance.json`, credential parsing. | everything |
 | [`fzf`](https://github.com/junegunn/fzf) | Nicer pickers. Optional — without it they fall back to a numbered menu. | optional |
 
 ```sh
-brew install podman jq fzf
+brew install jq fzf
 npm install -g @devcontainers/cli
-podman machine init && podman machine start
+
+# ...plus a container engine. Podman is the one this is developed against:
+brew install podman && podman machine init && podman machine start
+# Docker Desktop is tested too and needs nothing beyond a running daemon.
 ```
 
 `dcws` refuses to run without a reachable Herdr server (`no Herdr server
@@ -48,25 +51,39 @@ Herdr classifies the pane, and works fine without Herdr installed.
 An existing non-symlink `~/.local/bin/dcx` is moved to `dcx.pre-dcx-repo`
 rather than overwritten.
 
-Image *builds* prefer `podman` when it is on PATH and fall back to `docker`,
-because the docker CLI drops to its deprecated classic builder without the
-buildx plugin. Both write to the same local storage. Set `DCX_RUNTIME=docker`
-to force the old behaviour; it applies to `make build` and `install.sh
---images` alike. Running instances still go through `docker`, since that is
-what the `devcontainer` CLI speaks.
+Nothing here is Podman-specific. Image *builds* prefer `podman` when it happens
+to be on PATH and fall back to `docker`, because the docker CLI drops to its
+deprecated classic builder without the buildx plugin — a preference, not a
+requirement. Set `DCX_RUNTIME=docker` to skip it; that applies to `make build`
+and `install.sh --images` alike, and on a Docker-only host it is what happens
+anyway. Running instances always go through `docker`, since that is what the
+`devcontainer` CLI speaks; on Podman, `DOCKER_HOST` points it at the podman
+socket, and on Docker Desktop it needs no wiring at all.
+
+**Rancher Desktop** should work but has not been tried. It must run in
+**`dockerd (moby)`** mode — in `containerd` mode you get `nerdctl`, no `docker`
+CLI and no Docker socket, and the `devcontainer` CLI speaks only Docker, so
+`dcx` stops at `need docker`. The other thing to watch is file sharing: it is
+VM-backed like Podman, so a project outside the VM's shared paths binds an empty
+directory rather than failing. Report back if you try it.
 
 ## Profiles
 
 | Profile | Tooling | Credentials |
 |---|---|---|
 | `base` | Claude Code, git, gh | none |
-| `k8s`  | kubectl, helm, k9s, aws | minted k8s SA token, AWS session |
-| `gcp`  | Google Cloud SDK | impersonated SA access token |
+| `k8s`  | kubectl, helm, k9s | minted k8s SA token |
+| `cloud`  | Google Cloud SDK, aws CLI | impersonated GCP SA access token, assumed AWS role |
 | `full` | both | both |
 
+Both provider credentials sit in `cloud`. `k8s` deliberately carries none:
+cluster auth is a minted ServiceAccount token, so nothing in that image reads a
+GCP or AWS credential. Want a cluster *and* a cloud provider? That is `full`.
+
 ```sh
-dcx -p base --as scratch                    # sandbox, no cloud access
-dcx -p k8s  --as sk8s-debug                 # pick cluster/namespace/SA, then shell
+dcx -p base  --as scratch                   # sandbox, no cloud access
+dcx -p k8s   --as sk8s-debug                # pick cluster/namespace/SA, then shell
+dcx -p cloud --as gcp-debug                 # pick GCP project/SA and AWS role
 dcclaude -p k8s --as sk8s-debug             # Claude in that sandbox
 dcws -p k8s --as sk8s-debug                 # ...as a Herdr workspace
 dcws --worktree feat/thing                  # ...on a Herdr worktree of feat/thing
@@ -200,8 +217,9 @@ The key is staged into the instance's `creds/` dir and reached at
 rotation (`dccred signing-key --rotate`) lands without recreating anything.
 
 **Why not GPG.** Signing with your real key needs the host `gpg-agent` socket
-forwarded into the container. A devcontainer mount path is resolved inside the
-Podman VM, and virtiofs cannot carry a unix socket; every workaround (a socat
+forwarded into the container. On macOS the engine is VM-backed whichever one you
+run, so a devcontainer mount path resolves inside that VM, and virtiofs cannot
+carry a unix socket; every workaround (a socat
 TCP relay, `ssh -R` into the machine) is tied to a local hypervisor and would
 have to be rebuilt for a remote container host. A key file behind a fixed path
 is the only design that ports. `--gpg` is kept as a deprecated alias for
@@ -252,14 +270,14 @@ make              # help
 make lint         # shellcheck, yamllint, plutil, render check, skills, hadolint
 make test         # smoke-test the base profile end to end
 make build        # all four images
-make build k8s    # one image (base | k8s | gcp | full); deps built first
+make build k8s    # one image (base | k8s | cloud | full); deps built first
 make k8s          # same, without the `build` word
 make install      # ./install.sh
 make clean        # remove the smoke test's instance only
 ```
 
-Image targets encode the real dependencies — `k8s` and `gcp` are built `FROM
-base`, `full` `FROM k8s` — so `make build gcp` rebuilds `base` first. That is a
+Image targets encode the real dependencies — `k8s` and `cloud` are built `FROM
+base`, `full` `FROM k8s` — so `make build cloud` rebuilds `base` first. That is a
 few seconds when nothing changed, and it stops a stale base from silently
 persisting into a derived image.
 

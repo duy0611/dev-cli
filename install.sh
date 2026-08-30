@@ -80,13 +80,13 @@ if [ "$do_images" -eq 1 ]; then
   info "building dcx-k8s"
   "$RUNTIME" build -f images/k8s/Containerfile -t localhost/dcx-k8s:latest .
 
-  info "building dcx-gcp"
-  "$RUNTIME" build -f images/gcp/Containerfile \
-    --build-arg BASE=localhost/dcx-base:latest -t localhost/dcx-gcp:latest .
+  info "building dcx-cloud"
+  "$RUNTIME" build -f images/cloud/Containerfile \
+    --build-arg BASE=localhost/dcx-base:latest -t localhost/dcx-cloud:latest .
 
-  # full is exactly k8s plus the gcp layer, so it reuses the same Containerfile.
+  # full is exactly k8s plus the cloud layer, so it reuses the same Containerfile.
   info "building dcx-full"
-  "$RUNTIME" build -f images/gcp/Containerfile \
+  "$RUNTIME" build -f images/cloud/Containerfile \
     --build-arg BASE=localhost/dcx-k8s:latest -t localhost/dcx-full:latest .
 
   info "images built:"

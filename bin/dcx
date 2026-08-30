@@ -45,7 +45,7 @@ Options:
   -f, --folder FOLDER   Workspace folder. Default: DCX_FOLDER, else the nearest
                         ancestor of $PWD holding .devcontainer/ (project mode),
                         else $PWD (profile mode).
-  -p, --profile NAME    base | k8s | gcp | full. Forces profile mode.
+  -p, --profile NAME    base | k8s | cloud | full. Forces profile mode.
       --as NAME         Instance name. Default: basename of the folder.
       --auth MODE       litellm (default) | oauth. Recorded at create.
       --gitconfig       Snapshot the host ~/.gitconfig into the instance.
@@ -66,6 +66,7 @@ Examples:
   dcx                                   Shell in the current repo's devcontainer
   dcx -p base --as scratch              Sandbox with no cloud credentials
   dcx -p k8s --as sk8s-debug            Sandbox with a minted k8s SA token
+  dcx -p cloud --as gcp-debug           Sandbox with gcloud and aws credentials
   dcx -p k8s --as sk8s-debug -- kubectl get pods
   dcx --rm scratch
 

@@ -34,7 +34,7 @@ Options:
   -r, --restart      Reuse the existing workspace and relaunch panes that have
                      no foreground process. Panes still running are left alone.
       --no-claude    Shell pane only; skip the Claude pane.
-  -p, --profile P    base | k8s | gcp | full. Profile mode: no .devcontainer
+  -p, --profile P    base | k8s | cloud | full. Profile mode: no .devcontainer
                      needed in FOLDER.
       --as INSTANCE  Instance name. Default: basename of FOLDER.
       --auth MODE    litellm (default) | oauth. Passed through on create.

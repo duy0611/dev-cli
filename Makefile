@@ -3,11 +3,11 @@
 #   make lint            shellcheck, yamllint, plutil, hadolint, JSON render check
 #   make test            smoke-test the base profile end to end
 #   make build           build all four images
-#   make build base      build one (also: k8s, gcp, full)
+#   make build base      build one (also: k8s, cloud, full)
 #   make base            same thing, without the `build` word
 #   make install         run install.sh
 #
-# Images depend on each other (k8s and gcp are built FROM base, full FROM k8s),
+# Images depend on each other (k8s and cloud are built FROM base, full FROM k8s),
 # so the targets encode that. A dependency rebuild is cheap when nothing
 # changed — the layer cache makes it a few seconds — and skipping it would let
 # a stale base silently persist into the derived images.
@@ -15,7 +15,7 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 
-PROFILES   := base k8s gcp full
+PROFILES   := base k8s cloud full
 
 # podman first, docker second. The backend is a podman machine either way, but
 # reaching it through the docker CLI drops to the deprecated classic builder
@@ -38,7 +38,7 @@ SH_FILES := bin/dcx bin/dcclaude bin/dcws bin/dccred install.sh \
             test/render-check.sh test/smoke-base.sh \
             $(wildcard skills/*/templates/*.sh)
 
-CONTAINERFILES := images/base/Containerfile images/k8s/Containerfile images/gcp/Containerfile
+CONTAINERFILES := images/base/Containerfile images/k8s/Containerfile images/cloud/Containerfile
 
 .DEFAULT_GOAL := help
 .PHONY: help lint test build install install-images install-watch clean \
@@ -73,14 +73,14 @@ image-base:
 image-k8s: image-base
 	$(DOCKER) build -f images/k8s/Containerfile -t localhost/dcx-k8s:latest .
 
-# gcp and full share one Containerfile, parameterised on BASE: full is exactly
-# k8s plus the Cloud SDK layer, so there is no second copy to drift.
-image-gcp: image-base
-	$(DOCKER) build -f images/gcp/Containerfile \
-	  --build-arg BASE=localhost/dcx-base:latest -t localhost/dcx-gcp:latest .
+# cloud and full share one Containerfile, parameterised on BASE: full is exactly
+# k8s plus the gcloud+aws layer, so there is no second copy to drift.
+image-cloud: image-base
+	$(DOCKER) build -f images/cloud/Containerfile \
+	  --build-arg BASE=localhost/dcx-base:latest -t localhost/dcx-cloud:latest .
 
 image-full: image-k8s
-	$(DOCKER) build -f images/gcp/Containerfile \
+	$(DOCKER) build -f images/cloud/Containerfile \
 	  --build-arg BASE=localhost/dcx-k8s:latest -t localhost/dcx-full:latest .
 
 # --- lint --------------------------------------------------------------------

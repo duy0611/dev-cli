@@ -48,7 +48,7 @@ prod coverage.
 | CLI shape | Extend `dcx`/`dcclaude`/`dcws` with `-p/--profile` + `--as`; new `dccred` for the credential lifecycle |
 | Repo scope | Owns all four commands; `install.sh` symlinks into `~/.local/bin` |
 | Engine | `DOCKER_HOST` already points `docker` at the podman socket — **no `--docker-path` needed**; keep using `docker`/`devcontainer` exactly as `dcx` does today |
-| Profiles | `base`, `k8s`, `gcp`, `full` |
+| Profiles | `base`, `k8s`, `cloud`, `full` |
 | Plugins | Baked into the image at build. No picker, no per-instance variation |
 | Claude auth | LiteLLM by default; `--auth oauth` opts into seeding the OAuth credential |
 | Git | Identity + `safe.directory` always; `--gitconfig` and `--sign` opt in |
@@ -57,9 +57,9 @@ prod coverage.
 | Persistence | Named volumes per instance; survive restart, isolated between instances |
 | Workspace | Bind-mount read-write at `/workspace`; a linked worktree instead mounts at its host path, with the main repo co-mounted |
 | Egress | Open. No firewall |
-| k8s creds | Minted SA tokens — one code path for EKS and GKE |
-| GCP creds | Impersonated SA access token (1h hard cap) |
-| AWS creds | `sts assume-role` session credentials |
+| k8s creds | Minted SA tokens — one code path for EKS and GKE. `k8s` profile |
+| GCP creds | Impersonated SA access token (1h hard cap). `cloud` profile |
+| AWS creds | `sts assume-role` session credentials. `cloud` profile |
 | Expiry | Blocking shim message + `herdr notification show`; refresh is manual from the host |
 
 ### Why minted SA tokens
@@ -67,8 +67,9 @@ prod coverage.
 `kubectl create token` is a Kubernetes API call, so one code path serves `aws-cen-*`
 (EKS) and `gcp-cen-*` (GKE). Once minted, the container's kubeconfig carries a bare
 token and needs **no `exec` credential plugin** — no `aws eks get-token`, no
-`gke-gcloud-auth-plugin`. The `aws` and `gcloud` CLIs are in the images for direct
-use, not for cluster auth.
+`gke-gcloud-auth-plugin`. That is why `dcx-k8s` ships no provider CLI at all: the
+`aws` and `gcloud` binaries exist for direct use against those providers, which is
+the `cloud` profile's job, never for cluster auth.
 
 ## Container invariants
 
@@ -115,8 +116,8 @@ devcontainer-claude-setup/
     base/claude-plugins.txt
     k8s/Containerfile
     k8s/claude-plugins.txt
-    gcp/Containerfile
-    gcp/claude-plugins.txt
+    cloud/Containerfile
+    cloud/claude-plugins.txt
     full/Containerfile
     full/claude-plugins.txt
     shared/
@@ -153,7 +154,7 @@ no change. Two instances can target the same project without colliding.
 New flags, threaded identically through `dcclaude` and `dcws`:
 
 ```
--p, --profile PROFILE    base | k8s | gcp | full
+-p, --profile PROFILE    base | k8s | cloud | full
     --as NAME            instance name (default: basename of the workspace folder)
     --auth MODE          litellm (default) | oauth
     --gitconfig          snapshot the host ~/.gitconfig into the instance
@@ -212,8 +213,8 @@ packages; egress is open by decision.
 | Image | Adds |
 |---|---|
 | `localhost/dcx-base` | (nothing beyond the fork) |
-| `localhost/dcx-k8s` | `kubectl`, `helm`, `k9s`, `awscli` v2, shims |
-| `localhost/dcx-gcp` | Google Cloud SDK, shims |
+| `localhost/dcx-k8s` | `kubectl`, `helm`, `k9s`, shims |
+| `localhost/dcx-cloud` | Google Cloud SDK, `awscli` v2, shims |
 | `localhost/dcx-full` | both toolchains, shims |
 
 Real binaries move to `/usr/local/bin/real/`; `/usr/local/bin/{kubectl,gcloud,aws}`
@@ -508,11 +509,13 @@ building past them.
     prints the refresh instruction and exits 1; a Herdr notification fires from
     `dccred watch`. Then `dccred refresh stagetest` on the host, and in the *same*
     container session `kubectl get pods` works again with no restart.
-15. **GCP** — `dcx -p gcp --as g1`; `gcloud storage ls` succeeds against the chosen
+15. **GCP** — `dcx -p cloud --as g1`; `gcloud storage ls` succeeds against the chosen
     project and only that project.
 16. **OAuth opt-in** — `dcx -p base --as oa --auth oauth`; Claude runs without a
     login prompt and `ANTHROPIC_BASE_URL` is unset.
-17. **Combined** — `dcx -p full --as both`; both toolchains and both credentials work.
+17. **Combined** — `dcx -p full --as both`; both toolchains work, and all three
+    credentials (k8s, GCP, AWS) are present. In `-p k8s` only the kubeconfig is,
+    and `aws`/`gcloud` are not installed at all.
 18. **Herdr workspace** — `dcws -p k8s --as sk8s-debug`. Workspace labelled
     `sk8s-debug` with panes `shell:sk8s-debug` and `claude:sk8s-debug`; the Claude
     pane is detected as an agent (`herdr agent list`). Kill the Claude pane's

@@ -1,11 +1,16 @@
-# Google Cloud SDK behind an expiry shim.
+# dcx-cloud — the Google Cloud SDK and the aws CLI, behind expiry shims.
+#
+# Both providers live here, and neither lives in dcx-k8s: cluster auth is a
+# minted ServiceAccount token, so kubectl needs no provider CLI at all, and an
+# AWS session in a profile named for Kubernetes would be an unrelated grant
+# nothing in that image reads.
 #
 # Parameterised on BASE so it builds both cloud images without duplicating the
-# SDK layer — dcx-full is exactly dcx-k8s plus this:
+# layer — dcx-full is exactly dcx-k8s plus this:
 #
-#   docker build -f images/gcp/Containerfile \
-#     --build-arg BASE=localhost/dcx-base:latest -t localhost/dcx-gcp:latest .
-#   docker build -f images/gcp/Containerfile \
+#   docker build -f images/cloud/Containerfile \
+#     --build-arg BASE=localhost/dcx-base:latest -t localhost/dcx-cloud:latest .
+#   docker build -f images/cloud/Containerfile \
 #     --build-arg BASE=localhost/dcx-k8s:latest  -t localhost/dcx-full:latest .
 #
 # Plugins are inherited from dcx-base via /opt/claude-seed.
@@ -39,5 +44,24 @@ RUN set -eux; \
     done; \
     \
     /usr/local/bin/real/gcloud version >/dev/null
+
+# The aws CLI reads AWS_SHARED_CREDENTIALS_FILE on every invocation, same
+# property as the SDK above, so a host-side refresh needs no restart either.
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      arm64) aws_arch=aarch64 ;; \
+      amd64) aws_arch=x86_64  ;; \
+      *) echo "unsupported arch: $arch" >&2; exit 1 ;; \
+    esac; \
+    \
+    curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${aws_arch}.zip" -o /tmp/awscliv2.zip; \
+    unzip -q /tmp/awscliv2.zip -d /tmp; \
+    /tmp/aws/install --bin-dir /usr/local/bin/real --install-dir /usr/local/aws-cli; \
+    rm -rf /tmp/awscliv2.zip /tmp/aws; \
+    \
+    ln -sf /usr/local/bin/dcx-shim /usr/local/bin/aws; \
+    \
+    /usr/local/bin/real/aws --version >/dev/null
 
 USER node
