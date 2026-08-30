@@ -20,7 +20,12 @@ dcx_instance_init() { # <name>
 
 # Create or overwrite instance.json. Selections are passed as pre-built JSON
 # objects (or 'null') so this stays one jq invocation.
-dcx_instance_write_meta() { # <name> <profile> <workspace> <auth> <gitconfig> <sign> <k8s-json> <gcp-json> <aws-json>
+#
+# worktree_main is the absolute host path of the main repo when the workspace is
+# a linked worktree, empty otherwise. Optional and last so the nine-argument
+# callers that predate it keep working; dcx_meta's `// empty` means an
+# instance.json written before this field existed reads as "" too.
+dcx_instance_write_meta() { # <name> <profile> <workspace> <auth> <gitconfig> <sign> <k8s-json> <gcp-json> <aws-json> [worktree-main]
   local name="$1"
   jq -n \
     --arg name "$name" \
@@ -32,10 +37,11 @@ dcx_instance_write_meta() { # <name> <profile> <workspace> <auth> <gitconfig> <s
     --argjson k8s "$7" \
     --argjson gcp "$8" \
     --argjson aws "$9" \
+    --arg worktree_main "${10:-}" \
     --arg created "$(date -u +%FT%TZ)" \
     '{name:$name, profile:$profile, workspace:$workspace, auth:$auth,
       gitconfig:$gitconfig, sign:$sign, k8s:$k8s, gcp:$gcp, aws:$aws,
-      created:$created}' \
+      worktree_main:$worktree_main, created:$created}' \
     > "$(dcx_meta_file "$name")"
 }
 

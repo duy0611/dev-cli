@@ -16,6 +16,38 @@ dcx_render_devcontainer() { # <instance>
   image="$(dcx_image "$profile")"
   env_file="$(dcx_env_file "$name")"
 
+  # Mount geometry. Normal instances land at /workspace, unchanged.
+  #
+  # A worktree instance instead mirrors host absolute paths into the container.
+  # Its .git is a file pointing at <main>/.git/worktrees/<n>, an absolute path
+  # written by the host, so unless both trees sit at their host paths on both
+  # sides that link dangles - and a host-side `git worktree prune` reaps the
+  # container's checkout, because from the host the recorded path does not exist.
+  local wt_main mount_src mount_tgt ws_folder extra_mounts
+  wt_main="$(dcx_meta "$name" '.worktree_main')"
+  extra_mounts='[]'
+  if [ -n "$wt_main" ]; then
+    ws_folder="$workspace"
+    case "$workspace" in
+      "$wt_main"/*)
+        # Nested checkout. workspaceFolder may be a subdirectory of
+        # workspaceMount, so one bind covers both trees; a second would overlap.
+        mount_src="$wt_main" ;;
+      *)
+        # Sibling checkout, which is where Herdr puts them by default. The main
+        # repo needs its own bind, read-write: commits from the worktree write
+        # objects to <main>/.git/objects and refs to <main>/.git/worktrees/<n>.
+        mount_src="$workspace"
+        extra_mounts="$(jq -n --arg m "$wt_main" \
+          '[("source=" + $m + ",target=" + $m + ",type=bind,consistency=delegated")]')" ;;
+    esac
+    mount_tgt="$mount_src"
+  else
+    mount_src="$workspace"
+    mount_tgt="/workspace"
+    ws_folder="/workspace"
+  fi
+
   # containerEnv is assembled per profile: a base container has no business
   # carrying KUBECONFIG, and an --auth oauth container must not see
   # ANTHROPIC_BASE_URL or it would talk to the gateway with the wrong credential.
@@ -56,7 +88,10 @@ dcx_render_devcontainer() { # <instance>
   jq -n \
     --arg name      "$name" \
     --arg image     "$image" \
-    --arg workspace "$workspace" \
+    --arg mountsrc  "$mount_src" \
+    --arg mounttgt  "$mount_tgt" \
+    --arg wsfolder  "$ws_folder" \
+    --argjson extra "$extra_mounts" \
     --arg envfile   "$env_file" \
     --arg creds     "$(dcx_creds_dir "$name")" \
     --arg share     "$(dcx_share_dir "$name")" \
@@ -66,17 +101,17 @@ dcx_render_devcontainer() { # <instance>
     '{
       name: ("dcx-" + $name),
       image: $image,
-      workspaceMount: ("source=" + $workspace + ",target=/workspace,type=bind,consistency=delegated"),
-      workspaceFolder: "/workspace",
+      workspaceMount: ("source=" + $mountsrc + ",target=" + $mounttgt + ",type=bind,consistency=delegated"),
+      workspaceFolder: $wsfolder,
       remoteUser: "node",
       initializeCommand: ("dccred env " + $name),
       runArgs: ["--env-file", $envfile],
-      mounts: [
+      mounts: ([
         ("source=" + $volc  + ",target=/home/node/.claude,type=volume"),
         ("source=" + $volh  + ",target=/commandhistory,type=volume"),
         ("source=" + $creds + ",target=/run/dcx-creds,type=bind,readonly"),
         ("source=" + $share + ",target=/run/dcx-share,type=bind,readonly")
-      ],
+      ] + $extra),
       containerEnv: $env,
       postCreateCommand: "/usr/local/bin/dcx-post-create"
     }' > "$dir/.devcontainer/devcontainer.json"

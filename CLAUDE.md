@@ -55,6 +55,12 @@ generic. The two modes only differ in how `$folder` is derived:
   `.devcontainer/devcontainer.json` whose `workspaceMount` points at the real
   project.
 
+One thing besides `$folder` now varies: **mount geometry**. When the workspace
+is a linked git worktree, `lib/render.sh` mirrors host absolute paths into the
+container instead of using `/workspace`, and co-mounts the main repo. That is
+the only exception to "everything after `$folder` is generic", and it exists
+because worktree metadata stores absolute paths that must agree on both sides.
+
 Because the state dir is unique per instance, the container's
 `devcontainer.local_folder` label is unique per instance, so the existing
 liveness filter distinguishes two sandboxes on the same project with no extra
@@ -82,6 +88,15 @@ atomic secret write) · `instance.sh` (state dir, `instance.json`, volumes) ·
 
 `dcclaude` and `dcws` are thin: they forward the same flags to `dcx` and add
 Herdr wiring. Any new `dcx` flag must be threaded through both.
+
+`dcws --worktree` / `--rm-worktree` are the exception: they are Herdr-specific
+and deliberately have no `dcx` counterpart, because `dcx` detects a linked
+worktree from the workspace itself. Both derive the instance name as
+`<basename $folder>-<branch>`, so **they must be run from the main repo** — from
+inside a checkout the basename is the checkout directory, the derived name does
+not match the one create used, and `--rm-worktree` silently removes nothing.
+Left as-is rather than normalised: the folder argument is already the documented
+way to say which repo you mean.
 
 ### Credential flow
 
