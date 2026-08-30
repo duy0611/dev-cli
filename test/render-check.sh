@@ -25,6 +25,7 @@ AWS_JSON='{"role_arn":"r","region":"eu-west-1"}'
 
 fail=0
 bad() { printf '    \033[31mFAIL\033[0m %s\n' "$1"; fail=1; }
+ok()  { printf '    %s OK\n' "$1"; }
 
 DCX_STATE="$(mktemp -d)"
 export DCX_STATE
@@ -43,11 +44,53 @@ render_case() {
   dcx_render_devcontainer "$1"
 }
 
+# <description> <rendered-file> <jq-filter> [jq-args...]. Reports exactly one
+# line either way; a bare `jq ... || bad` would print the OK line on failure too.
+expect() {
+  local desc="$1" file="$2" filter="$3"
+  shift 3
+  if jq -e ${1+"$@"} "$filter" "$file" >/dev/null; then ok "$desc"; else bad "$desc"; fi
+}
+
 for p in $DCX_PROFILES; do
   render_case lintcheck "$p" /tmp
-  jq -e '.image and .workspaceMount and .containerEnv.CLAUDE_CONFIG_DIR' \
-    "$(rendered lintcheck)" >/dev/null || bad "profile $p"
-  printf '    %s OK\n' "$p"
+  expect "$p" "$(rendered lintcheck)" \
+    '.image and .workspaceMount and .containerEnv.CLAUDE_CONFIG_DIR'
 done
+
+# --- worktree geometry --------------------------------------------------------
+#
+# A linked worktree's .git is a file pointing at <main>/.git/worktrees/<n>, so
+# the container must see both trees at the SAME absolute paths the host uses.
+# Mounting the checkout at /workspace instead leaves that link dangling and
+# makes `git worktree list` disagree across the boundary.
+
+MAIN=/Users/someone/Projects/proj
+SIBLING=/Users/someone/.herdr/worktrees/proj/feature-x
+NESTED="$MAIN/.claude/worktrees/feature-x"
+
+render_case wtsibling base "$SIBLING" "$MAIN"
+expect "sibling worktree" "$(rendered wtsibling)" '
+  .workspaceFolder == $ws
+  and .workspaceMount == ("source=" + $ws + ",target=" + $ws + ",type=bind,consistency=delegated")
+  and (.mounts | any(. == ("source=" + $main + ",target=" + $main + ",type=bind,consistency=delegated")))
+' --arg ws "$SIBLING" --arg main "$MAIN"
+
+# Nested checkout: workspaceFolder may be a subdirectory of workspaceMount, so
+# one bind covers both trees. A second bind would overlap the first.
+render_case wtnested base "$NESTED" "$MAIN"
+expect "nested worktree" "$(rendered wtnested)" '
+  .workspaceFolder == $ws
+  and .workspaceMount == ("source=" + $main + ",target=" + $main + ",type=bind,consistency=delegated")
+  and (.mounts | any(startswith("source=" + $main + ",target=" + $main)) | not)
+' --arg ws "$NESTED" --arg main "$MAIN"
+
+# Regression guard: an instance with no worktree_main - including every
+# instance.json written before this field existed, which dcx_meta reads as ""
+# because of its `// empty` - must still land on /workspace.
+render_case wtnone base /tmp
+expect "normal geometry" "$(rendered wtnone)" \
+  '.workspaceFolder == "/workspace"
+   and .workspaceMount == "source=/tmp,target=/workspace,type=bind,consistency=delegated"'
 
 exit "$fail"

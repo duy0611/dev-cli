@@ -55,6 +55,12 @@ generic. The two modes only differ in how `$folder` is derived:
   `.devcontainer/devcontainer.json` whose `workspaceMount` points at the real
   project.
 
+One thing besides `$folder` now varies: **mount geometry**. When the workspace
+is a linked git worktree, `lib/render.sh` mirrors host absolute paths into the
+container instead of using `/workspace`, and co-mounts the main repo. That is
+the only exception to "everything after `$folder` is generic", and it exists
+because worktree metadata stores absolute paths that must agree on both sides.
+
 Because the state dir is unique per instance, the container's
 `devcontainer.local_folder` label is unique per instance, so the existing
 liveness filter distinguishes two sandboxes on the same project with no extra

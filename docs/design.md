@@ -55,7 +55,7 @@ prod coverage.
 | Scope selection | Interactive fzf picker on first launch of an instance; recorded and reused after |
 | Instance identity | Explicit name via `--as`, defaulting to `basename $PWD` |
 | Persistence | Named volumes per instance; survive restart, isolated between instances |
-| Workspace | Bind-mount read-write at `/workspace` |
+| Workspace | Bind-mount read-write at `/workspace`; a linked worktree instead mounts at its host path, with the main repo co-mounted |
 | Egress | Open. No firewall |
 | k8s creds | Minted SA tokens — one code path for EKS and GKE |
 | GCP creds | Impersonated SA access token (1h hard cap) |
@@ -354,6 +354,14 @@ repository access, and it carries a 90-day rotation sidecar.
 
 Cloud env vars are emitted only for profiles that use them; the `ANTHROPIC_*` block
 only under `--auth litellm`.
+
+When the workspace is a linked git worktree, both the `workspaceMount` target and
+`workspaceFolder` become the checkout's own host path rather than `/workspace`, and
+`mounts` gains a read-write bind of the main repo at *its* host path. The worktree's
+`.git` is a file holding an absolute pointer into `<main>/.git/worktrees/<n>`, so the
+two trees have to sit at the same paths on both sides or that pointer dangles. A
+checkout nested under the repo needs only the one bind, since `workspaceFolder` may
+be a subdirectory of `workspaceMount`.
 
 Every credential is reached through a **file path**, never a baked-in env value.
 `kubectl` reads `users[].user.tokenFile`, `gcloud` reads
