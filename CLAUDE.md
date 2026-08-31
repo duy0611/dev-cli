@@ -127,12 +127,33 @@ run from the main repo** — from inside a checkout the basename is the checkout
 directory. Left as-is rather than normalised: the folder argument is already the
 documented way to say which repo you mean.
 
-`--rm-worktree` deliberately does *not* re-derive that name. It resolves the
-branch to a checkout path and then finds the instance whose recorded
-`.workspace` matches, so teardown is independent of both cwd and the naming
-rule. Re-deriving is what left orphaned containers and volumes behind: a name
-that missed removed nothing, and the `|| true` on `dcx --rm` swallowed the
-error while the command still printed success. Keep that call unsilenced.
+`--rm-worktree` tears down two things in **two separate namespaces**, and they
+must be resolved separately:
+
+- The **dcx instance** is found by resolving the branch to a checkout path and
+  matching the recorded `.workspace`, so that half is independent of cwd and of
+  the naming rule. Re-deriving is what left orphaned containers and volumes
+  behind: a name that missed removed nothing, and the `|| true` on `dcx --rm`
+  swallowed the error while the command still printed success. Keep that call
+  unsilenced.
+- The **Herdr workspace** has to be re-derived from the create-time rule,
+  because `herdr workspace list` exposes only a label — there is no path to
+  match on. So `--rm-worktree` inherits `--worktree`'s "run it from the main
+  repo" constraint for this half.
+
+Do not collapse the two back into one variable. Feeding the path-resolved
+instance name to Herdr matches no workspace whenever the instance was named by
+anything but that rule (`--as`, or an older rule): the container goes away, the
+checkout stays, and the run reports success. A label miss while the checkout is
+still on disk now exits non-zero for that reason.
+
+`instance_for_checkout` reads `dcx --list` into a variable and feeds awk a
+here-string rather than piping. awk `exit`s on its match; `dcx --list` forks two
+`jq` per instance and is still printing, so on BSD awk (macOS) the next `printf`
+takes SIGPIPE and `pipefail` turns that into a silent exit 141. Linux mawk
+drains stdin before exiting, so a container never reproduces it. Same reason
+there is no `| head -1` anywhere in `bin/dcws` — use jq's `first(...)` or let
+awk keep the first match itself.
 
 ### Credential flow
 

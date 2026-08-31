@@ -259,8 +259,15 @@ your commits survive:
 dcws --rm-worktree feat/thing
 ```
 
-`--rm-worktree` works from anywhere in the repo. Only *creating* has the
-"from the main repo" rule.
+Run this from the main repo too. It finds the *container* by checkout path from
+anywhere, but the *Herdr workspace* is matched by label, and that label is
+`<repo-dir-name>-<branch>` — from inside a checkout the repo-dir-name is wrong
+and the workspace is not found. Pass the repo (`dcws --rm-worktree feat/thing
+/path/to/repo`) or the label (`-n LABEL`, see `herdr workspace list`) if you
+need to run it elsewhere.
+
+If it removes the container but cannot find the workspace, it says so and exits
+non-zero — the checkout is still there and still needs removing.
 
 Refuses to delete because the checkout has uncommitted changes? That's the
 safety gate working. If you truly want to throw the changes away:

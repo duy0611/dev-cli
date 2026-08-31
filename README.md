@@ -112,11 +112,18 @@ checkout's own directory name. Pass the repo explicitly
 (`dcws --worktree feat/thing /path/to/repo`) or `--as` the instance name if you
 need to run it from elsewhere.
 
-`--rm-worktree` has no such constraint: it finds the instance by the checkout
-path recorded in `instance.json`, so it works from anywhere in the repo or any
-of its worktrees. It also reports what it removed — if no instance matched, it
-says so instead of claiming success, which is how orphaned containers and
-volumes used to go unnoticed.
+`--rm-worktree` finds the *instance* by the checkout path recorded in
+`instance.json`, so that half works from anywhere in the repo or any of its
+worktrees. The *Herdr workspace* is a separate namespace — `herdr workspace
+list` exposes only a label — so its label is re-derived from the same
+`<basename FOLDER>-<branch>` rule create used. Run it from the main repo too,
+or pass the repo as FOLDER; `-n LABEL` overrides the label directly.
+
+It also reports what it removed — if no instance matched, it says so instead of
+claiming success, which is how orphaned containers and volumes used to go
+unnoticed. If the label misses while the checkout is still on disk, it exits
+non-zero rather than leaving a half-torn-down worktree behind a success
+message.
 
 ## Instances
 

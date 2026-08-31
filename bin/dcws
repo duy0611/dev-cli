@@ -80,9 +80,12 @@ need_herdr() {
     || die "no Herdr server reachable - run 'herdr' first"
 }
 
+# `first(...)` rather than `| head -1`: head closes the pipe on the first line
+# while jq is still writing the rest, and under `pipefail` that SIGPIPE becomes
+# the script's own exit status (141, silently).
 herdr_workspace_id() { # <label>
   herdr workspace list | jq -r --arg n "$1" \
-    '.result.workspaces[] | select(.label == $n) | .workspace_id' | head -1
+    'first(.result.workspaces[] | select(.label == $n) | .workspace_id)'
 }
 
 # Instance names become volume names and a directory, so a branch like feat/foo
@@ -98,21 +101,37 @@ dcws_slugify() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-'; }
 # faster source but its field names are not documented; git is authoritative.
 # Works from anywhere in the repo or any of its worktrees - `git worktree list`
 # reports the whole set whichever one you ask from.
+#
+# awk keeps the first match itself instead of a trailing `head -1`, so nothing
+# downstream ever closes the pipe early - see herdr_workspace_id above.
 wt_path_for_branch() { # <repo-or-worktree> <branch>
   git -C "$1" worktree list --porcelain \
-    | awk -v b="refs/heads/$2" '/^worktree /{p=$2} /^branch /{if ($2==b) print p}' \
-    | head -1
+    | awk -v b="refs/heads/$2" \
+      '/^worktree /{p=$2} /^branch /{if ($2==b && !seen) {print p; seen=1}}'
 }
 
 # The instance bound to a given workspace path, empty when none is. dcx --list
-# prints `name profile workspace`, padded with %-24s %-6s; the workspace is
+# prints `name profile workspace`, padded with %-24s %-7s; the workspace is
 # everything from the third field on, so it is reassembled rather than read as
 # $3 - a path with a space in it would otherwise match nothing.
+#
+# The list is buffered into a variable and fed to awk as a here-string rather
+# than piped. `dcx --list` forks two jq per instance, so it is still printing
+# long after awk has found its match; BSD awk (macOS) exits the moment it does,
+# and the next printf in that loop takes SIGPIPE. With `pipefail` that killed
+# `dcws --rm-worktree` with 141 before it removed anything, and the 2>/dev/null
+# swallowed every trace of it. A here-string is a temp file - no pipe, no
+# writer left to signal. Linux mawk drains stdin before exiting, which is why
+# this never reproduced in a container.
 instance_for_checkout() { # <abs-checkout-path>
   [ -n "$1" ] || return 0
-  dcx --list 2>/dev/null | awk -v w="$1" '
+  local list
+  # A dcx that cannot list is the same answer as no match: fall back to the
+  # create-time naming rule rather than aborting the teardown.
+  list="$(dcx --list 2>/dev/null)" || return 0
+  awk -v w="$1" '
     { ws = $3; for (i = 4; i <= NF; i++) ws = ws " " $i
-      if (ws == w) { print $1; exit } }'
+      if (ws == w) { print $1; exit } }' <<<"$list"
 }
 
 name=""
@@ -168,16 +187,28 @@ folder="$(cd "$folder" && pwd -P)"
 if [ -n "$rm_branch" ]; then
   need_herdr
 
+  rm_checkout="$(wt_path_for_branch "$folder" "$rm_branch")"
+  rm_slug="$(dcws_slugify "$(basename "$folder")-$rm_branch")"
+
   # Look the instance up by the checkout it is bound to, rather than
   # recomputing the name from $PWD. Re-deriving means the name only matches
   # when this runs from the same directory create did, and a miss removes
   # nothing while still reporting success - which is how orphaned containers
   # and volumes accumulate. The recorded workspace path is the reliable key.
-  [ -n "$instance" ] || instance="$(instance_for_checkout "$(wt_path_for_branch "$folder" "$rm_branch")")"
+  [ -n "$instance" ] || instance="$(instance_for_checkout "$rm_checkout")"
   # No match means the checkout is already gone, or was never containered.
   # Fall back to the create-time naming rule so the old behaviour still applies.
-  [ -n "$instance" ] || instance="$(dcws_slugify "$(basename "$folder")-$rm_branch")"
-  [ -n "$name" ] || name="$instance"
+  [ -n "$instance" ] || instance="$rm_slug"
+
+  # The Herdr label is a separate namespace from the instance name, so it is
+  # derived separately. They coincide only when this same rule produced both;
+  # an instance found by checkout path may be named anything (--as, or created
+  # before the current rule), and feeding that name to Herdr silently matched
+  # no workspace - the instance went away and the checkout stayed. Herdr's
+  # workspace list exposes only the label, so the create-time rule (see the
+  # --worktree block below, which passes exactly this to `--label`) is the only
+  # key available.
+  [ -n "$name" ] || name="$rm_slug"
 
   # Deliberately not silenced: dcx --rm names each container, volume and state
   # dir it removes, and a removal that quietly did nothing is exactly the
@@ -191,8 +222,17 @@ if [ -n "$rm_branch" ]; then
     [ "$force" -eq 1 ] && rm_args+=(--force) || true
     herdr worktree remove "${rm_args[@]}"
     printf 'dcws: removed worktree %s (branch %s kept)\n' "$name" "$rm_branch"
+  # A missing workspace is only benign when the checkout is gone too. With the
+  # checkout still on disk this is the half-teardown above: exit non-zero
+  # rather than report success over a worktree nobody removed.
+  elif [ -n "$rm_checkout" ] && [ -d "$rm_checkout" ]; then
+    printf 'dcws: no Herdr workspace labelled %s, but %s still exists\n' \
+      "$name" "$rm_checkout" >&2
+    printf 'dcws: pass -n LABEL (see `herdr workspace list`) or remove it with `git worktree remove`\n' >&2
+    exit 1
   else
-    printf 'dcws: no Herdr workspace labelled %s; instance removed if it existed\n' "$name"
+    printf 'dcws: no Herdr workspace labelled %s and no checkout for %s; nothing left to remove\n' \
+      "$name" "$rm_branch"
   fi
   exit 0
 fi
@@ -263,7 +303,7 @@ existing="$(herdr_workspace_id "$name")"
 
 pane_by_label() { # <workspace> <label>
   herdr pane list --workspace "$1" | jq -r --arg l "$2" \
-    '.result.panes[] | select(.label == $l) | .pane_id' | head -1
+    'first(.result.panes[] | select(.label == $l) | .pane_id)'
 }
 pane_busy() { # <pane> - true if anything is running in the foreground
   local n
