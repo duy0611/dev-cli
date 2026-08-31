@@ -82,6 +82,14 @@ dcx_valid_profile() {
   esac
 }
 
+# A repo that ships its own .devcontainer/ is recorded with profile "project" so
+# it shows up in --list and can be torn down with --rm. Deliberately not in
+# DCX_PROFILES: there is no dcx-project image, so `-p project` must stay an
+# error, and every dcx_profile_has_* predicate below must keep returning false
+# for it — that is what makes minting a no-op for these instances without a
+# single extra guard in lib/mint.sh.
+dcx_is_project_instance() { [ "$(dcx_meta "$1" '.profile')" = project ]; }
+
 # Which credential kinds a profile carries. Note that k8s does NOT carry an AWS
 # session: cluster auth is a minted ServiceAccount token, so nothing in that
 # image ever reads an AWS credential. Both provider credentials live together in

@@ -54,7 +54,7 @@ Makefile and `install.sh`) or `make build DOCKER=docker`.
 `docker ps` liveness filter, `devcontainer up`, `devcontainer exec` — is
 generic. The two modes only differ in how `$folder` is derived:
 
-- **project mode**: `$folder` = the repo holding `.devcontainer/` (original behaviour).
+- **project mode**: `$folder` = the repo holding `.devcontainer/`.
 - **profile mode**: `$folder` = the instance's state dir under
   `~/.local/state/dcx/instances/<name>/`, which holds a *generated*
   `.devcontainer/devcontainer.json` whose `workspaceMount` points at the real
@@ -74,6 +74,30 @@ is asserted in the smoke test.
 
 Mode selection order: `-p` given → profile; else `.devcontainer` found above
 `$PWD` → project; else the profile picker.
+
+### Project instances
+
+Both modes register an instance; only profile mode renders anything. A project
+instance records `profile: "project"` and the repo as its workspace, and that is
+all it is — no generated config, no volumes, no creds dir. It exists so that a
+repo shipping its own `.devcontainer/` is nameable by `--list`, `--rm` and
+`dccred status` instead of being a container the toolchain cannot see.
+
+`"project"` is deliberately **not** in `DCX_PROFILES`: there is no such image,
+so `-p project` must stay an error, and every `dcx_profile_has_*` predicate
+returning false for it is what makes `dcx_mint_all` a no-op with no guard in
+`lib/mint.sh`.
+
+The label assumption above holds through `dcx_local_folder`, which is the state
+dir for a profile instance and the repo for a project one. Every container
+lookup goes through it. The consequence is that project instances are **not**
+isolated per name — one repo is one container — so `bin/dcx` refuses a name
+bound to a different workspace rather than warning as profile mode does.
+
+`dccred mint`/`env`/`pick` refuse project instances via
+`require_profile_instance`. `pick` is the one that would do damage: unguarded it
+renders a `devcontainer.json` into a state dir the devcontainer CLI is never
+pointed at.
 
 ### Layer map
 

@@ -14,6 +14,10 @@
 #                            must map the uid; a wrong path silently mounts an
 #                            empty directory inside the VM instead
 #   - label is the state dir all instance isolation depends on it
+#   - project label is the repo the one deliberate exception: a repo with its
+#                            own .devcontainer/ is registered but not rendered,
+#                            so its label is the repo and every lookup has to
+#                            go through dcx_local_folder
 #   - commits work unsigned   the host's commit.gpgsign used to be forwarded
 #                             into every instance, so every commit failed with
 #                             "No secret key" in sandboxes that never asked
@@ -26,6 +30,7 @@ DCCRED="$REPO/bin/dccred"
 NAME=dcx-smoketest
 SIGN_NAME=dcx-smoketest-sign
 WT_NAME=dcx-smoketest-wt
+PROJ_NAME=dcx-smoketest-proj
 WS="$(mktemp -d "$HOME/.dcx-smoketest.XXXXXX")"
 
 pass=0 fail=0
@@ -40,6 +45,7 @@ cleanup() {
   "$DCX" --rm "$NAME" >/dev/null 2>&1 || true
   "$DCX" --rm "$SIGN_NAME" >/dev/null 2>&1 || true
   "$DCX" --rm "$WT_NAME" >/dev/null 2>&1 || true
+  "$DCX" --rm "$PROJ_NAME" >/dev/null 2>&1 || true
   rm -rf "$WS"
 }
 trap cleanup EXIT
@@ -130,6 +136,54 @@ git -C "$WT_REPO" cat-file -e "$sha" 2>/dev/null \
 wtlabel="$(docker ps --filter "label=devcontainer.local_folder=$HOME/.local/state/dcx/instances/$WT_NAME" -q)"
 [ -n "$wtlabel" ] && ok "worktree instance label is the state dir" \
                   || bad "worktree instance label is the state dir"
+
+# --- project mode ---------------------------------------------------------------
+#
+# A repo that ships its own .devcontainer/ is used as-is, but must still be
+# registered, or it is a container the toolchain cannot name: invisible to
+# --list, unremovable by --rm. The label here is the repo, not the state dir,
+# which is the one place project instances diverge from the isolation rule
+# asserted above.
+printf '\n==> project mode\n'
+PROJ_REPO="$WS/projrepo"
+mkdir -p "$PROJ_REPO/.devcontainer"
+cat > "$PROJ_REPO/.devcontainer/devcontainer.json" <<EOF
+{
+  "name": "$PROJ_NAME",
+  "image": "localhost/dcx-base:latest",
+  "remoteUser": "node"
+}
+EOF
+# pwd -P, because that is what dcx records and what the label is compared with.
+PROJ_REPO="$(cd "$PROJ_REPO" && pwd -P)"
+
+"$DCX" --rm "$PROJ_NAME" >/dev/null 2>&1 || true
+"$DCX" --as "$PROJ_NAME" -f "$PROJ_REPO" -- true
+
+listing="$("$DCX" --list)"
+check "project instance is listed"   "$PROJ_NAME" "$listing"
+check "listed with profile project"  "project"    "$listing"
+check "listed against the repo"      "$PROJ_REPO" "$listing"
+check "dccred status sees it running" "running"   "$("$DCCRED" status "$PROJ_NAME")"
+
+# The lookup that had to change: dcx_local_folder returns the repo here, so the
+# liveness filter and --rm find a container whose label is not the state dir.
+projlabel="$(docker ps --filter "label=devcontainer.local_folder=$PROJ_REPO" -q)"
+[ -n "$projlabel" ] && ok "project label is the repo" || bad "project label is the repo"
+
+# Minting into an instance dcx owns no creds mount for would be a silent no-op;
+# `dccred pick` would go further and render a devcontainer.json nobody reads.
+check "dccred mint refuses" "project instance" "$("$DCCRED" mint "$PROJ_NAME" 2>&1 || true)"
+check "dccred pick refuses" "project instance" "$("$DCCRED" pick "$PROJ_NAME" 2>&1 || true)"
+
+"$DCX" --rm "$PROJ_NAME" >/dev/null
+[ -z "$(docker ps -aq --filter "label=devcontainer.local_folder=$PROJ_REPO")" ] \
+  && ok "--rm removed the project container" || bad "--rm removed the project container"
+[ ! -d "$HOME/.local/state/dcx/instances/$PROJ_NAME" ] \
+  && ok "--rm removed the project state" || bad "--rm removed the project state"
+# The repo is not ours to delete.
+[ -f "$PROJ_REPO/.devcontainer/devcontainer.json" ] \
+  && ok "--rm left the repo's devcontainer.json" || bad "--rm left the repo's devcontainer.json"
 
 # --- signing ------------------------------------------------------------------
 #

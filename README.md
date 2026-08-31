@@ -4,8 +4,8 @@ Run Claude Code inside containers on macOS, with any Docker-compatible engine.
 
 Two ways in, one command family:
 
-- A project that ships a `.devcontainer/` is used as-is — the original `dcx`
-  behaviour, unchanged.
+- A project that ships a `.devcontainer/` is used as-is, and is registered so
+  `dcx --list` and `dcx --rm` can see it.
 - A project that doesn't gets a **prebuilt sandbox image** chosen by profile,
   with short-lived, narrowly scoped cloud credentials minted on the host.
 
@@ -124,12 +124,31 @@ An instance is the unit of isolation: its own Claude config volume, its own
 shell history, its own credentials. Name them with `--as`; the default is the
 folder's basename.
 
-Two instances can point at the same project and run side by side. That works
-because an instance's state directory — not the project — is what gets handed
-to `devcontainer up`, which makes the `devcontainer.local_folder` label unique
-per instance.
+Two profile instances can point at the same project and run side by side. That
+works because such an instance's state directory — not the project — is what
+gets handed to `devcontainer up`, which makes the `devcontainer.local_folder`
+label unique per instance. Project instances are the exception: the repo is
+what gets handed over, so one repo is one container.
 
 State lives in `~/.local/state/dcx/instances/<name>/`.
+
+### Project instances
+
+A repo that ships its own `.devcontainer/` is recorded too, under the profile
+`project`. The record is all it is: the repo's config stays authoritative, and
+`dcx` generates no `devcontainer.json`, creates no volumes and mints no
+credentials for it. What you get is a name — `dcx --list` shows it,
+`dcx --rm NAME` tears down its container and forgets it (leaving the repo
+untouched), and `dccred status` reports whether it is running.
+
+Registration happens on the first `dcx` run in the repo; there is no flag. The
+name defaults to the repo's basename, and `--as` overrides it. Because the
+label is the repo itself, one repo is one container: registering a second name
+against the same repo is refused, as is reusing a name already bound elsewhere.
+`dccred mint`, `env` and `pick` refuse these instances outright.
+
+`project` is not a profile you can ask for — there is no such image, so
+`-p project` is an error.
 
 ## Credentials
 

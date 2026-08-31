@@ -59,8 +59,12 @@ Options:
 
 Mode selection:
   1. -p given                     -> profile mode
-  2. .devcontainer found above    -> project mode (unchanged)
+  2. .devcontainer found above    -> project mode
   3. neither                      -> pick a profile
+
+  Project mode uses the repo's own .devcontainer/ and records the instance
+  under profile "project", so it shows up in --list and --rm. Nothing else is
+  generated for it: no volumes, no credentials, no config of ours.
 
 Examples:
   dcx                                   Shell in the current repo's devcontainer
@@ -102,7 +106,7 @@ while [ $# -gt 0 ]; do
                   dcx_instance_rm "$2"; exit 0 ;;
     --list)       need jq
                   for i in $(dcx_list_instances); do
-                    printf '%-24s %-6s %s\n' "$i" "$(dcx_meta "$i" '.profile')" "$(dcx_meta "$i" '.workspace')"
+                    printf '%-24s %-7s %s\n' "$i" "$(dcx_meta "$i" '.profile')" "$(dcx_meta "$i" '.workspace')"
                   done
                   exit 0 ;;
     -h|--help)    usage; exit 0 ;;
@@ -137,6 +141,40 @@ else
   # No devcontainer anywhere above. This is where dcx used to die.
   profile="$(dcx_pick_profile)" || die "no profile selected"
   mode=profile
+fi
+
+# --- project mode: record the instance ---------------------------------------
+#
+# The repo's own .devcontainer/ is authoritative, so this writes a record and
+# nothing else: no generated config, no volumes, no credentials. It exists only
+# so that a project devcontainer is visible to `dcx --list`, `dcx --rm` and
+# `dccred status` instead of being a container the toolchain cannot name.
+
+if [ "$mode" = project ]; then
+  need jq
+
+  workspace="$(dcx_abspath "$folder")" || die "not a directory: $folder"
+
+  [ -n "$instance" ] || instance="$(basename "$workspace")"
+  dcx_check_name "$instance"
+
+  if dcx_instance_exists "$instance"; then
+    dcx_is_project_instance "$instance" || die \
+      "instance '$instance' already exists with profile '$(dcx_meta "$instance" '.profile')'. Use a different --as, or dcx --rm $instance"
+    recorded_ws="$(dcx_meta "$instance" '.workspace')"
+    # A die, where profile mode only warns. There the recorded workspace is the
+    # one that gets used, so carrying on is coherent; here $folder is the repo
+    # and drives everything regardless of the record, so a mismatch would leave
+    # --list naming the wrong directory. Two repos sharing a basename is the
+    # normal cause, and --as is the fix.
+    [ "$recorded_ws" = "$workspace" ] || die \
+      "instance '$instance' is bound to $recorded_ws, not $workspace. Use a different --as"
+  else
+    info "registering '$instance' for $workspace"
+    dcx_register_project "$instance" "$workspace"
+  fi
+
+  folder="$workspace"
 fi
 
 # --- profile mode: build or reuse the instance -------------------------------
