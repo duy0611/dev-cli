@@ -1,10 +1,15 @@
 # shellcheck shell=bash
 # Instance state: the directory, instance.json, and the named volumes.
 #
-# An instance is the unit of isolation. Its state dir doubles as the
-# --workspace-folder handed to the devcontainer CLI, which is what makes the
-# devcontainer.local_folder label unique per instance and lets dcx's existing
-# liveness filter tell two sandboxes on the same project apart.
+# An instance is the unit of isolation. For a profile instance its state dir
+# doubles as the --workspace-folder handed to the devcontainer CLI, which is
+# what makes the devcontainer.local_folder label unique per instance and lets
+# dcx's existing liveness filter tell two sandboxes on the same project apart.
+#
+# A project instance is a record only: the repo ships its own .devcontainer/, so
+# the workspace folder is the repo and dcx owns no config, no volumes and no
+# credentials for it. dcx_local_folder is what keeps both kinds behind one
+# lookup.
 
 dcx_volume_claude()  { printf 'dcx-claude-%s\n' "$1"; }
 dcx_volume_history() { printf 'dcx-history-%s\n' "$1"; }
@@ -63,16 +68,45 @@ dcx_instance_create_volumes() { # <name>
   docker volume create "$(dcx_volume_history "$1")" >/dev/null
 }
 
-# Container id for an instance, empty when not running. Same filter dcx has
-# always used; it works unchanged because the state dir is the local_folder.
+# The path handed to `devcontainer --workspace-folder`, which is also the
+# container's devcontainer.local_folder label. Derived rather than stored, so
+# instance.json keeps its shape:
+#
+#   profile instance   the state dir, holding the generated devcontainer.json.
+#                      Unique per instance, which is what isolates two sandboxes
+#                      on one project.
+#   project instance   the repo itself, because its own .devcontainer/ is the
+#                      one being used. Not unique per instance by construction —
+#                      one repo is one container — which is why registering a
+#                      second name against the same repo is refused in dcx.
+dcx_local_folder() { # <name>
+  if dcx_is_project_instance "$1"; then
+    dcx_meta "$1" '.workspace'
+  else
+    dcx_instance_dir "$1"
+  fi
+}
+
+# Container id for an instance, empty when not running.
 dcx_instance_container() { # <name>
-  docker ps -q --filter "label=devcontainer.local_folder=$(dcx_instance_dir "$1")" 2>/dev/null
+  docker ps -q --filter "label=devcontainer.local_folder=$(dcx_local_folder "$1")" 2>/dev/null
 }
 
 dcx_instance_container_any() { # <name>, running or not
-  docker ps -aq --filter "label=devcontainer.local_folder=$(dcx_instance_dir "$1")" 2>/dev/null
+  docker ps -aq --filter "label=devcontainer.local_folder=$(dcx_local_folder "$1")" 2>/dev/null
 }
 
+# Record a repo that ships its own .devcontainer/. No creds/ or share/ dir, no
+# volumes, no generated config: dcx owns none of those here, and creating empty
+# ones would advertise credentials this instance can never carry.
+dcx_register_project() { # <name> <workspace>
+  mkdir -p "$(dcx_instance_dir "$1")"
+  dcx_instance_write_meta "$1" project "$2" "" false false null null null ""
+}
+
+# Removes the container, the volumes and the state dir. Safe for a project
+# instance without a special case: it owns no volumes (the rm below is already
+# tolerant of that) and the state dir is under DCX_STATE, never the repo.
 dcx_instance_rm() { # <name>
   local name="$1" cid
   cid="$(dcx_instance_container_any "$name")"

@@ -352,6 +352,18 @@ dcx -p base --as scratch-a
 dcx -p base --as scratch-b
 ```
 
+**A repo that ships its own `.devcontainer/`** gets used as-is, and shows up in
+`dcx --list` under the profile `project` the first time you run `dcx` in it. No
+flag, nothing added to your repo. It's a record so the toolchain can name the
+thing: `dcx --rm NAME` tears the container down, `dccred status` says whether
+it's running. That's the whole feature — `dcx` doesn't manage volumes or
+credentials for these, so `dccred mint` and `dccred pick` refuse them.
+
+Here the container is keyed to the repo, not to a state directory, so the
+"two sandboxes, different `--as`" trick doesn't apply: one repo, one container.
+`--as` renames the record, and `dcx` refuses a name already bound to another
+folder.
+
 ---
 
 ## When something breaks
@@ -368,6 +380,8 @@ dcx -p base --as scratch-b
 | `no devcontainer config in ...` | plain `dcws` in a repo without one | Add `-p base` (or another profile) |
 | `instance 'x' already exists with profile 'y'` | name taken by a different profile | Use another `--as`, or `dcx --rm x` first |
 | `no such instance: x` | typo, or already deleted | `dcx --list` to see real names |
+| `instance 'x' is bound to ...` | two repos share a basename | Pass `--as` to name this one differently |
+| `x is a project instance` | `dccred mint`/`env`/`pick` on a repo that ships its own `.devcontainer/` | Nothing to do — `dcx` mints no credentials for those |
 | `no sandbox signing key yet` | `--sign` before setup | Run `dccred signing-key` first |
 | `Failed to load marketplace: cache-miss` | image is stale | `make build` |
 | Claude can't see a file you swear exists | it's outside the mounted project | Only the project folder is mounted. Move the file in |

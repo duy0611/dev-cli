@@ -55,6 +55,16 @@ require_instance() { # <name>
   dcx_instance_exists "$1" || die "no such instance: $1 (see: dcx --list)"
 }
 
+# For the subcommands that write something. A project instance is a record for
+# a repo that ships its own .devcontainer/, so there is nothing here to mint
+# into and no config of ours to regenerate — `pick` in particular would render a
+# devcontainer.json into a state dir the devcontainer CLI is never pointed at.
+require_profile_instance() { # <name>
+  require_instance "${1:-}"
+  ! dcx_is_project_instance "$1" || die \
+    "$1 is a project instance (its repo ships .devcontainer/); dcx mints no credentials for it"
+}
+
 # Prints "kind ttl_seconds" per configured credential, nothing for unconfigured.
 cred_ttls() { # <name>
   local name="$1" creds kind exp now
@@ -82,13 +92,13 @@ human() { # <seconds>
 # --- subcommands --------------------------------------------------------------
 
 cmd_mint() {
-  require_instance "${1:-}"
+  require_profile_instance "${1:-}"
   need jq
   dcx_mint_all "$1"
 }
 
 cmd_env() {
-  require_instance "${1:-}"
+  require_profile_instance "${1:-}"
   need jq
   dcx_write_env_file "$1"
 }
@@ -99,7 +109,7 @@ cmd_status() {
   if [ -n "${1:-}" ]; then require_instance "$1"; names="$1"; else names="$(dcx_list_instances)"; fi
   [ -n "$names" ] || { info "no instances"; return 0; }
 
-  printf '%-20s %-6s %-8s %s\n' INSTANCE PROFILE STATE CREDENTIALS
+  printf '%-20s %-7s %-8s %s\n' INSTANCE PROFILE STATE CREDENTIALS
   for name in $names; do
     local state=stopped
     [ -n "$(dcx_instance_container "$name")" ] && state=running || true
@@ -110,7 +120,7 @@ cmd_status() {
     done <<EOF
 $(cred_ttls "$name")
 EOF
-    printf '%-20s %-6s %-8s %s\n' "$name" "$(dcx_meta "$name" '.profile')" "$state" "${line# }"
+    printf '%-20s %-7s %-8s %s\n' "$name" "$(dcx_meta "$name" '.profile')" "$state" "${line# }"
   done
 }
 
@@ -177,7 +187,7 @@ cmd_signing_key() {
 }
 
 cmd_pick() {
-  require_instance "${1:-}"
+  require_profile_instance "${1:-}"
   need jq
   local name="$1" profile patch
   profile="$(dcx_meta "$name" '.profile')"
