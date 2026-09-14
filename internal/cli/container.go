@@ -30,6 +30,7 @@ func newContainerCmd(a *app) *cobra.Command {
 		newContainerLogsCmd(a),
 		newContainerShellCmd(a),
 		newContainerExecCmd(a),
+		newContainerAgentCmd(a),
 	)
 	return cmd
 }
