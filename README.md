@@ -17,17 +17,18 @@ dev container agent api --agent claude
 
 ## Status
 
-Milestone 1. What works:
+Milestone 2. What works:
 
 - the **local** provider, driving the `devcontainer` CLI against any
   Docker-compatible engine
+- the **k8s** provider, running containers in a cluster as Deployments
 - containers created **from a folder that ships its own `.devcontainer/`**
 - workspaces, and per-workspace settings resolved from literals, the macOS
   Keychain, or the 1Password CLI
 - `claude`, `opencode`, `codex` and `hermes` as agents
 
-What does not exist yet: the Kubernetes provider, git-URL and image sources,
-minted cloud credentials, IDE integration, and the UI.
+What does not exist yet: git-URL and image sources, minted cloud credentials,
+IDE integration, and the UI.
 
 ## Install
 
@@ -39,13 +40,15 @@ Requires Go 1.25 or newer to build. At runtime you need:
 
 | Tool | Why |
 |---|---|
-| [`devcontainer` CLI](https://github.com/devcontainers/cli) | every start, rebuild and exec goes through it |
-| a Docker-compatible engine | Podman and Docker Desktop both work; `dev` talks to whichever `docker` points at |
+| [`devcontainer` CLI](https://github.com/devcontainers/cli) | reads configurations and builds images, on both providers |
+| a Docker-compatible engine | Podman and Docker Desktop both work; `dev` talks to whichever `docker` points at. Needed for the k8s provider too, because that is where the image is built |
+| `kubectl` | only for the k8s provider |
 | [`op`](https://developer.1password.com/docs/cli/) | only if you use `op://` settings |
 
 ## Concepts
 
-**Provider** — where containers run. Only `local` exists today.
+**Provider** — where containers run: `local` on your own engine, `k8s` in a
+cluster.
 
 **Workspace** — a named group of containers plus the settings they launch with.
 One is active at a time (`dev workspace use`), and every container command takes
@@ -70,6 +73,61 @@ rebuild. `dev workspace show` prints the specs and never the values. Your git
 `user.name` and `user.email` are passed through automatically, so the first
 commit inside a container works; an explicit setting of the same name wins.
 
+## The k8s provider
+
+```sh
+dev provider configure prod --kind k8s     # prompts, defaulting from kubeconfig
+dev workspace init cloud --provider prod
+dev container create api --folder ~/code/api
+```
+
+The devcontainer CLI speaks Docker only, so it cannot start a pod. `dev` uses it
+for the two things it alone can do — reading the merged configuration, and
+building an image from your Features and Dockerfile — and drives `kubectl` for
+everything else. The image is built **on your machine** and pushed to the
+registry you configured, so a Docker-compatible engine is still required.
+
+A container is three objects in the namespace: a Deployment, a
+PersistentVolumeClaim and a Secret, all labelled `dev.workspace` and
+`dev.container`.
+
+| `dev` | Kubernetes |
+|---|---|
+| `create` | build, push, apply, wait, sync, run the create-time lifecycle commands |
+| `start` | scale to 1, run `postStartCommand` |
+| `stop` | scale to 0 — the volume, and everything on it, survives |
+| `remove` | delete all three objects, volume included |
+| `rebuild` | build and push again, recreate the pod, re-run the create-time commands |
+| `shell` / `exec` / `agent` | `kubectl exec` |
+| `sync` | stream the host folder in as a tar |
+
+### Things worth knowing
+
+**Your files are a copy, not a mount.** `create` streams the folder into the
+volume; after that, `dev container sync NAME` is the only thing that sends more.
+Nothing comes back down. Once an agent is working in the container, its copy is
+the live one — which is why nothing overwrites it on a timer.
+
+**Lifecycle commands are run by `dev`.** The CLI would normally run them at
+`up`, which never happens here. `onCreateCommand`, `updateContentCommand` and
+`postCreateCommand` run once per image; `postStartCommand` runs on every start;
+`postAttachCommand` never runs, because nothing attaches. "Once" is a marker
+file on the volume, so a stop and start does not reinstall everything, and a
+rebuild does.
+
+**Both the workspace and the home directory live on the volume.** Without that,
+scaling to zero would throw away anything `postCreate` wrote to `~`.
+
+**The build targets `linux/amd64` by default.** Your Mac is arm64 and your nodes
+probably are not; an arm64 image on an amd64 node crash-loops with `exec format
+error`. Change it with `--platform` if your nodes are arm64.
+
+**A rotated secret needs a restart to reach the pod's own environment.** The
+Secret is read by `envFrom` at pod start. Commands you exec afterwards do get
+the current value, since `dev` passes the environment on each call — but a
+process already running in the pod keeps the old one until `dev container stop`
+and `start`.
+
 ## Commands
 
 ```
@@ -92,6 +150,7 @@ dev container logs NAME [-f]
 dev container shell NAME
 dev container exec NAME -- CMD [ARGS...]
 dev container agent NAME --agent claude [-- ARGS...]
+dev container sync NAME                       # k8s only
 ```
 
 Every container command accepts `--workspace NAME`.
@@ -110,6 +169,9 @@ empty directory, silently.
 installed in the image. If it is not, `dev` offers a rebuild and points at the
 project's `devcontainer.json`: installing an agent means adding it there, which
 is not something this tool will do to someone else's repo.
+
+`sync` exists only for providers whose container holds a copy of your files. On
+a local container it exits 2 saying the folder is already mounted.
 
 `workspace remove` and `provider remove` refuse while anything still points at
 them — a workspace holding containers (running or not), a provider named by a
@@ -145,7 +207,15 @@ make clean
 ```
 
 `make test` never touches a container engine. `make smoke` does, and skips
-rather than fails when there is none.
+rather than fails when there is none. The Kubernetes half of the smoke test is
+gated on being told where to run:
+
+```sh
+DEV_SMOKE_K8S_CONTEXT=my-cluster \
+DEV_SMOKE_REGISTRY=europe-docker.pkg.dev/my-project/dev \
+DEV_SMOKE_K8S_NAMESPACE=sandboxes \
+  make smoke
+```
 
 Provider tests run against stub `devcontainer` and `docker` executables placed
 on a temporary `PATH`, which is how the one invariant that breaks silently gets

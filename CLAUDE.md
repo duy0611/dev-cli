@@ -5,8 +5,9 @@ Guidance for Claude Code (claude.ai/code) working in this repository.
 ## What this is
 
 `dev`, a Go CLI that manages devcontainers and runs coding agents inside them.
-One binary, a SQLite database, and two external binaries it shells out to. No
-CI, one operator, unpublished.
+One binary, a SQLite database, and the external binaries it shells out to:
+`devcontainer` and `docker` always, `kubectl` for the k8s provider. No CI, one
+operator, unpublished.
 
 The design record is `docs/specs/2026-09-14-dev-cli.md`. Read it for intent;
 read the code for current state.
@@ -36,6 +37,7 @@ internal/store/       SQLite, embedded migrations, all persistence
 internal/model/       plain persisted types, no behaviour
 internal/provider/    Provider interface + registry
 internal/provider/local/  devcontainer CLI and docker adapter
+internal/provider/k8s/    devcontainer CLI, kubectl, manifests, lifecycle
 internal/secret/      spec -> value: literal, keychain, op
 internal/env/         assembles the env a container launches with
 internal/agent/       which agents exist and how to invoke them
@@ -48,8 +50,13 @@ function that grows logic beyond "resolve inputs, call a package, print" is in
 the wrong file.
 
 Providers register themselves by kind in `init`, and `internal/cli/root.go`
-blank-imports `internal/provider/local` to trigger it. Adding the Kubernetes
-provider is a new package plus one blank import — not an edit to the factory.
+blank-imports each one to trigger it. Adding a provider is a new package plus one
+blank import — not an edit to the factory. That held when k8s was added: the only
+changes outside the new package were the blank import, `--kind k8s` becoming
+valid, and one new command (`container sync`).
+
+`Syncer` is an optional interface, discovered by type assertion. The local
+provider bind-mounts the folder, so a no-op `Sync` there would be a lie.
 
 ## Invariants — violating these produces failures far from their cause
 
@@ -70,7 +77,9 @@ provider is a new package plus one blank import — not an edit to the factory.
    `keychain:NAME` or `op://…`; resolution happens per invocation, in
    `internal/secret`. That is what keeps tokens out of the database, out of
    `workspace show`, and out of any backup of either. Resolving per invocation
-   is also why a rotated secret needs no restart.
+   is also why a rotated secret needs no restart — fully true on local; on k8s
+   an exec'd command sees the new value immediately, but the pod's own
+   environment comes from `envFrom` and is fixed until a stop and start.
 
 4. **Never store live container status.** It is read from the engine every
    time. A stored copy is wrong the moment anything happens outside `dev`.
@@ -94,16 +103,46 @@ provider is a new package plus one blank import — not an edit to the factory.
    error, and a missing agent is reported as something to add to the project,
    not something `dev` installs. The project owns its container definition.
 
+## Kubernetes provider
+
+The devcontainer CLI speaks Docker only. It is used for reading the merged
+configuration and building the image; `kubectl` does everything else. The image
+is built on the host and pushed, so a k8s provider still needs Docker locally.
+
+Beyond the invariants above, these are the parts that bite:
+
+- **Two subPaths on the PVC, workspace and home.** Scaling to zero destroys the
+  container filesystem. Without the home mount, anything `postCreate` wrote to
+  `~` disappears on every stop and "postCreate runs once" is false.
+- **`--platform` is explicit, defaulting to `linux/amd64`.** An arm64 image on
+  an amd64 node crash-loops with `exec format error`.
+- **`imagePullPolicy: Always`, and `rebuild` bumps a pod annotation.** The tag
+  is always `:latest`, so nothing else makes a rebuild visible.
+- **`Recreate`, not `RollingUpdate`.** The PVC is ReadWriteOnce; two pods would
+  leave the new one unschedulable.
+- **The lifecycle marker is a file on the volume**, not an annotation. The
+  Deployment is re-applied on every start and a server-side apply drops fields
+  it no longer sets, so an annotation clears itself.
+- **Every kubectl call carries `--context` and `--namespace`**, built in one
+  place. A call that reaches the wrong cluster does not fail; it succeeds
+  somewhere else.
+- **Commands are shell-quoted, then quoted again inside `su -c`.** A test stub
+  matching `'test' '-f'` will never fire — match the path instead. This cost
+  three wrong tests before it was noticed.
+
 ## Conventions
 
 - **Shell out, do not reimplement.** The local provider drives the
-  `devcontainer` CLI and `docker`; the Kubernetes one will drive `kubectl`. No
-  Docker Go SDK, no devcontainer-spec parser.
-- **Check flags against the real CLI before using them.** `devcontainer` has no
-  `rebuild` subcommand (it is `up --remove-existing-container`), and
-  `--secrets-file` exists on `up` but not on `exec`, which is why both paths use
-  `--remote-env` and accept that values are briefly visible in the host process
-  list.
+  `devcontainer` CLI and `docker`; the Kubernetes one drives the same CLI and
+  `kubectl`. No Docker Go SDK, no client-go, no devcontainer-spec parser.
+- **Check flags and output against the real CLI before using them.**
+  `devcontainer` has no `rebuild` subcommand (it is
+  `up --remove-existing-container`); `--secrets-file` exists on `up` but not on
+  `exec`, which is why both local paths use `--remote-env` and accept that
+  values are briefly visible in the host process list; and
+  `read-configuration` emits *plural* merged fields (`onCreateCommands`),
+  reports a null `workspaceFolder` when unset, and shells out to `docker ps`
+  even to read a file.
 - **Every non-obvious line carries a comment explaining *why*,** usually naming
   the failure it prevents. Match that density. Most of what is hard here is
   container and platform trivia, and an uncommented workaround reads as
