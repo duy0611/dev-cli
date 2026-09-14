@@ -44,8 +44,8 @@ func (p *Provider) Up(ctx context.Context, c model.Container, env []provider.Env
 // Rebuild recreates the container from its configuration.
 //
 // There is no `devcontainer rebuild`: the CLI spells it as flags on `up`.
-func (p *Provider) Rebuild(ctx context.Context, c model.Container, noCache bool) error {
-	return p.up(ctx, c, nil, true, noCache)
+func (p *Provider) Rebuild(ctx context.Context, c model.Container, env []provider.EnvVar, noCache bool) error {
+	return p.up(ctx, c, env, true, noCache)
 }
 
 func (p *Provider) up(ctx context.Context, c model.Container, env []provider.EnvVar, recreate, noCache bool) error {

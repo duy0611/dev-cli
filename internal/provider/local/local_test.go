@@ -159,7 +159,7 @@ func TestRebuildAsksForRecreate(t *testing.T) {
 	f.install(t, devcontainerBin, "", 0)
 
 	p := &Provider{}
-	if err := p.Rebuild(context.Background(), testContainer(), true); err != nil {
+	if err := p.Rebuild(context.Background(), testContainer(), nil, true); err != nil {
 		t.Fatalf("Rebuild: %v", err)
 	}
 
@@ -179,7 +179,7 @@ func TestRebuildWithoutNoCache(t *testing.T) {
 	f.install(t, devcontainerBin, "", 0)
 
 	p := &Provider{}
-	if err := p.Rebuild(context.Background(), testContainer(), false); err != nil {
+	if err := p.Rebuild(context.Background(), testContainer(), nil, false); err != nil {
 		t.Fatalf("Rebuild: %v", err)
 	}
 	if contains(f.argv(t, devcontainerBin), []string{"--build-no-cache"}) {

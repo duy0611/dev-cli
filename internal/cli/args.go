@@ -22,3 +22,10 @@ func wrapArgs(inner cobra.PositionalArgs) cobra.PositionalArgs {
 		return nil
 	}
 }
+
+// minArgs is what `exec` needs: cobra hands the validator every positional
+// argument, including the ones after --, so an exact count would reject the
+// command being run.
+func minArgs(n int) cobra.PositionalArgs {
+	return wrapArgs(cobra.MinimumNArgs(n))
+}

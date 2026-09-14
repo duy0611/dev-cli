@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -20,3 +21,9 @@ func row(w io.Writer, cells ...string) {
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }
+
+// warnf reports something the operator should know about but that did not stop
+// the command. Stderr, so it stays out of a piped list.
+func warnf(a *app, format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "dev: "+format+"\n", args...)
+}

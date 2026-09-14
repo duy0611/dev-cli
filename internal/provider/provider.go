@@ -39,8 +39,10 @@ type Provider interface {
 	Up(ctx context.Context, c model.Container, env []EnvVar) error
 
 	// Rebuild recreates the container from its configuration, optionally
-	// without the image layer cache.
-	Rebuild(ctx context.Context, c model.Container, noCache bool) error
+	// without the image layer cache. It takes the same env as Up, because the
+	// lifecycle commands run again and a postCreateCommand that needs a token
+	// must not start working on create and failing on rebuild.
+	Rebuild(ctx context.Context, c model.Container, env []EnvVar, noCache bool) error
 
 	// Exec runs a command inside a running container.
 	Exec(ctx context.Context, c model.Container, cmd []string, opts ExecOpts) error

@@ -7,6 +7,10 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+
+	// Registers the local provider with the provider factory. Blank because
+	// nothing here calls it directly; the registry is the whole interface.
+	_ "git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/provider/local"
 )
 
 // Execute runs the command tree and returns the process exit code.
@@ -21,6 +25,7 @@ func Execute(version string) int {
 	root.AddCommand(
 		newProviderCmd(a),
 		newWorkspaceCmd(a),
+		newContainerCmd(a),
 	)
 
 	// Cobra prints usage after any error by default, which buries a one-line
