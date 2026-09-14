@@ -12,10 +12,13 @@ linters:
 
   settings:
     errcheck:
-      # Cleanup and best-effort output on a path that is already failing: the
-      # return value has nothing useful to say and handling it would add noise.
+      # Cleanup on a path that has either finished or already failed. The error
+      # has nothing to say that the caller can act on, and checking it would
+      # bury the real failure under noise.
       exclude-functions:
         - (*os.File).Close
+        - (*database/sql.DB).Close
+        - (*database/sql.Rows).Close
 
 formatters:
   enable:
