@@ -86,7 +86,10 @@ func testProvider() *Provider {
 
 func k8sContainer(t *testing.T) model.Container {
 	t.Helper()
-	return model.Container{Name: "api", WorkspaceName: "ws", Source: t.TempDir()}
+	return model.Container{
+		Name: "api", WorkspaceName: "ws",
+		SourceKind: model.SourceFolder, Source: t.TempDir(),
+	}
 }
 
 func TestUpBuildsOnlyWhenTheDeploymentIsAbsent(t *testing.T) {

@@ -49,7 +49,9 @@ func (p *Provider) Up(ctx context.Context, c model.Container, env []provider.Env
 	if err != nil {
 		return err
 	}
-	return p.apply(ctx, c, env, applyOpts{build: !exists})
+	// A container the cluster has never seen is a create: build it, and put the
+	// host's files in it. A start does neither.
+	return p.apply(ctx, c, env, applyOpts{build: !exists, firstCreate: !exists})
 }
 
 // Rebuild recreates the container from its configuration.
@@ -64,13 +66,14 @@ func (p *Provider) Rebuild(ctx context.Context, c model.Container, env []provide
 }
 
 type applyOpts struct {
-	build     bool
-	noCache   bool
-	rebuiltAt string
+	build       bool
+	firstCreate bool
+	noCache     bool
+	rebuiltAt   string
 }
 
 func (p *Provider) apply(ctx context.Context, c model.Container, env []provider.EnvVar, opts applyOpts) error {
-	dev, _, err := readConfiguration(ctx, c.Source)
+	dev, lc, err := readConfiguration(ctx, c.Source)
 	if err != nil {
 		return err
 	}
@@ -98,7 +101,18 @@ func (p *Provider) apply(ctx context.Context, c model.Container, env []provider.
 	if err := p.kube.apply(ctx, manifest); err != nil {
 		return err
 	}
-	return p.waitReady(ctx, c)
+	if err := p.waitReady(ctx, c); err != nil {
+		return err
+	}
+
+	// Before the lifecycle commands, not after: postCreate is usually "install
+	// what this project needs", and it needs the project to be there.
+	if opts.firstCreate {
+		if err := p.Sync(ctx, c); err != nil {
+			return err
+		}
+	}
+	return p.runLifecycle(ctx, c, dev, lc, env, opts.rebuiltAt != "")
 }
 
 // Exec runs a command inside the container.
