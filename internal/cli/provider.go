@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"strings"
 
 	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/model"
@@ -106,6 +108,16 @@ func runProviderConfigure(a *app, name, kind string, k8sCfg k8s.Config) error {
 	switch model.ProviderKind(kind) {
 	case model.KindLocal:
 	case model.KindK8s:
+		// Ask for whatever the flags did not supply, but only at a terminal: a
+		// scripted run must fail naming the flag rather than block on a prompt
+		// nobody will see.
+		if isTerminal(os.Stdin) {
+			var err error
+			if k8sCfg, err = promptK8s(context.Background(), a, k8sCfg); err != nil {
+				return err
+			}
+		}
+
 		// Validated and defaulted now rather than at first use: a provider
 		// missing its registry would otherwise look fine until a create spends
 		// a minute building and then pushes nowhere.
@@ -133,6 +145,68 @@ func runProviderConfigure(a *app, name, kind string, k8sCfg k8s.Config) error {
 	}
 	a.printf("provider %s (%s)\n", name, kind)
 	return nil
+}
+
+// promptK8s fills in the settings the flags left empty.
+//
+// Only the empty ones: a flag given on the command line is an answer already,
+// and asking again would make the flags pointless.
+func promptK8s(ctx context.Context, a *app, cfg k8s.Config) (k8s.Config, error) {
+	kubeContext, namespace := k8s.KubeconfigDefaults(ctx)
+	p := newPrompter(os.Stdin, a.out)
+
+	a.printf("configuring a Kubernetes provider; press return to accept a default\n")
+
+	ask := func(target *string, label, def string, required bool) error {
+		if *target != "" {
+			return nil
+		}
+		var (
+			answer string
+			err    error
+		)
+		if required {
+			answer, err = p.askRequired(label, def)
+		} else {
+			answer, err = p.ask(label, def)
+		}
+		if err != nil {
+			return err
+		}
+		*target = answer
+		return nil
+	}
+
+	for _, q := range []struct {
+		target   *string
+		label    string
+		def      string
+		required bool
+	}{
+		{&cfg.Context, "kubeconfig context", kubeContext, false},
+		{&cfg.Namespace, "namespace (must already exist)", firstNonEmpty(namespace, "default"), true},
+		// No default worth guessing, and nothing works without it.
+		{&cfg.Registry, "registry prefix to push images to", "", true},
+		{&cfg.Platform, "platform to build for", "linux/amd64", true},
+		{&cfg.StorageSize, "volume size per container", "20Gi", true},
+		{&cfg.StorageClass, "storage class (blank for the cluster default)", "", false},
+		{&cfg.ServiceAccount, "service account (blank for the namespace default)", "", false},
+		{&cfg.ImagePullSecret, "image pull secret (blank if the nodes can pull)", "", false},
+	} {
+		if err := ask(q.target, q.label, q.def, q.required); err != nil {
+			return cfg, err
+		}
+	}
+	return cfg, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // mustJSON renders the flag-populated config so ParseConfig can apply the same
