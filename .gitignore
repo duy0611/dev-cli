@@ -1,5 +1,6 @@
-# Nothing generated lives in the repo: instance state, credentials, and the
-# devcontainer.env all live under ~/.local/state/dcx/. This file exists to keep
-# stray local artifacts out.
-*.log
-.DS_Store
+# Build output. `make build` writes the binary here.
+/dist/
+
+# Go test artefacts.
+*.test
+*.out
