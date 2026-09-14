@@ -8,8 +8,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	// Registers the local provider with the provider factory. Blank because
-	// nothing here calls it directly; the registry is the whole interface.
+	// Register the providers with the factory. Blank because nothing here
+	// calls them directly; the registry is the whole interface.
+	_ "git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/provider/k8s"
 	_ "git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/provider/local"
 )
 

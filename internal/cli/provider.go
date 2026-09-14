@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
 
 	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/model"
+	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/provider/k8s"
 	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/store"
 	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/xpath"
 	"github.com/spf13/cobra"
@@ -62,7 +64,10 @@ func runProviderRemove(a *app, name string) error {
 }
 
 func newProviderConfigureCmd(a *app) *cobra.Command {
-	var kind string
+	var (
+		kind string
+		k8s  k8s.Config
+	)
 
 	cmd := &cobra.Command{
 		Use:   "configure NAME",
@@ -70,39 +75,76 @@ func newProviderConfigureCmd(a *app) *cobra.Command {
 		Long: "Create or update a provider.\n\n" +
 			"Idempotent on purpose: re-running it with a different --kind is how a\n" +
 			"provider is corrected, which beats deleting one that workspaces already\n" +
-			"reference.",
+			"reference.\n\n" +
+			"The --context and later flags apply to --kind k8s only.",
 		Args: exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runProviderConfigure(a, args[0], kind)
+			return runProviderConfigure(a, args[0], kind, k8s)
 		},
 	}
 	cmd.Flags().StringVar(&kind, "kind", string(model.KindLocal),
-		"engine this provider drives (local)")
+		"engine this provider drives (local, k8s)")
+
+	f := cmd.Flags()
+	f.StringVar(&k8s.Context, "context", "", "k8s: kubeconfig context (default: the current one)")
+	f.StringVar(&k8s.Namespace, "namespace", "", "k8s: namespace, which must already exist")
+	f.StringVar(&k8s.Registry, "registry", "", "k8s: registry prefix images are pushed to")
+	f.StringVar(&k8s.Platform, "platform", "", "k8s: platform to build for (default linux/amd64)")
+	f.StringVar(&k8s.StorageSize, "storage-size", "", "k8s: PVC size per container (default 20Gi)")
+	f.StringVar(&k8s.StorageClass, "storage-class", "", "k8s: storage class (default: the cluster's)")
+	f.StringVar(&k8s.ServiceAccount, "service-account", "", "k8s: service account for the pod")
+	f.StringVar(&k8s.ImagePullSecret, "image-pull-secret", "", "k8s: secret for pulling the built image")
 	return cmd
 }
 
-func runProviderConfigure(a *app, name, kind string) error {
+func runProviderConfigure(a *app, name, kind string, k8sCfg k8s.Config) error {
 	if err := xpath.ValidateName(name); err != nil {
 		return usageError(err)
 	}
 
+	var config string
 	switch model.ProviderKind(kind) {
 	case model.KindLocal:
 	case model.KindK8s:
-		return usageErrorf("provider kind %q is not implemented yet", kind)
+		// Validated and defaulted now rather than at first use: a provider
+		// missing its registry would otherwise look fine until a create spends
+		// a minute building and then pushes nowhere.
+		cfg, err := k8s.ParseConfig(mustJSON(k8sCfg))
+		if err != nil {
+			return usageError(err)
+		}
+		if config, err = cfg.Marshal(); err != nil {
+			return err
+		}
 	default:
-		return usageErrorf("unknown provider kind %q (local)", kind)
+		return usageErrorf("unknown provider kind %q (local, k8s)", kind)
 	}
 
 	st, err := a.store()
 	if err != nil {
 		return err
 	}
-	if err := st.PutProvider(model.Provider{Name: name, Kind: model.ProviderKind(kind)}); err != nil {
+	if err := st.PutProvider(model.Provider{
+		Name:   name,
+		Kind:   model.ProviderKind(kind),
+		Config: config,
+	}); err != nil {
 		return err
 	}
 	a.printf("provider %s (%s)\n", name, kind)
 	return nil
+}
+
+// mustJSON renders the flag-populated config so ParseConfig can apply the same
+// defaults and validation it applies to a stored one, rather than this file
+// duplicating them.
+func mustJSON(cfg k8s.Config) string {
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		// Config is a flat struct of strings; there is no input that fails.
+		panic(err)
+	}
+	return string(b)
 }
 
 func newProviderListCmd(a *app) *cobra.Command {

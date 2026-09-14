@@ -58,6 +58,42 @@ func (s *stubs) write(t *testing.T, name, stdout string, code int, readStdin boo
 	}
 }
 
+// installScript writes a stub whose body decides what to print, and which
+// appends every invocation to a log so a test can see all of them. The
+// single-call argv helper truncates, which loses everything but the last.
+func (s *stubs) installScript(t *testing.T, name, body string) {
+	t.Helper()
+	log := filepath.Join(s.dir, name+".log")
+	script := "#!/bin/sh\n" +
+		"for a in \"$@\"; do printf '%s\\n' \"$a\" >> '" + log + "'; done\n" +
+		"printf -- '---\\n' >> '" + log + "'\n" +
+		body + "\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(s.dir, name), []byte(script), 0o755); err != nil {
+		t.Fatalf("writing stub %s: %v", name, err)
+	}
+}
+
+// calls returns each invocation of a logging stub, joined into one string.
+func (s *stubs) calls(t *testing.T, name string) []string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(s.dir, name+".log"))
+	if err != nil {
+		t.Fatalf("stub %s was never called: %v", name, err)
+	}
+	var out []string
+	var current []string
+	for _, line := range strings.Split(string(b), "\n") {
+		switch {
+		case line == "---":
+			out = append(out, strings.Join(current, " "))
+			current = nil
+		case line != "":
+			current = append(current, line)
+		}
+	}
+	return out
+}
+
 func (s *stubs) argv(t *testing.T, name string) []string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(s.dir, name+".argv"))
