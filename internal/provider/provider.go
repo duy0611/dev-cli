@@ -58,6 +58,16 @@ type Provider interface {
 	Logs(ctx context.Context, c model.Container, follow bool, out io.Writer) error
 }
 
+// Syncer is implemented by providers whose containers hold a copy of the
+// project rather than the project itself.
+//
+// Deliberately not part of Provider: the local provider bind-mounts the folder,
+// so there is nothing to copy and a no-op Sync would be a lie. Callers type
+// assert, and tell the operator plainly when the provider does not have it.
+type Syncer interface {
+	Sync(ctx context.Context, c model.Container) error
+}
+
 // Factory builds the Provider for a configured provider record.
 type Factory func(p model.Provider) (Provider, error)
 

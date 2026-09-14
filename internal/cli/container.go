@@ -31,6 +31,7 @@ func newContainerCmd(a *app) *cobra.Command {
 		newContainerShellCmd(a),
 		newContainerExecCmd(a),
 		newContainerAgentCmd(a),
+		newContainerSyncCmd(a),
 	)
 	return cmd
 }
@@ -358,6 +359,49 @@ func newContainerLogsCmd(a *app) *cobra.Command {
 	addWorkspaceFlag(cmd, &workspace)
 	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "keep printing new output")
 	return cmd
+}
+
+func newContainerSyncCmd(a *app) *cobra.Command {
+	var workspace string
+
+	cmd := &cobra.Command{
+		Use:   "sync NAME",
+		Short: "Copy the host folder into a remote container",
+		Long: "Copy the host folder into a remote container.\n\n" +
+			"One direction, and only when asked: once an agent is working in the\n" +
+			"container, its copy is the live one, and overwriting that on a timer\n" +
+			"would destroy work nobody asked to discard.",
+		Args: exactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runContainerSync(cmd.Context(), a, workspace, args[0])
+		},
+	}
+	addWorkspaceFlag(cmd, &workspace)
+	return cmd
+}
+
+func runContainerSync(ctx context.Context, a *app, workspace, name string) error {
+	t, err := a.resolve(workspace, name)
+	if err != nil {
+		return err
+	}
+
+	syncer, ok := t.provider.(provider.Syncer)
+	if !ok {
+		// The local provider bind-mounts the folder: the container is already
+		// looking at the same files.
+		return usageErrorf("provider %s mounts the folder directly; there is nothing to sync",
+			t.workspace.ProviderName)
+	}
+	if err := a.requireRunning(ctx, t); err != nil {
+		return err
+	}
+
+	if err := syncer.Sync(ctx, t.container); err != nil {
+		return err
+	}
+	a.printf("synced %s into %s\n", xpath.Shorten(t.container.Source), name)
+	return nil
 }
 
 // --- shell and exec ---------------------------------------------------------------
