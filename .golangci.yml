@@ -1,0 +1,22 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - misspell
+    - staticcheck
+    - unused
+
+  settings:
+    errcheck:
+      # Cleanup and best-effort output on a path that is already failing: the
+      # return value has nothing useful to say and handling it would add noise.
+      exclude-functions:
+        - (*os.File).Close
+
+formatters:
+  enable:
+    - gofmt
