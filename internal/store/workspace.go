@@ -52,6 +52,27 @@ func (s *Store) ListWorkspaces() ([]model.Workspace, error) {
 	return out, rows.Err()
 }
 
+// WorkspacesUsing returns the workspaces bound to a provider, in name order.
+// What `provider remove` reports instead of a foreign-key error.
+func (s *Store) WorkspacesUsing(provider string) ([]string, error) {
+	rows, err := s.db.Query(
+		`SELECT name FROM workspaces WHERE provider_name = ? ORDER BY name`, provider)
+	if err != nil {
+		return nil, fmt.Errorf("listing workspaces on provider %s: %w", provider, err)
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return nil, fmt.Errorf("listing workspaces on provider %s: %w", provider, err)
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
 // DeleteWorkspace removes the workspace and, by cascade, its settings and
 // container records. The containers themselves are the caller's problem: this
 // layer never talks to an engine.

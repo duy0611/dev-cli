@@ -28,6 +28,19 @@ func (s *Store) PutProvider(p model.Provider) error {
 	return nil
 }
 
+// DeleteProvider removes a provider.
+//
+// The foreign key from workspaces would refuse this anyway; the caller checks
+// first so the operator gets told which workspaces are in the way rather than a
+// constraint name.
+func (s *Store) DeleteProvider(name string) error {
+	res, err := s.db.Exec(`DELETE FROM providers WHERE name = ?`, name)
+	if err != nil {
+		return fmt.Errorf("deleting provider %s: %w", name, err)
+	}
+	return requireOneRow(res, ErrNotFound)
+}
+
 func (s *Store) GetProvider(name string) (model.Provider, error) {
 	row := s.db.QueryRow(
 		`SELECT name, kind, config, created_at FROM providers WHERE name = ?`, name)

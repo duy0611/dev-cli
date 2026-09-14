@@ -295,3 +295,48 @@ func TestForeignKeysAreEnforced(t *testing.T) {
 		t.Fatal("CreateWorkspace against a missing provider succeeded, want a foreign-key error")
 	}
 }
+
+func TestDeleteProvider(t *testing.T) {
+	s := openTest(t)
+	seed(t, s)
+
+	// The foreign key from workspaces is the backstop behind the CLI's own
+	// check; if it ever stops being enforced, a provider can be deleted out
+	// from under a workspace.
+	if err := s.DeleteProvider("local"); err == nil {
+		t.Error("deleted a provider a workspace still references")
+	}
+
+	if err := s.DeleteWorkspace("ws"); err != nil {
+		t.Fatalf("DeleteWorkspace: %v", err)
+	}
+	if err := s.DeleteProvider("local"); err != nil {
+		t.Errorf("DeleteProvider on an unreferenced provider: %v", err)
+	}
+	if err := s.DeleteProvider("local"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("second DeleteProvider: err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestWorkspacesUsing(t *testing.T) {
+	s := openTest(t)
+	seed(t, s)
+	if err := s.PutProvider(model.Provider{Name: "other", Kind: model.KindLocal}); err != nil {
+		t.Fatalf("PutProvider: %v", err)
+	}
+	if err := s.CreateWorkspace(model.Workspace{Name: "beta", ProviderName: "local"}); err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+
+	got, err := s.WorkspacesUsing("local")
+	if err != nil {
+		t.Fatalf("WorkspacesUsing: %v", err)
+	}
+	if len(got) != 2 || got[0] != "beta" || got[1] != "ws" {
+		t.Errorf("WorkspacesUsing(local) = %v, want [beta ws]", got)
+	}
+
+	if got, err := s.WorkspacesUsing("other"); err != nil || len(got) != 0 {
+		t.Errorf("WorkspacesUsing(other) = %v, %v; want empty", got, err)
+	}
+}

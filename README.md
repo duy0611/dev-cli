@@ -75,6 +75,7 @@ commit inside a container works; an explicit setting of the same name wins.
 ```
 dev provider configure NAME --kind local
 dev provider list
+dev provider remove NAME
 
 dev workspace init NAME --provider NAME
 dev workspace use NAME
@@ -82,6 +83,7 @@ dev workspace list
 dev workspace set KEY SPEC
 dev workspace unset KEY
 dev workspace show
+dev workspace remove NAME
 
 dev container create NAME --folder PATH [--no-start]
 dev container list [--all]
@@ -109,7 +111,12 @@ installed in the image. If it is not, `dev` offers a rebuild and points at the
 project's `devcontainer.json`: installing an agent means adding it there, which
 is not something this tool will do to someone else's repo.
 
-`remove` never touches the project folder. If the engine refuses, the record is
+`workspace remove` and `provider remove` refuse while anything still points at
+them — a workspace holding containers (running or not), a provider named by a
+workspace. Remove the containers first. Removing the active workspace leaves
+none active rather than a dangling pointer.
+
+`container remove` never touches the project folder. If the engine refuses, the record is
 kept so the command can be retried; `--force` drops it anyway, which is how you
 clean up after an engine that no longer exists.
 

@@ -24,8 +24,70 @@ func newWorkspaceCmd(a *app) *cobra.Command {
 		newWorkspaceSetCmd(a),
 		newWorkspaceUnsetCmd(a),
 		newWorkspaceShowCmd(a),
+		newWorkspaceRemoveCmd(a),
 	)
 	return cmd
+}
+
+func newWorkspaceRemoveCmd(a *app) *cobra.Command {
+	return &cobra.Command{
+		Use:   "remove NAME",
+		Short: "Remove an empty workspace",
+		Long: "Remove a workspace and its settings.\n\n" +
+			"Refused while it still holds containers, running or not. Removing the\n" +
+			"records would leave their containers on the engine with nothing left\n" +
+			"that knows their names — remove them first.",
+		Args: exactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runWorkspaceRemove(a, args[0])
+		},
+	}
+}
+
+func runWorkspaceRemove(a *app, name string) error {
+	st, err := a.store()
+	if err != nil {
+		return err
+	}
+	if _, err := st.GetWorkspace(name); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return notFoundErrorf("no such workspace: %s", name)
+		}
+		return err
+	}
+
+	containers, err := st.ListContainers(name)
+	if err != nil {
+		return err
+	}
+	if len(containers) > 0 {
+		names := make([]string, 0, len(containers))
+		for _, c := range containers {
+			names = append(names, c.Name)
+		}
+		return usageErrorf("workspace %s still holds %d container(s): %s",
+			name, len(names), strings.Join(names, ", "))
+	}
+
+	if err := st.DeleteWorkspace(name); err != nil {
+		return err
+	}
+
+	// Leaving the pointer behind would make the next command report "no such
+	// workspace" about a name the operator never typed.
+	active, err := st.ActiveWorkspace()
+	if err != nil {
+		return err
+	}
+	if active == name {
+		if err := st.ClearActiveWorkspace(); err != nil {
+			return err
+		}
+		a.printf("workspace %s removed; no active workspace now\n", name)
+		return nil
+	}
+	a.printf("workspace %s removed\n", name)
+	return nil
 }
 
 func newWorkspaceInitCmd(a *app) *cobra.Command {

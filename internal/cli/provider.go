@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"io"
+	"strings"
 
 	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/model"
 	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/store"
@@ -15,8 +16,49 @@ func newProviderCmd(a *app) *cobra.Command {
 		Use:   "provider",
 		Short: "Configure where devcontainers run",
 	}
-	cmd.AddCommand(newProviderConfigureCmd(a), newProviderListCmd(a))
+	cmd.AddCommand(newProviderConfigureCmd(a), newProviderListCmd(a), newProviderRemoveCmd(a))
 	return cmd
+}
+
+func newProviderRemoveCmd(a *app) *cobra.Command {
+	return &cobra.Command{
+		Use:   "remove NAME",
+		Short: "Remove an unreferenced provider",
+		Long: "Remove a provider.\n\n" +
+			"Refused while any workspace still names it, since those workspaces\n" +
+			"would have nowhere left to run.",
+		Args: exactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runProviderRemove(a, args[0])
+		},
+	}
+}
+
+func runProviderRemove(a *app, name string) error {
+	st, err := a.store()
+	if err != nil {
+		return err
+	}
+	if err := providerExists(st, name); err != nil {
+		return err
+	}
+
+	// Checked rather than left to the foreign key, so the message names the
+	// workspaces in the way instead of a constraint.
+	users, err := st.WorkspacesUsing(name)
+	if err != nil {
+		return err
+	}
+	if len(users) > 0 {
+		return usageErrorf("provider %s is still used by %d workspace(s): %s",
+			name, len(users), strings.Join(users, ", "))
+	}
+
+	if err := st.DeleteProvider(name); err != nil {
+		return err
+	}
+	a.printf("provider %s removed\n", name)
+	return nil
 }
 
 func newProviderConfigureCmd(a *app) *cobra.Command {
