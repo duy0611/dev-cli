@@ -20,15 +20,34 @@ func newStubs(t *testing.T) *stubs {
 	return &stubs{dir: dir}
 }
 
+// install writes a stub that records its argv and ignores stdin.
 func (s *stubs) install(t *testing.T, name, stdout string, code int) {
+	t.Helper()
+	s.write(t, name, stdout, code, false)
+}
+
+// installReadingStdin also captures stdin.
+//
+// Separate because reading stdin is not free: a stub that always cats will hang
+// forever when the caller leaves the pipe open, which is exactly what the
+// devcontainer CLI does to the docker it spawns. Only the tests that write and
+// close stdin themselves may use this.
+func (s *stubs) installReadingStdin(t *testing.T, name, stdout string, code int) {
+	t.Helper()
+	s.write(t, name, stdout, code, true)
+}
+
+func (s *stubs) write(t *testing.T, name, stdout string, code int, readStdin bool) {
 	t.Helper()
 	argv := filepath.Join(s.dir, name+".argv")
 	stdin := filepath.Join(s.dir, name+".stdin")
 
 	script := "#!/bin/sh\n" +
 		": > '" + argv + "'\n" +
-		"for a in \"$@\"; do printf '%s\\n' \"$a\" >> '" + argv + "'; done\n" +
-		"cat > '" + stdin + "'\n"
+		"for a in \"$@\"; do printf '%s\\n' \"$a\" >> '" + argv + "'; done\n"
+	if readStdin {
+		script += "cat > '" + stdin + "'\n"
+	}
 	if stdout != "" {
 		script += "printf '%s' '" + stdout + "'\n"
 	}
@@ -144,7 +163,7 @@ func TestEmptyContextIsOmitted(t *testing.T) {
 
 func TestApplySendsTheManifestOnStdin(t *testing.T) {
 	s := newStubs(t)
-	s.install(t, kubectlBin, "", 0)
+	s.installReadingStdin(t, kubectlBin, "", 0)
 
 	manifest := `{"kind":"Deployment"}`
 	if err := testKubectl().apply(context.Background(), []byte(manifest)); err != nil {
@@ -179,7 +198,7 @@ func TestDeleteIgnoresMissing(t *testing.T) {
 
 func TestPipeIntoStreamsTheProducer(t *testing.T) {
 	s := newStubs(t)
-	s.install(t, kubectlBin, "", 0)
+	s.installReadingStdin(t, kubectlBin, "", 0)
 
 	err := testKubectl().pipeInto(context.Background(), func(w io.Writer) error {
 		_, err := io.WriteString(w, "tar bytes")
