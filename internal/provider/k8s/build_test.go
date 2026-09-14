@@ -10,18 +10,30 @@ import (
 	"testing"
 )
 
-// withBuildx installs a docker whose `buildx version` succeeds.
+// withBuildx installs a docker whose `buildx version` answers the way the real
+// plugin does. The probe looks for a semver, so a silent success is not enough.
 func withBuildx(t *testing.T, s *stubs) {
 	t.Helper()
-	s.install(t, dockerBin, "", 0)
+	s.installScript(t, dockerBin, `case "$1 $2" in
+  "buildx version") echo "github.com/docker/buildx v0.17.1 ffa4ba5" ;;
+esac`)
 }
 
-// withoutBuildx installs a docker that fails `buildx version`, as Podman and a
-// bare docker CLI do, while still accepting a push.
+// withoutBuildx installs a docker that fails `buildx version`, as a bare docker
+// CLI does, while still accepting a push.
 func withoutBuildx(t *testing.T, s *stubs) {
 	t.Helper()
 	s.installScript(t, dockerBin, `case "$1" in
   buildx) exit 1 ;;
+esac`)
+}
+
+// withPodman installs a podman whose `buildx version` prints a version, which
+// is all the devcontainer CLI's BuildKit probe looks for.
+func withPodman(t *testing.T, s *stubs) {
+	t.Helper()
+	s.installScript(t, podmanBin, `case "$1 $2" in
+  "buildx version") echo "podman version 5.3.1" ;;
 esac`)
 }
 
@@ -137,6 +149,77 @@ func anyBuildCall(calls []string, substr string) bool {
 		}
 	}
 	return false
+}
+
+// podman satisfies the CLI's BuildKit probe, so --platform is available through
+// it. `podman buildx build` is an alias for `podman build`, which has no
+// --push, so the push is a separate step.
+func TestBuildAndPushPrefersPodmanOverAHostArchBuild(t *testing.T) {
+	s := newStubs(t)
+	s.installScript(t, devcontainerBin, "")
+	withoutBuildx(t, s)
+	withPodman(t, s)
+
+	other := "amd64"
+	if hostArch == "amd64" {
+		other = "arm64"
+	}
+
+	// The cross-architecture request is the point: without podman this would be
+	// refused outright.
+	err := buildAndPush(context.Background(), "/p", "reg.example/x:latest",
+		"linux/"+other, false, io.Discard)
+	if err != nil {
+		t.Fatalf("buildAndPush: %v", err)
+	}
+
+	build := s.calls(t, devcontainerBin)
+	if !anyBuildCall(build, "--docker-path podman") {
+		t.Errorf("the CLI was not pointed at podman: %v", build)
+	}
+	if !anyBuildCall(build, "--platform linux/"+other) {
+		t.Errorf("the platform was dropped: %v", build)
+	}
+	if anyBuildCall(build, "--push") {
+		t.Errorf("passed --push, which podman build does not have: %v", build)
+	}
+	if !anyBuildCall(s.calls(t, podmanBin), "push reg.example/x:latest") {
+		t.Errorf("podman never pushed the image: %v", s.calls(t, podmanBin))
+	}
+}
+
+// Preferred for the single step, and because building Features under rootless
+// podman is known to fail on the bind mount the generated Dockerfile uses.
+func TestBuildAndPushPrefersDockerBuildxOverPodman(t *testing.T) {
+	s := newStubs(t)
+	s.installScript(t, devcontainerBin, "")
+	withBuildx(t, s)
+	withPodman(t, s)
+
+	if err := buildAndPush(context.Background(), "/p", "img", "linux/amd64", false, io.Discard); err != nil {
+		t.Fatalf("buildAndPush: %v", err)
+	}
+	build := s.calls(t, devcontainerBin)
+	if anyBuildCall(build, "--docker-path") {
+		t.Errorf("chose podman with buildx available: %v", build)
+	}
+	if !anyBuildCall(build, "--push") {
+		t.Errorf("did not push in one step: %v", build)
+	}
+}
+
+// A version-free answer means the CLI's probe fails too, so --platform would be
+// refused; matching its rule is what keeps the two in agreement.
+func TestPodmanWithoutAVersionIsNotABuildKitBuilder(t *testing.T) {
+	s := newStubs(t)
+	withoutBuildx(t, s)
+	s.installScript(t, podmanBin, `case "$1 $2" in
+  "buildx version") echo "unknown command" ;;
+esac`)
+
+	if hasBuildx(context.Background(), podmanBin) {
+		t.Error("treated a version-free answer as BuildKit support")
+	}
 }
 
 // --- read-configuration ---------------------------------------------------------

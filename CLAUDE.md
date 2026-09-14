@@ -116,6 +116,13 @@ Beyond the invariants above, these are the parts that bite:
   `~` disappears on every stop and "postCreate runs once" is false.
 - **`--platform` is explicit, defaulting to `linux/amd64`.** An arm64 image on
   an amd64 node crash-loops with `exec format error`.
+- **The builder is chosen, not assumed** (`builder.go`). The CLI gates
+  `--platform` and `--push` on `<docker-path> buildx version` printing a semver,
+  so `selectBuilder` probes with that exact rule. docker+buildx does both in one
+  step; podman satisfies the probe and honours `--platform` but has no `--push`,
+  so it pushes separately; plain docker can only build for this host. Prefer
+  docker+buildx over podman — Features under rootless podman fail on the bind
+  mount the generated Dockerfile uses (devcontainers/cli#548).
 - **`imagePullPolicy: Always`, and `rebuild` bumps a pod annotation.** The tag
   is always `:latest`, so nothing else makes a rebuild visible.
 - **`Recreate`, not `RollingUpdate`.** The PVC is ReadWriteOnce; two pods would

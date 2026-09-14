@@ -122,12 +122,21 @@ scaling to zero would throw away anything `postCreate` wrote to `~`.
 probably are not; an arm64 image on an amd64 node crash-loops with `exec format
 error`. Change it with `--platform` if your nodes are arm64.
 
-**Cross-architecture builds need `docker buildx`.** The devcontainer CLI refuses
-`--platform` and `--push` without BuildKit, so without the plugin `dev` builds
-for your own architecture and pushes with `docker push` instead. If the platform
-you asked for is not the one you are on, it stops and says so rather than
-producing an image that will crash-loop. Docker Desktop ships buildx; with
-Podman you may need to install it.
+**Cross-architecture builds need buildx or podman.** The devcontainer CLI
+refuses `--platform` and `--push` without BuildKit, so `dev` picks whichever
+builder the host has:
+
+| Host has | How it builds |
+|---|---|
+| docker with buildx | cross-builds and pushes in one step |
+| podman | cross-builds through `--docker-path podman`, then `podman push` — `podman build` has no `--push` |
+| docker without buildx | this host's architecture only, then `docker push` |
+
+The last row cannot honour a cross-architecture request, so it stops and says so
+rather than producing an image that crash-loops on the node. docker+buildx is
+preferred over podman when both are present: it is one step, and building
+Features under rootless podman is known to fail on the bind mount the generated
+Dockerfile uses ([devcontainers/cli#548](https://github.com/devcontainers/cli/issues/548)).
 
 **A rotated secret needs a restart to reach the pod's own environment.** The
 Secret is read by `envFrom` at pod start. Commands you exec afterwards do get

@@ -100,7 +100,7 @@ esac`)
     echo '{"mergedConfiguration":{"workspaceFolder":"/workspaces/api","remoteUser":"node","containerEnv":{},"remoteEnv":{},"onCreateCommands":["echo on"],"updateContentCommands":[],"postCreateCommands":["echo post"],"postStartCommands":["echo start"],"postAttachCommands":["echo attach"]}}'
     ;;
 esac`)
-	s.install(t, dockerBin, "", 0)
+	withBuildx(t, s)
 	return s
 }
 
@@ -175,7 +175,7 @@ esac`)
     echo '{"mergedConfiguration":{"workspaceFolder":"/workspaces/api","remoteUser":"node","containerEnv":{},"remoteEnv":{},"onCreateCommands":["echo on"],"updateContentCommands":[],"postCreateCommands":["echo post"],"postStartCommands":["echo start"],"postAttachCommands":[]}}'
     ;;
 esac`)
-	s.install(t, dockerBin, "", 0)
+	withBuildx(t, s)
 
 	err := testProvider().Up(context.Background(), k8sContainer(t), nil)
 	if err == nil {
@@ -209,7 +209,7 @@ esac`)
     echo '{"mergedConfiguration":{"workspaceFolder":"/workspaces/api","remoteUser":"node","containerEnv":{},"remoteEnv":{},"onCreateCommands":[],"updateContentCommands":[],"postCreateCommands":["echo post"],"postStartCommands":[],"postAttachCommands":[]}}'
     ;;
 esac`)
-	s.install(t, dockerBin, "", 0)
+	withBuildx(t, s)
 
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("x"), 0o644); err != nil {

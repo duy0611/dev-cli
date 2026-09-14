@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 )
 
@@ -47,16 +46,23 @@ func readConfiguration(ctx context.Context, folder string) (DevConfig, Lifecycle
 	// The CLI runs `docker ps` while reading a configuration, to see whether a
 	// container already exists, and fails with "spawn docker ENOENT" without
 	// it. Checked here so the error names the missing tool instead.
-	if err := requireBinary(dockerBin); err != nil {
+	engine := engineBin()
+	if err := requireBinary(engine); err != nil {
 		return DevConfig{}, Lifecycle{}, fmt.Errorf("reading the devcontainer config: %w", err)
 	}
 
-	var stdout, stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, devcontainerBin,
+	args := []string{
 		"read-configuration",
 		"--workspace-folder", folder,
 		"--include-merged-configuration",
-		"--log-format", "json")
+		"--log-format", "json",
+	}
+	if engine != dockerBin {
+		args = append(args, "--docker-path", engine)
+	}
+
+	var stdout, stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, devcontainerBin, args...)
 	cmd.Stdout = &stdout
 	// The CLI logs progress on stderr and puts the result on stdout; the log is
 	// only interesting when something failed.
@@ -125,55 +131,37 @@ func mergeEnv(containerEnv, remoteEnv map[string]string) map[string]string {
 	return out
 }
 
-// hostArch is what an image built without an explicit platform comes out as.
-// A variable so a test can pretend to be on the other architecture.
-var hostArch = runtime.GOARCH
-
-// buildxAvailable reports whether the engine has the buildx plugin.
-//
-// The devcontainer CLI refuses --platform and --push outright without BuildKit
-// ("--platform or --push require BuildKit enabled"), so this decides which of
-// the two build paths is even possible. Docker Desktop ships buildx; Podman and
-// a bare docker CLI often do not.
-func buildxAvailable(ctx context.Context) bool {
-	if _, err := exec.LookPath(dockerBin); err != nil {
-		return false
-	}
-	return exec.CommandContext(ctx, dockerBin, "buildx", "version").Run() == nil
-}
-
 // buildAndPush builds the image on the host and pushes it to the registry.
 //
 // The devcontainer CLI does the building because that is the part worth not
 // reimplementing: Features, a Dockerfile, build args and the rest. It needs
 // Docker, which is why a k8s provider still expects an engine on the operator's
-// machine.
+// machine — docker or podman.
 //
-// Two paths, because the CLI's --platform and --push both require BuildKit:
-//
-//   - with buildx, it builds for the target platform and pushes in one step;
-//   - without it, the image can only be built for the host's own architecture,
-//     so the CLI loads it locally and docker pushes it afterwards.
-//
-// The second path cannot honour a cross-architecture request, and producing the
-// wrong architecture silently is the worst outcome available: the pod
-// crash-loops with "exec format error", which says nothing about the build. So
-// that combination is refused with the two ways out.
+// How it builds depends on what the host has; see selectBuilder. A builder that
+// cannot cross-build is only usable when the target platform is this host's
+// own, because producing the wrong architecture silently is the worst outcome
+// available — the pod crash-loops with "exec format error", which says nothing
+// about the build.
 func buildAndPush(ctx context.Context, folder, image, platform string, noCache bool, progress io.Writer) error {
 	if err := requireBinary(devcontainerBin); err != nil {
 		return err
 	}
 
-	args := []string{"build", "--workspace-folder", folder, "--image-name", image}
+	b := selectBuilder(ctx)
+
+	args := append([]string{"build", "--workspace-folder", folder, "--image-name", image},
+		b.dockerPathArgs()...)
 	if noCache {
 		args = append(args, "--no-cache")
 	}
-
-	useBuildx := buildxAvailable(ctx)
-	if useBuildx {
-		args = append(args, "--platform", platform, "--push")
+	if b.crossBuild {
+		args = append(args, "--platform", platform)
 	} else if err := requireHostPlatform(platform); err != nil {
 		return err
+	}
+	if b.pushWithCLI {
+		args = append(args, "--push")
 	}
 
 	cmd := exec.CommandContext(ctx, devcontainerBin, args...)
@@ -184,11 +172,11 @@ func buildAndPush(ctx context.Context, folder, image, platform string, noCache b
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("building %s: %w", image, err)
 	}
-	if useBuildx {
+	if b.pushWithCLI {
 		return nil // --push already sent it
 	}
 
-	push := exec.CommandContext(ctx, dockerBin, "push", image)
+	push := exec.CommandContext(ctx, b.engine, "push", image)
 	push.Stdout = io.Discard
 	push.Stderr = progressOr(progress)
 	if err := push.Run(); err != nil {
@@ -208,9 +196,9 @@ func requireHostPlatform(platform string) error {
 		return nil
 	}
 	return fmt.Errorf(
-		"cannot build for %s on a %s host without buildx: install the docker buildx "+
-			"plugin (Docker Desktop includes it), or set the provider's platform to "+
-			"linux/%s if the cluster nodes are %s",
+		"cannot build for %s on a %s host: no cross-architecture builder found. "+
+			"Install the docker buildx plugin (Docker Desktop includes it) or podman, "+
+			"or set the provider's platform to linux/%s if the cluster nodes are %s",
 		platform, hostArch, hostArch, hostArch)
 }
 
