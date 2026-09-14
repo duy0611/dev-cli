@@ -12,13 +12,19 @@ linters:
 
   settings:
     errcheck:
-      # Cleanup on a path that has either finished or already failed. The error
-      # has nothing to say that the caller can act on, and checking it would
-      # bury the real failure under noise.
       exclude-functions:
+        # Cleanup on a path that has either finished or already failed. The
+        # error has nothing the caller can act on, and checking it would bury
+        # the real failure under noise.
         - (*os.File).Close
         - (*database/sql.DB).Close
         - (*database/sql.Rows).Close
+        # Writing human-readable output. The only realistic failure is a closed
+        # pipe (`dev container list | head`), where carrying on quietly beats
+        # reporting that printing failed.
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
 
 formatters:
   enable:

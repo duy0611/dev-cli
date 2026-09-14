@@ -1,13 +1,17 @@
 package cli
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // Exit codes. Anything a caller might reasonably branch on gets its own code;
 // everything else is a plain 1.
 const (
-	exitOK    = 0
-	exitError = 1 // something went wrong, no finer meaning
-	exitUsage = 2 // the request itself was malformed or contradictory
+	exitOK       = 0
+	exitError    = 1 // something went wrong, no finer meaning
+	exitUsage    = 2 // the request itself was malformed or contradictory
+	exitNotFound = 3 // a named provider, workspace or container does not exist
 )
 
 // codedError carries an exit code alongside the message. Commands return these
@@ -23,6 +27,14 @@ func (e *codedError) Unwrap() error { return e.err }
 
 func usageError(err error) error {
 	return &codedError{code: exitUsage, err: err}
+}
+
+func usageErrorf(format string, a ...any) error {
+	return usageError(fmt.Errorf(format, a...))
+}
+
+func notFoundErrorf(format string, a ...any) error {
+	return &codedError{code: exitNotFound, err: fmt.Errorf(format, a...)}
 }
 
 // exitCodeOf reports the code a finished command should exit with.

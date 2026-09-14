@@ -14,7 +14,14 @@ import (
 // Returning the code rather than calling os.Exit keeps every deferred cleanup
 // in the command path running, and leaves main() as the only place that exits.
 func Execute(version string) int {
+	a := &app{out: os.Stdout}
+	defer a.close()
+
 	root := newRootCmd(version)
+	root.AddCommand(
+		newProviderCmd(a),
+		newWorkspaceCmd(a),
+	)
 
 	// Cobra prints usage after any error by default, which buries a one-line
 	// failure under forty lines of flags. Errors are printed here instead, and
