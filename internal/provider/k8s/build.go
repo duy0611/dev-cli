@@ -9,10 +9,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
-const devcontainerBin = "devcontainer"
+const (
+	devcontainerBin = "devcontainer"
+	// Still needed on a k8s provider: the image is built on the host, and the
+	// CLI shells out to docker even to read a configuration.
+	dockerBin = "docker"
+)
 
 // Lifecycle holds the merged lifecycle commands, still encoded.
 //
@@ -41,7 +47,7 @@ func readConfiguration(ctx context.Context, folder string) (DevConfig, Lifecycle
 	// The CLI runs `docker ps` while reading a configuration, to see whether a
 	// container already exists, and fails with "spawn docker ENOENT" without
 	// it. Checked here so the error names the missing tool instead.
-	if err := requireBinary("docker"); err != nil {
+	if err := requireBinary(dockerBin); err != nil {
 		return DevConfig{}, Lifecycle{}, fmt.Errorf("reading the devcontainer config: %w", err)
 	}
 
@@ -119,29 +125,55 @@ func mergeEnv(containerEnv, remoteEnv map[string]string) map[string]string {
 	return out
 }
 
+// hostArch is what an image built without an explicit platform comes out as.
+// A variable so a test can pretend to be on the other architecture.
+var hostArch = runtime.GOARCH
+
+// buildxAvailable reports whether the engine has the buildx plugin.
+//
+// The devcontainer CLI refuses --platform and --push outright without BuildKit
+// ("--platform or --push require BuildKit enabled"), so this decides which of
+// the two build paths is even possible. Docker Desktop ships buildx; Podman and
+// a bare docker CLI often do not.
+func buildxAvailable(ctx context.Context) bool {
+	if _, err := exec.LookPath(dockerBin); err != nil {
+		return false
+	}
+	return exec.CommandContext(ctx, dockerBin, "buildx", "version").Run() == nil
+}
+
 // buildAndPush builds the image on the host and pushes it to the registry.
 //
-// The devcontainer CLI does this part because it is the part worth not
+// The devcontainer CLI does the building because that is the part worth not
 // reimplementing: Features, a Dockerfile, build args and the rest. It needs
 // Docker, which is why a k8s provider still expects an engine on the operator's
 // machine.
+//
+// Two paths, because the CLI's --platform and --push both require BuildKit:
+//
+//   - with buildx, it builds for the target platform and pushes in one step;
+//   - without it, the image can only be built for the host's own architecture,
+//     so the CLI loads it locally and docker pushes it afterwards.
+//
+// The second path cannot honour a cross-architecture request, and producing the
+// wrong architecture silently is the worst outcome available: the pod
+// crash-loops with "exec format error", which says nothing about the build. So
+// that combination is refused with the two ways out.
 func buildAndPush(ctx context.Context, folder, image, platform string, noCache bool, progress io.Writer) error {
 	if err := requireBinary(devcontainerBin); err != nil {
 		return err
 	}
 
-	args := []string{
-		"build",
-		"--workspace-folder", folder,
-		"--image-name", image,
-		// Without this the host's architecture wins. An arm64 image on an amd64
-		// node crash-loops with "exec format error", which reads like anything
-		// but a build problem.
-		"--platform", platform,
-		"--push",
-	}
+	args := []string{"build", "--workspace-folder", folder, "--image-name", image}
 	if noCache {
 		args = append(args, "--no-cache")
+	}
+
+	useBuildx := buildxAvailable(ctx)
+	if useBuildx {
+		args = append(args, "--platform", platform, "--push")
+	} else if err := requireHostPlatform(platform); err != nil {
+		return err
 	}
 
 	cmd := exec.CommandContext(ctx, devcontainerBin, args...)
@@ -152,7 +184,34 @@ func buildAndPush(ctx context.Context, folder, image, platform string, noCache b
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("building %s: %w", image, err)
 	}
+	if useBuildx {
+		return nil // --push already sent it
+	}
+
+	push := exec.CommandContext(ctx, dockerBin, "push", image)
+	push.Stdout = io.Discard
+	push.Stderr = progressOr(progress)
+	if err := push.Run(); err != nil {
+		return fmt.Errorf("pushing %s: %w", image, err)
+	}
 	return nil
+}
+
+// requireHostPlatform refuses a build that would quietly produce the wrong
+// architecture.
+func requireHostPlatform(platform string) error {
+	_, arch, found := strings.Cut(platform, "/")
+	if !found {
+		arch = platform
+	}
+	if arch == hostArch {
+		return nil
+	}
+	return fmt.Errorf(
+		"cannot build for %s on a %s host without buildx: install the docker buildx "+
+			"plugin (Docker Desktop includes it), or set the provider's platform to "+
+			"linux/%s if the cluster nodes are %s",
+		platform, hostArch, hostArch, hostArch)
 }
 
 func progressOr(w io.Writer) io.Writer {

@@ -10,9 +10,25 @@ import (
 	"testing"
 )
 
+// withBuildx installs a docker whose `buildx version` succeeds.
+func withBuildx(t *testing.T, s *stubs) {
+	t.Helper()
+	s.install(t, dockerBin, "", 0)
+}
+
+// withoutBuildx installs a docker that fails `buildx version`, as Podman and a
+// bare docker CLI do, while still accepting a push.
+func withoutBuildx(t *testing.T, s *stubs) {
+	t.Helper()
+	s.installScript(t, dockerBin, `case "$1" in
+  buildx) exit 1 ;;
+esac`)
+}
+
 func TestBuildAndPushPassesPlatformAndPush(t *testing.T) {
 	s := newStubs(t)
 	s.install(t, devcontainerBin, "", 0)
+	withBuildx(t, s)
 
 	err := buildAndPush(context.Background(), "/projects/api",
 		"reg.example/dev/ws-api:latest", "linux/amd64", false, io.Discard)
@@ -46,6 +62,7 @@ func TestBuildAndPushPassesPlatformAndPush(t *testing.T) {
 func TestBuildAndPushNoCache(t *testing.T) {
 	s := newStubs(t)
 	s.install(t, devcontainerBin, "", 0)
+	withBuildx(t, s)
 
 	if err := buildAndPush(context.Background(), "/p", "img", "linux/amd64", true, io.Discard); err != nil {
 		t.Fatalf("buildAndPush: %v", err)
@@ -58,6 +75,7 @@ func TestBuildAndPushNoCache(t *testing.T) {
 func TestBuildAndPushReportsFailure(t *testing.T) {
 	s := newStubs(t)
 	s.install(t, devcontainerBin, "", 1)
+	withBuildx(t, s)
 
 	err := buildAndPush(context.Background(), "/p", "img", "linux/amd64", false, io.Discard)
 	if err == nil {
@@ -66,6 +84,59 @@ func TestBuildAndPushReportsFailure(t *testing.T) {
 	if !strings.Contains(err.Error(), "img") {
 		t.Errorf("error %q does not name the image", err)
 	}
+}
+
+// The CLI rejects --platform and --push outright without BuildKit, so without
+// buildx the image is built locally and pushed with docker afterwards.
+func TestBuildAndPushWithoutBuildx(t *testing.T) {
+	s := newStubs(t)
+	s.installScript(t, devcontainerBin, "")
+	withoutBuildx(t, s)
+
+	err := buildAndPush(context.Background(), "/p", "reg.example/x:latest",
+		"linux/"+hostArch, false, io.Discard)
+	if err != nil {
+		t.Fatalf("buildAndPush: %v", err)
+	}
+
+	build := s.calls(t, devcontainerBin)
+	if anyBuildCall(build, "--platform") || anyBuildCall(build, "--push") {
+		t.Errorf("passed flags the CLI refuses without BuildKit: %v", build)
+	}
+	if !anyBuildCall(s.calls(t, dockerBin), "push reg.example/x:latest") {
+		t.Errorf("the image was built but never pushed: %v", s.calls(t, dockerBin))
+	}
+}
+
+// Producing the wrong architecture silently is the worst outcome available: the
+// pod crash-loops with "exec format error", which says nothing about the build.
+func TestBuildAndPushRefusesCrossArchWithoutBuildx(t *testing.T) {
+	s := newStubs(t)
+	s.installScript(t, devcontainerBin, "")
+	withoutBuildx(t, s)
+
+	other := "amd64"
+	if hostArch == "amd64" {
+		other = "arm64"
+	}
+
+	err := buildAndPush(context.Background(), "/p", "img", "linux/"+other, false, io.Discard)
+	if err == nil {
+		t.Fatal("buildAndPush built for the wrong architecture without complaint")
+	}
+	// The message has to carry both ways out, or it is just a refusal.
+	if !strings.Contains(err.Error(), "buildx") || !strings.Contains(err.Error(), hostArch) {
+		t.Errorf("error %q does not say how to proceed", err)
+	}
+}
+
+func anyBuildCall(calls []string, substr string) bool {
+	for _, c := range calls {
+		if strings.Contains(c, substr) {
+			return true
+		}
+	}
+	return false
 }
 
 // --- read-configuration ---------------------------------------------------------
@@ -102,7 +173,7 @@ func requireRealCLI(t *testing.T) {
 		t.Skipf("%s is not on PATH", devcontainerBin)
 	}
 	s := newStubs(t)
-	s.install(t, "docker", "", 0)
+	s.install(t, dockerBin, "", 0)
 }
 
 func TestReadConfigurationAgainstTheRealCLI(t *testing.T) {

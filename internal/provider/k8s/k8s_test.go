@@ -41,7 +41,7 @@ esac`)
     echo '{"mergedConfiguration":{"workspaceFolder":"/workspaces/api","remoteUser":"node","containerEnv":{},"remoteEnv":{},"onCreateCommands":[],"updateContentCommands":[],"postCreateCommands":[],"postStartCommands":[],"postAttachCommands":[]}}'
     ;;
 esac`)
-	s.install(t, "docker", "", 0)
+	s.install(t, dockerBin, "", 0)
 	return s
 }
 
