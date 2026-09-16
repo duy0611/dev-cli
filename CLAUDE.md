@@ -127,6 +127,13 @@ Beyond the invariants above, these are the parts that bite:
   is always `:latest`, so nothing else makes a rebuild visible.
 - **`Recreate`, not `RollingUpdate`.** The PVC is ReadWriteOnce; two pods would
   leave the new one unschedulable.
+- **The keep-alive command traps SIGTERM, and `stop` waits.** The command is
+  PID 1, and PID 1 ignores signals it has no handler for, so without the trap
+  every stop waits out the full grace period before the kubelet SIGKILLs. The
+  sleep is backgrounded with `wait`, or the trap could not run until it
+  finished. `kubectl scale` also returns before the pod is gone, so `Stop`
+  polls until no pod carries the labels — `docker stop` does not lie about this
+  and neither should this.
 - **The lifecycle marker is a file on the volume**, not an annotation. The
   Deployment is re-applied on every start and a server-side apply drops fields
   it no longer sets, so an annotation clears itself.

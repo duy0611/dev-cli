@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -169,6 +170,47 @@ func TestStopScalesToZero(t *testing.T) {
 	// Deleting would take the PVC's contents with it.
 	if anyCall(calls, "delete") {
 		t.Errorf("Stop deleted something: %v", calls)
+	}
+}
+
+// `kubectl scale` returns as soon as the API server records the new count, so
+// without the wait `stop` reports success while the container is still running.
+func TestStopWaitsForThePodToGo(t *testing.T) {
+	s := newStubs(t)
+	// A pod that is still terminating on the first look and gone on the second.
+	counter := filepath.Join(t.TempDir(), "n")
+	s.installScript(t, kubectlBin, `case "$*" in
+  *"get deployment"*"-o name"*) echo deployment.apps/dev-x ;;
+  *"get pods"*)
+    if [ -f '`+counter+`' ]; then exit 0; fi
+    : > '`+counter+`'
+    echo pod/dev-x-123
+    ;;
+esac`)
+
+	c := model.Container{Name: "api", WorkspaceName: "ws"}
+	if err := testProvider().Stop(context.Background(), c); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	calls := kubectlCalls(t, s)
+	var pollsAfterScale int
+	scaled := false
+	for _, call := range calls {
+		if strings.Contains(call, "scale") {
+			scaled = true
+			continue
+		}
+		if scaled && strings.Contains(call, "get pods") {
+			pollsAfterScale++
+		}
+	}
+	if !scaled {
+		t.Fatalf("Stop did not scale: %v", calls)
+	}
+	if pollsAfterScale < 2 {
+		t.Errorf("Stop polled %d times after scaling; it returned before the pod was gone: %v",
+			pollsAfterScale, calls)
 	}
 }
 

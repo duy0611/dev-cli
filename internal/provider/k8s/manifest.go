@@ -271,7 +271,15 @@ func buildDeployment(in manifestInput) deployment {
 						// needs at runtime; a devcontainer just has to stay up.
 						// A loop rather than `sleep infinity`, which busybox
 						// does not accept.
-						Command:    []string{"sh", "-c", "while true; do sleep 3600; done"},
+						//
+						// The trap is not decoration. This runs as PID 1, and
+						// PID 1 ignores signals it has no handler for — so
+						// without it a stop waits out the whole termination
+						// grace period and only then SIGKILLs. `sleep &` plus
+						// `wait` is what lets the trap run: a foreground sleep
+						// would not be interrupted.
+						Command: []string{"sh", "-c",
+							"trap 'exit 0' TERM INT; while :; do sleep 3600 & wait $!; done"},
 						WorkingDir: in.Dev.WorkspaceFolder,
 						EnvFrom:    []envFromSrc{{SecretRef: localObjectRef{Name: secretName(in.Container)}}},
 						VolumeMounts: []volumeMount{

@@ -113,6 +113,16 @@ func TestDeploymentCarriesTheThingsThatFailSilently(t *testing.T) {
 	if !strings.Contains(joined, "sleep") {
 		t.Errorf("command %q does not keep the container alive", joined)
 	}
+	// PID 1 ignores signals it has no handler for, so without a trap every stop
+	// waits out the full termination grace period before the kubelet SIGKILLs.
+	if !strings.Contains(joined, "trap") {
+		t.Errorf("command %q installs no TERM handler; stop would take the whole grace period", joined)
+	}
+	// A foreground sleep is not interrupted by the trap, so the handler would
+	// not run until the sleep finished.
+	if !strings.Contains(joined, "wait") {
+		t.Errorf("command %q waits in the foreground, so the trap cannot run: ", joined)
+	}
 }
 
 // Two subPaths, not one. Without the home mount, anything postCreate writes to

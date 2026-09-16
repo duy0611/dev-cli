@@ -22,6 +22,15 @@ import (
 // first start of a container pulls an image that may be gigabytes.
 const rolloutTimeout = 10 * time.Minute
 
+// How long to wait for a pod to disappear after scaling to zero, and how often
+// to look. The pod handles SIGTERM, so this is normally a second or two; the
+// timeout is generous enough to cover a node under load without hanging a
+// command that will never finish.
+const (
+	terminationTimeout = 2 * time.Minute
+	pollInterval       = 500 * time.Millisecond
+)
+
 // Provider runs containers as Deployments scaled between 0 and 1.
 type Provider struct {
 	cfg  Config
@@ -147,8 +156,14 @@ func (p *Provider) Exec(ctx context.Context, c model.Container, command []string
 	}, args...)
 }
 
-// Stop scales to zero. The PVC, and so the workspace and home directories,
-// survive.
+// Stop scales to zero and waits for the pod to go.
+//
+// The PVC, and so the workspace and home directories, survive.
+//
+// The wait is the point: `kubectl scale` returns as soon as the API server has
+// the new replica count, long before the pod is gone. Returning there would
+// make `stop` report success while the container is still running, and the
+// local provider's `docker stop` does not behave that way.
 func (p *Provider) Stop(ctx context.Context, c model.Container) error {
 	exists, err := p.deploymentExists(ctx, c)
 	if err != nil {
@@ -157,7 +172,10 @@ func (p *Provider) Stop(ctx context.Context, c model.Container) error {
 	if !exists {
 		return nil // already not running, which is what the caller wanted
 	}
-	return p.kube.run(ctx, "scale", "deployment/"+objectName(c), "--replicas=0")
+	if err := p.kube.run(ctx, "scale", "deployment/"+objectName(c), "--replicas=0"); err != nil {
+		return err
+	}
+	return p.waitGone(ctx, c)
 }
 
 // Remove deletes everything belonging to the container, the volume included.
@@ -221,6 +239,31 @@ func (p *Provider) deploymentExists(ctx context.Context, c model.Container) (boo
 		return false, err
 	}
 	return strings.TrimSpace(out) != "", nil
+}
+
+// waitGone blocks until no pod carries this container's labels.
+//
+// Polled rather than `kubectl wait --for=delete`, which errors when nothing
+// matches — the case that is already success here.
+func (p *Provider) waitGone(ctx context.Context, c model.Container) error {
+	deadline := time.Now().Add(terminationTimeout)
+	for {
+		out, err := p.kube.output(ctx, "get", "pods", "-l", selector(c), "-o", "name")
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(out) == "" {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("container %s did not stop within %s", c.Name, terminationTimeout)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(pollInterval):
+		}
+	}
 }
 
 // waitReady blocks until the pod is serving.
