@@ -348,3 +348,69 @@ func TestMergeEnvPrefersRemoteEnv(t *testing.T) {
 		t.Errorf("B = %q, want the containerEnv value kept", got["B"])
 	}
 }
+
+// The real failure this replaces: podman reported "exit status 125" for a
+// registry that had simply never been logged in to.
+func TestPushRejectionNamesTheLoginCommand(t *testing.T) {
+	s := newStubs(t)
+	s.installScript(t, devcontainerBin, "")
+	withoutBuildx(t, s)
+	s.installScript(t, podmanBin, `case "$1 $2" in
+  "buildx version") echo "podman version 5.3.1" ;;
+  "push "*)
+    echo 'Error: trying to reuse blob sha256:08bc at destination: Requesting bearer token: invalid status code from registry 403 (Forbidden)' >&2
+    exit 125
+    ;;
+esac`)
+
+	err := buildAndPush(context.Background(), "/p", "ghcr.io/duy0611/x:latest",
+		"linux/"+hostArch, false, io.Discard)
+	if err == nil {
+		t.Fatal("buildAndPush succeeded against a registry that refused the push")
+	}
+	for _, want := range []string{"podman login", "ghcr.io"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+}
+
+// A failure that is not about credentials must not be reported as one.
+func TestPushFailureQuotesTheRegistry(t *testing.T) {
+	s := newStubs(t)
+	s.installScript(t, devcontainerBin, "")
+	withoutBuildx(t, s)
+	s.installScript(t, podmanBin, `case "$1 $2" in
+  "buildx version") echo "podman version 5.3.1" ;;
+  "push "*) echo 'Error: name unknown: repository does not exist' >&2; exit 125 ;;
+esac`)
+
+	err := buildAndPush(context.Background(), "/p", "ghcr.io/duy0611/x:latest",
+		"linux/"+hostArch, false, io.Discard)
+	if err == nil {
+		t.Fatal("buildAndPush succeeded against a failing push")
+	}
+	if strings.Contains(err.Error(), "login") {
+		t.Errorf("error %q blames credentials for something else", err)
+	}
+	if !strings.Contains(err.Error(), "repository does not exist") {
+		t.Errorf("error %q drops the registry's explanation", err)
+	}
+}
+
+func TestRegistryHost(t *testing.T) {
+	cases := map[string]string{
+		"ghcr.io/duy0611/x:latest":        "ghcr.io",
+		"europe-docker.pkg.dev/p/dev/x:1": "europe-docker.pkg.dev",
+		"localhost:5000/x":                "localhost:5000",
+		"localhost/x":                     "localhost",
+		// A Docker Hub namespace, not a host: `docker login` takes no argument.
+		"duy0611/x:latest": "",
+		"alpine":           "",
+	}
+	for image, want := range cases {
+		if got := registryHost(image); got != want {
+			t.Errorf("registryHost(%q) = %q, want %q", image, got, want)
+		}
+	}
+}

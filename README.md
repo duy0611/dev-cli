@@ -101,6 +101,22 @@ PersistentVolumeClaim and a Secret, all labelled `dev.workspace` and
 | `shell` / `exec` / `agent` | `kubectl exec` |
 | `sync` | stream the host folder in as a tar |
 
+### Before the first create
+
+The builder has to be logged in to the registry, and the **cluster** has to be
+able to pull from it. They are separate credentials:
+
+```sh
+podman login ghcr.io -u USER      # or: docker login ghcr.io
+```
+
+A push to a registry that has never seen a credential fails with a 403 on the
+token request; `dev` recognises that and prints the login command.
+
+If the resulting package is private, the nodes need a pull secret of their own —
+create one in the namespace and name it with `--image-pull-secret`, or the pod
+sits in `ImagePullBackOff` and `create` fails waiting for it.
+
 ### Things worth knowing
 
 **Your files are a copy, not a mount.** `create` streams the folder into the

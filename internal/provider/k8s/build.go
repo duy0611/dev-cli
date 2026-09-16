@@ -176,13 +176,61 @@ func buildAndPush(ctx context.Context, folder, image, platform string, noCache b
 		return nil // --push already sent it
 	}
 
+	// Tee'd rather than just streamed: the operator wants to watch the upload,
+	// and the failure needs to be read afterwards to recognise a rejection the
+	// exit status alone does not describe.
+	var captured bytes.Buffer
 	push := exec.CommandContext(ctx, b.engine, "push", image)
 	push.Stdout = io.Discard
-	push.Stderr = progressOr(progress)
+	push.Stderr = io.MultiWriter(progressOr(progress), &captured)
 	if err := push.Run(); err != nil {
-		return fmt.Errorf("pushing %s: %w", image, err)
+		return pushError(b.engine, image, captured.String(), err)
 	}
 	return nil
+}
+
+// pushError turns a rejected push into something actionable.
+//
+// A registry that has never seen a credential answers the token request with
+// 401 or 403, and the engine surfaces that as "exit status 125" — true, and
+// useless. The registry is in the image name, so the command to fix it can be
+// spelled out.
+func pushError(engine, image, stderr string, err error) error {
+	if isAuthFailure(stderr) {
+		return fmt.Errorf("pushing %s: the registry refused the credentials. Run: %s login %s",
+			image, engine, registryHost(image))
+	}
+	if msg := strings.TrimSpace(lastLine(stderr)); msg != "" {
+		return fmt.Errorf("pushing %s: %s", image, msg)
+	}
+	return fmt.Errorf("pushing %s: %w", image, err)
+}
+
+func isAuthFailure(stderr string) bool {
+	s := strings.ToLower(stderr)
+	for _, sign := range []string{"401", "403", "unauthorized", "forbidden", "authentication required"} {
+		if strings.Contains(s, sign) {
+			return true
+		}
+	}
+	return false
+}
+
+// registryHost is the part of an image name a login applies to.
+//
+// An image with no registry is a Docker Hub name, where the host is implicit
+// and `login` takes no argument.
+func registryHost(image string) string {
+	head, _, found := strings.Cut(image, "/")
+	if !found {
+		return ""
+	}
+	// Docker's rule: the first segment is a registry only if it looks like a
+	// host. Otherwise it is a Docker Hub namespace.
+	if strings.ContainsAny(head, ".:") || head == "localhost" {
+		return head
+	}
+	return ""
 }
 
 // requireHostPlatform refuses a build that would quietly produce the wrong
