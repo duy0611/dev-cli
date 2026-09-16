@@ -3,6 +3,8 @@
 package smoke
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +19,10 @@ const (
 	envContext   = "DEV_SMOKE_K8S_CONTEXT"
 	envRegistry  = "DEV_SMOKE_REGISTRY"
 	envNamespace = "DEV_SMOKE_K8S_NAMESPACE" // optional; defaults to "default"
+	// Optional, and only needed when the pushed image is private. Without it
+	// the nodes cannot pull and the pod sits in ImagePullBackOff until create
+	// gives up.
+	envPullSecret = "DEV_SMOKE_K8S_PULL_SECRET"
 )
 
 // postCreate writes a file the test looks for, which is how "the lifecycle
@@ -45,9 +51,10 @@ func TestK8sSmoke(t *testing.T) {
 	if namespace == "" {
 		namespace = "default"
 	}
-	// docker, because the image is still built on the host by the devcontainer
-	// CLI; kubectl, because everything after that is a kubectl call.
-	requireBinaries(t, "devcontainer", "docker", "kubectl")
+	// The image is still built on the host, by docker or podman; kubectl does
+	// everything after that.
+	requireBinaries(t, "devcontainer", "kubectl")
+	requireAnyBinary(t, "docker", "podman")
 
 	t.Setenv("DEV_STATE", t.TempDir())
 	bin := buildBinary(t)
@@ -72,11 +79,18 @@ func TestK8sSmoke(t *testing.T) {
 		_ = exec.Command(bin, "container", "remove", k8sContainer, "--force").Run()
 	})
 
-	dev("provider", "configure", k8sProvider,
+	configure := []string{"provider", "configure", k8sProvider,
 		"--kind", "k8s",
 		"--context", kubeContext,
 		"--namespace", namespace,
-		"--registry", registry)
+		"--registry", registry,
+	}
+	// Passed only when set: an empty --image-pull-secret would put a reference
+	// to a secret named "" in the pod spec.
+	if pullSecret := os.Getenv(envPullSecret); pullSecret != "" {
+		configure = append(configure, "--image-pull-secret", pullSecret)
+	}
+	dev(configure...)
 	dev("workspace", "init", k8sWorkspace, "--provider", k8sProvider)
 	dev("workspace", "set", "GREETING", "literal:hello")
 
@@ -143,17 +157,15 @@ func k8sFixtureProject(t *testing.T) string {
 
 // slugOf mirrors the provider's label value for a container name.
 //
-// Duplicated rather than imported: this test drives the built binary from
+// Reimplemented rather than imported: this test drives the built binary from
 // outside, and importing the package would let a wrong slug agree with itself.
-// Both names here are already lowercase and hyphenated, so only the hash is
-// interesting.
+// Both names used here are already lowercase and hyphenated, so only the hash
+// matters.
+//
+// Computed in Go rather than shelled out to sha256sum, which macOS does not
+// have — that spells the label wrong, finds no objects, and reports it as the
+// provider having failed to label them.
 func slugOf(name string) string {
-	out, err := exec.Command("sh", "-c",
-		`printf '%s' `+shellQuote(name)+` | sha256sum | cut -c1-6`).Output()
-	if err != nil {
-		return name
-	}
-	return name + "-" + strings.TrimSpace(string(out))
+	sum := sha256.Sum256([]byte(name))
+	return name + "-" + hex.EncodeToString(sum[:])[:6]
 }
-
-func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }

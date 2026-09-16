@@ -95,6 +95,18 @@ func TestSmoke(t *testing.T) {
 
 // --- helpers -------------------------------------------------------------------
 
+// requireAnyBinary skips unless at least one of the alternatives is present,
+// for a job either of them can do.
+func requireAnyBinary(t *testing.T, names ...string) {
+	t.Helper()
+	for _, n := range names {
+		if _, err := exec.LookPath(n); err == nil {
+			return
+		}
+	}
+	t.Skipf("none of %v is on PATH", names)
+}
+
 func requireBinaries(t *testing.T, names ...string) {
 	t.Helper()
 	for _, n := range names {

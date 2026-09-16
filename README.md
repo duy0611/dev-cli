@@ -245,9 +245,12 @@ gated on being told where to run:
 ```sh
 DEV_SMOKE_K8S_CONTEXT=my-cluster \
 DEV_SMOKE_REGISTRY=europe-docker.pkg.dev/my-project/dev \
-DEV_SMOKE_K8S_NAMESPACE=sandboxes \
   make smoke
 ```
+
+`DEV_SMOKE_K8S_CONTEXT` and `DEV_SMOKE_REGISTRY` are what turn it on.
+`DEV_SMOKE_K8S_NAMESPACE` (default `default`) and `DEV_SMOKE_K8S_PULL_SECRET`
+are optional — the latter only matters when the pushed image is private.
 
 Provider tests run against stub `devcontainer` and `docker` executables placed
 on a temporary `PATH`, which is how the one invariant that breaks silently gets
