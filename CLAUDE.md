@@ -26,14 +26,24 @@ make clean
 
 `make lint && make test` is the fast loop and runs anywhere Go does. `make
 smoke` needs the `devcontainer` CLI, an engine, and network for an image pull;
-it skips rather than fails without them.
+it skips rather than fails without them. Its Kubernetes half is gated
+separately, on `DEV_SMOKE_K8S_CONTEXT` and `DEV_SMOKE_REGISTRY` both being set
+(`DEV_SMOKE_K8S_NAMESPACE` and `DEV_SMOKE_K8S_PULL_SECRET` are optional), so a
+host with an engine still skips it until told which cluster to use.
+
+`DEV_STATE` relocates the database, which is how a command is run without
+touching the operator's own state:
+
+```sh
+DEV_STATE=$(mktemp -d) dist/dev workspace list
+```
 
 ## Architecture
 
 ```
-cmd/dev/              main; returns an exit code, never calls os.Exit itself
+cmd/dev/              main; exits with the code cli.Execute returns
 internal/cli/         one file per noun; arg parsing and orchestration only
-internal/store/       SQLite, embedded migrations, all persistence
+internal/store/       SQLite, all persistence; schema in migrations/*.sql
 internal/model/       plain persisted types, no behaviour
 internal/provider/    Provider interface + registry
 internal/provider/local/  devcontainer CLI and docker adapter
@@ -43,6 +53,7 @@ internal/env/         assembles the env a container launches with
 internal/agent/       which agents exist and how to invoke them
 internal/dcconfig/    locating a project's .devcontainer config
 internal/xpath/       physical paths, name and env-key validation
+test/smoke/           end-to-end, behind the `smoke` build tag
 ```
 
 `internal/cli` orchestrates; the work lives in the packages it calls. A command
@@ -161,6 +172,11 @@ Beyond the invariants above, these are the parts that bite:
   the failure it prevents. Match that density. Most of what is hard here is
   container and platform trivia, and an uncommented workaround reads as
   removable.
+- **Prompt only at a terminal.** `provider configure` asks for whatever its
+  flags left empty, but `isTerminal(os.Stdin)` guards the prompting: a scripted
+  run has to fail naming the missing flag rather than block on a question
+  nobody will see. Every prompted value has a flag, and a flag already given is
+  never asked about again.
 - **Tests for external tools use stub executables on a temporary `PATH`**, not
   an interface with a mock. See `internal/provider/local/local_test.go`.
 - **Store tests use a temp file, never `:memory:`** — that database is

@@ -81,6 +81,11 @@ dev workspace init cloud --provider prod
 dev container create api --folder ~/code/api
 ```
 
+Every setting it asks for is also a flag, and a flag given on the command line
+is not asked about again. The prompting happens only when stdin is a terminal:
+run it from a script and a missing setting is an error naming the flag, rather
+than a question nobody is there to answer.
+
 The devcontainer CLI speaks Docker only, so it cannot start a pod. `dev` uses it
 for the two things it alone can do — reading the merged configuration, and
 building an image from your Features and Dockerfile — and drives `kubectl` for
@@ -164,6 +169,10 @@ and `start`.
 
 ```
 dev provider configure NAME --kind local
+dev provider configure NAME --kind k8s [--context CTX] [--namespace NS]
+                                       [--registry PREFIX] [--platform linux/amd64]
+                                       [--storage-size 20Gi] [--storage-class SC]
+                                       [--service-account SA] [--image-pull-secret NAME]
 dev provider list
 dev provider remove NAME
 
@@ -177,7 +186,9 @@ dev workspace remove NAME
 
 dev container create NAME --folder PATH [--no-start]
 dev container list [--all]
-dev container start|stop|remove|rebuild NAME
+dev container start|stop NAME
+dev container remove NAME [--force]
+dev container rebuild NAME [--no-cache]
 dev container logs NAME [-f]
 dev container shell NAME
 dev container exec NAME -- CMD [ARGS...]
