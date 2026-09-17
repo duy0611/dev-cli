@@ -257,33 +257,38 @@ stops being repeated by the CLI underneath.
 Invariant 1 is untouched: both `--id-label` values are still passed on every
 `up` and `exec`, still built only in `internal/provider/local/label.go`.
 
-### Unverified: `--config` versus `--override-config`
+### Settled: `--config` is enough
 
-The devcontainer CLI's help for `--override-config` says it is "required when
-there is no devcontainer.json otherwise", which suggests plain `--config` may
-not be enough for a folder that has no `.devcontainer` directory of its own.
+The CLI's help for `--override-config` says it is "required when there is no
+devcontainer.json otherwise", which read as though plain `--config` might not
+serve a folder with no `.devcontainer` of its own. It does. From the installed
+CLI (v0.89.0), in the function that resolves which configuration to load:
 
-Against that reading: running
-
-```sh
-devcontainer read-configuration --workspace-folder ./proj \
-  --config ../cfgdir/devcontainer.json --log-format json
+```js
+Q = t || (E ? await wr(g, E.configFolderPath) || (i ? kt(...) : void 0) : i)
 ```
 
-with `./proj` empty, the CLI read the external file and got as far as
-`docker ps` before failing on the missing engine. Its `docker ps` filter named
-the external path as `devcontainer.config_file`, so `--config` was honoured.
-The same command with `--override-config` named the *folder's* non-existent
-path in that filter instead.
+`t` is `--config` and `i` is `--override-config`. When `--config` is given it is
+used as-is and the workspace folder is never searched, so a folder with no
+configuration of its own is not a problem. A live `read-configuration` agrees:
+with an empty folder and an external `--config`, the CLI's own `docker ps`
+filter named the external path as `devcontainer.config_file`, and got as far as
+the engine before failing on the engine being absent.
 
-That is good evidence and not proof; the machine this was probed on has no
-docker, podman or kubectl, so no real `up` was run.
+Two constraints came out of the same reading, and both are already satisfied:
 
-**First implementation step is the smoke test that settles it.** If `--config`
-turns out not to work for a folder with no configuration of its own, the
-fallback is `--override-config` on `up`, `exec` and `read-configuration`, and
-`--config` on `build` — `build` is the one subcommand with no
-`--override-config`, and only the k8s provider calls it.
+- The file must be named `devcontainer.json` or `.devcontainer.json`; any other
+  name is rejected outright. The materialised path ends in `devcontainer.json`.
+- With `--config`, the container is labelled with *that* path as
+  `devcontainer.config_file`. A materialised path is in a fresh temporary
+  directory each invocation, so a lookup inferred from it would miss the
+  container every time. Nothing infers: both `--id-label` values are passed on
+  every `up` and `exec`. That invariant is what makes this design safe, rather
+  than an unrelated precaution.
+
+Neither `up` nor the created container was exercised end to end: the machine
+this was settled on has no docker, podman or kubectl. The smoke test in the
+implementation plan is what closes that gap, on a host that has an engine.
 
 ## Testing
 
