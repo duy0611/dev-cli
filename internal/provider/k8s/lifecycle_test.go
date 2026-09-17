@@ -88,7 +88,7 @@ func lifecycleStubs(t *testing.T, markerExists bool) *stubs {
 	if markerExists {
 		marker = "true"
 	}
-	s.installScript(t, kubectlBin, `case "$*" in
+	s.installKubectl(t, `case "$*" in
   *test*dev-lifecycle-done*)
     [ `+marker+` = true ] || exit 1
     ;;
@@ -164,7 +164,7 @@ func TestRebuildClearsTheMarkerAndReRuns(t *testing.T) {
 // failure much later.
 func TestLifecycleStopsAtTheFirstFailure(t *testing.T) {
 	s := newStubs(t)
-	s.installScript(t, kubectlBin, `case "$*" in
+	s.installKubectl(t, `case "$*" in
   *test*dev-lifecycle-done*) exit 1 ;;
   *"echo on"*) echo "boom" >&2; exit 3 ;;
   *"get deployment"*"-o name"*) echo deployment.apps/dev-x ;;
@@ -199,7 +199,7 @@ esac`)
 // them.
 func TestFirstCreateSyncsBeforeLifecycle(t *testing.T) {
 	s := newStubs(t)
-	s.installScript(t, kubectlBin, `case "$*" in
+	s.installKubectl(t, `case "$*" in
   *test*dev-lifecycle-done*) exit 1 ;;
   *"get deployment"*"-o name"*) ;;
   *"get deployment"*"-o json"*) ;;

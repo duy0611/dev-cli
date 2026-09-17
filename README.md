@@ -275,9 +275,9 @@ DEV_SMOKE_REGISTRY=europe-docker.pkg.dev/my-project/dev \
 `DEV_SMOKE_K8S_NAMESPACE` (default `default`) and `DEV_SMOKE_K8S_PULL_SECRET`
 are optional — the latter only matters when the pushed image is private.
 
-Provider tests run against stub `devcontainer` and `docker` executables placed
-on a temporary `PATH`, which is how the one invariant that breaks silently gets
-checked: every `up` and `exec` for a container must pass the same
+Provider tests run against stub `devcontainer` and `docker` executables on a
+`PATH` that holds nothing else, which is how the one invariant that breaks
+silently gets checked: every `up` and `exec` for a container must pass the same
 `--id-label dev.workspace=… --id-label dev.container=…` pair. Spell them
 differently anywhere and the CLI looks up a container that does not exist, then
 creates a second one beside it.

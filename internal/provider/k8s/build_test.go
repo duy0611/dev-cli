@@ -255,8 +255,25 @@ func requireRealCLI(t *testing.T) {
 	if _, err := exec.LookPath(devcontainerBin); err != nil {
 		t.Skipf("%s is not on PATH", devcontainerBin)
 	}
+
+	host := os.Getenv("PATH")
 	s := newStubs(t)
-	s.install(t, dockerBin, "", 0)
+	// The stub directory still wins, but the host's PATH goes back on the end:
+	// this is the one test that wants the real CLI, and the CLI is a node
+	// program that has to be able to find node.
+	t.Setenv("PATH", os.Getenv("PATH")+string(os.PathListSeparator)+host)
+
+	// Told nothing about the image, the CLI fetches its metadata from the
+	// registry instead, which makes `make test` need the network and fail with
+	// "Unexpected end of JSON input" wherever a registry is unreachable or
+	// rate-limiting. One inspect answer keeps the whole thing local. The
+	// fields are the shape of `docker inspect`, not the image's real values:
+	// read-configuration never looks at them.
+	s.installScript(t, dockerBin, `case "$1 $2" in
+  "inspect --type")
+    printf '%s' '[{"Id":"sha256:0000000000000000000000000000000000000000000000000000000000000000","Config":{"Env":[],"Labels":{},"User":""},"Architecture":"arm64","Os":"linux"}]'
+    ;;
+esac`)
 }
 
 func TestReadConfigurationAgainstTheRealCLI(t *testing.T) {

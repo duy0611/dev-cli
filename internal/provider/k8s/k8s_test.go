@@ -28,7 +28,7 @@ func clusterStubs(t *testing.T, deployExists bool) *stubs {
 	if deployExists {
 		exists = "true"
 	}
-	s.installScript(t, kubectlBin, `case "$*" in
+	s.installKubectl(t, `case "$*" in
   *"get deployment"*"-o name"*)
     [ `+exists+` = true ] && echo deployment.apps/dev-x
     ;;
@@ -179,7 +179,7 @@ func TestStopWaitsForThePodToGo(t *testing.T) {
 	s := newStubs(t)
 	// A pod that is still terminating on the first look and gone on the second.
 	counter := filepath.Join(t.TempDir(), "n")
-	s.installScript(t, kubectlBin, `case "$*" in
+	s.installKubectl(t, `case "$*" in
   *"get deployment"*"-o name"*) echo deployment.apps/dev-x ;;
   *"get pods"*)
     if [ -f '`+counter+`' ]; then exit 0; fi

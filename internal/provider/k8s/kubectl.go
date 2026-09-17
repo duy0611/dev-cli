@@ -3,10 +3,12 @@ package k8s
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
 	"strings"
+	"syscall"
 )
 
 const kubectlBin = "kubectl"
@@ -133,31 +135,48 @@ func (k kubectl) pipeInto(ctx context.Context, produce func(io.Writer) error, ex
 	}
 	args := k.args(extra...)
 
-	pr, pw := io.Pipe()
 	var stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, kubectlBin, args...)
-	cmd.Stdin = pr
 	cmd.Stdout = io.Discard
 	cmd.Stderr = &stderr
 
+	// StdinPipe, not an io.Pipe handed to cmd.Stdin. os/exec drains an
+	// io.Reader from a goroutine of its own, and that goroutine gives up the
+	// moment the command exits — leaving the producer blocked on a pipe with no
+	// reader, forever. A real pipe fails the write with EPIPE instead, which is
+	// what a pod that died mid-sync should look like.
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+
 	if err := cmd.Start(); err != nil {
-		_ = pw.Close()
+		_ = stdin.Close()
 		return kubectlError(args, stderr.String(), err)
 	}
 
-	produceErr := produce(pw)
-	// Closing the writer is what tells kubectl the stream ended; without it the
-	// command waits forever.
-	_ = pw.CloseWithError(produceErr)
-
+	produceErr := produce(stdin)
+	// Closing is what tells kubectl the stream ended; without it the command
+	// waits forever.
+	closeErr := stdin.Close()
 	runErr := cmd.Wait()
-	if produceErr != nil {
+
+	// EPIPE is the one producer error that is not the cause of anything: it
+	// means kubectl had already stopped reading, so whatever made it stop is
+	// the thing worth reporting.
+	if produceErr != nil && !errors.Is(produceErr, syscall.EPIPE) {
 		return produceErr
 	}
 	if runErr != nil {
 		return kubectlError(args, stderr.String(), runErr)
 	}
-	return nil
+	if produceErr != nil {
+		// Exited cleanly having taken none of the archive. Returning nil would
+		// claim a copy that never landed.
+		return fmt.Errorf("%s exited before the archive was sent: %s",
+			kubectlBin, lastLine(stderr.String()))
+	}
+	return closeErr
 }
 
 // kubectlError quotes kubectl's own stderr, which is where it explains a

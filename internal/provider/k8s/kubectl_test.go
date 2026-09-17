@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,10 +14,17 @@ import (
 // one argument per line, and its stdin.
 type stubs struct{ dir string }
 
+// newStubs replaces PATH with a directory of the test's own.
+//
+// Replaces, not precedes: a stub PATH that still ends in the host's leaves
+// every binary the test did not install resolving to the operator's own. The
+// builder probes docker and podman, so a machine with podman installed ran the
+// real one — pushing to a real registry from a unit test, and making "no docker
+// on PATH" untrue. A test that wants a host binary asks for it by name.
 func newStubs(t *testing.T) *stubs {
 	t.Helper()
 	dir := t.TempDir()
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("PATH", dir)
 	return &stubs{dir: dir}
 }
 
@@ -46,7 +54,8 @@ func (s *stubs) write(t *testing.T, name, stdout string, code int, readStdin boo
 		": > '" + argv + "'\n" +
 		"for a in \"$@\"; do printf '%s\\n' \"$a\" >> '" + argv + "'; done\n"
 	if readStdin {
-		script += "cat > '" + stdin + "'\n"
+		// Absolute: PATH holds nothing but this directory, by design.
+		script += "/bin/cat > '" + stdin + "'\n"
 	}
 	if stdout != "" {
 		script += "printf '%s' '" + stdout + "'\n"
@@ -71,6 +80,17 @@ func (s *stubs) installScript(t *testing.T, name, body string) {
 	if err := os.WriteFile(filepath.Join(s.dir, name), []byte(script), 0o755); err != nil {
 		t.Fatalf("writing stub %s: %v", name, err)
 	}
+}
+
+// installKubectl writes a logging kubectl stub that drains stdin first.
+//
+// Draining matters because Sync streams a tar into `kubectl exec`: a stub that
+// exits without reading took none of the archive, which pipeInto reports rather
+// than ignores. Harmless for the calls that send nothing — os/exec gives those
+// /dev/null, which cat reaches the end of at once.
+func (s *stubs) installKubectl(t *testing.T, body string) {
+	t.Helper()
+	s.installScript(t, kubectlBin, "/bin/cat > /dev/null\n"+body)
 }
 
 // calls returns each invocation of a logging stub, joined into one string.
@@ -303,4 +323,47 @@ func contains(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// A binary the test never installed must not resolve to the host's own.
+//
+// The stubs used to precede PATH rather than replace it, so a machine with
+// podman installed answered selectBuilder's probe with the real thing: the
+// "docker without buildx" tests pushed to the operator's registry, and "no
+// docker on PATH" was never true.
+func TestStubsHideBinariesTheTestDidNotInstall(t *testing.T) {
+	host := t.TempDir()
+	script := filepath.Join(host, podmanBin)
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("writing a host binary: %v", err)
+	}
+	t.Setenv("PATH", host+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	newStubs(t)
+
+	if path, err := exec.LookPath(podmanBin); err == nil {
+		t.Errorf("%s resolved to %s; the test never installed it", podmanBin, path)
+	}
+}
+
+// pipeInto must not wait forever on a command that exits without reading.
+//
+// cmd.Stdin used to be an io.Pipe, which os/exec drains from a goroutine of its
+// own. When the command exits early that goroutine gives up, and the producer
+// then blocks on a pipe with no reader — a hang, in a path whose whole job is
+// streaming a tar into a pod that may have died.
+func TestPipeIntoFailsWhenTheCommandStopsReading(t *testing.T) {
+	s := newStubs(t)
+	s.installScript(t, kubectlBin, "") // exits at once, stdin untouched
+
+	err := testKubectl().pipeInto(context.Background(), func(w io.Writer) error {
+		// Bigger than any pipe buffer, so the write cannot quietly land in the
+		// kernel and hide the fact that nothing read it.
+		_, err := w.Write(make([]byte, 1<<20))
+		return err
+	}, "exec", "-i", "deployment/x", "--", "tar", "-x")
+
+	if err == nil {
+		t.Fatal("pipeInto reported success after the archive went nowhere")
+	}
 }

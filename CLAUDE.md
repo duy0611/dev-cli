@@ -160,6 +160,12 @@ Beyond the invariants above, these are the parts that bite:
 - **Every kubectl call carries `--context` and `--namespace`**, built in one
   place. A call that reaches the wrong cluster does not fail; it succeeds
   somewhere else.
+- **`pipeInto` streams through `cmd.StdinPipe`, not an `io.Pipe` on
+  `cmd.Stdin`.** os/exec drains an `io.Reader` from a goroutine of its own, and
+  that goroutine gives up when the command exits — leaving the producer blocked
+  on a pipe with no reader, so a pod that dies mid-sync hangs instead of
+  failing. A real pipe gives EPIPE. An EPIPE with a clean exit is still an
+  error: kubectl that took none of the archive did not complete a copy.
 - **Commands are shell-quoted, then quoted again inside `su -c`.** A test stub
   matching `'test' '-f'` will never fire — match the path instead. This cost
   three wrong tests before it was noticed.
@@ -190,7 +196,17 @@ Beyond the invariants above, these are the parts that bite:
   one list they walk, and `-` is the only way to empty an optional setting now
   that an absent flag means "keep".
 - **Tests for external tools use stub executables on a temporary `PATH`**, not
-  an interface with a mock. See `internal/provider/local/local_test.go`.
+  an interface with a mock. See `internal/provider/local/local_test.go`. The
+  k8s harness *replaces* `PATH` with its stub directory instead of preceding
+  the host's: the builder probes docker and then podman, so on a machine that
+  has podman a leaked host binary becomes the one under test — it answered the
+  BuildKit probe and pushed to a real registry from a unit test. A test that
+  wants a host binary asks for it by name, as `requireRealCLI` does.
+- **A unit test may not need the network either.** The real devcontainer CLI
+  asks the engine for an image's metadata and, told nothing, fetches it from
+  the registry instead — so a stub docker that answers `inspect --type image`
+  with silence makes `make test` fail wherever a registry is unreachable or
+  rate-limiting, with a `SyntaxError` from inside the CLI's own JavaScript.
 - **Store tests use a temp file, never `:memory:`** — that database is
   per-connection, and the pool hands the migration to one connection and the
   query to another.
