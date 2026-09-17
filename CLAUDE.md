@@ -52,6 +52,7 @@ internal/secret/      spec -> value: literal, keychain, op
 internal/env/         assembles the env a container launches with
 internal/agent/       which agents exist and how to invoke them
 internal/dcconfig/    locating a project's .devcontainer config
+internal/dcgen/       generating one: the tool catalog, render, reverse map
 internal/xpath/       physical paths, name and env-key validation
 test/smoke/           end-to-end, behind the `smoke` build tag
 ```
@@ -119,9 +120,17 @@ provider bind-mounts the folder, so a no-op `Sync` there would be a lie.
    `provider remove` already refuses while a workspace names it, which is what
    makes that route safe without a second copy of the rule.
 
-9. **Do not edit a project's `devcontainer.json`.** A folder without one is an
-   error, and a missing agent is reported as something to add to the project,
-   not something `dev` installs. The project owns its container definition.
+9. **Do not write into a project's folder.** `dev` never creates or edits a
+   `devcontainer.json` inside a project, and a missing agent is reported as
+   something to add to the project, not something `dev` installs. A folder that
+   ships its own configuration always wins. A folder with none can still be
+   run: `--generate` renders a base Ubuntu configuration from the
+   `internal/dcgen` catalog and stores it on the container row, where it
+   cascades away with the workspace and travels to Postgres with the rest of
+   the schema. The devcontainer CLI only takes a path, so that configuration is
+   materialised to a temporary file per invocation and passed as `--config` —
+   which is why every `model.Container` reaching a provider has a usable
+   `ConfigPath` and neither provider knows where it came from.
 
 ## Kubernetes provider
 

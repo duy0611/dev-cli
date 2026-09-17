@@ -380,3 +380,30 @@ func TestContainerRoundTripsAGeneratedConfig(t *testing.T) {
 		t.Errorf("ListContainers lost the generated config: %+v", list)
 	}
 }
+
+// Storing the configuration on the row is what makes this true: a file under
+// the state directory would outlive the workspace that owned it.
+func TestDeletingAWorkspaceTakesTheGeneratedConfig(t *testing.T) {
+	s := openTest(t)
+	seed(t, s)
+
+	c := model.Container{
+		Name: "demo", WorkspaceName: "ws",
+		SourceKind: model.SourceFolder, Source: "/tmp/demo",
+		GeneratedConfig: "{\"name\":\"demo\"}\n",
+	}
+	if err := s.CreateContainer(c); err != nil {
+		t.Fatalf("CreateContainer: %v", err)
+	}
+	if err := s.DeleteWorkspace("ws"); err != nil {
+		t.Fatalf("DeleteWorkspace: %v", err)
+	}
+
+	list, err := s.ListContainers("")
+	if err != nil {
+		t.Fatalf("ListContainers: %v", err)
+	}
+	if len(list) != 0 {
+		t.Errorf("the container outlived its workspace: %+v", list)
+	}
+}

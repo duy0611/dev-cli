@@ -181,3 +181,52 @@ func dockerPS(t *testing.T, args ...string) []string {
 	}
 	return ids
 }
+
+// A folder with no configuration of its own is the whole point of --generate,
+// so the fixture is a bare directory.
+func TestSmokeGeneratedConfig(t *testing.T) {
+	requireBinaries(t, "devcontainer", "docker")
+
+	state := t.TempDir()
+	t.Setenv("DEV_STATE", state)
+
+	bin := buildBinary(t)
+	project := t.TempDir() // deliberately empty
+
+	dev := func(args ...string) string {
+		t.Helper()
+		return run(t, bin, args...)
+	}
+
+	const name = "dev-smoke-gen"
+	t.Cleanup(func() {
+		_ = exec.Command(bin, "container", "remove", name, "--force").Run()
+	})
+
+	dev("provider", "configure", "dev-smoke-gen-local", "--kind", "local")
+	dev("workspace", "init", "dev-smoke-gen-ws", "--provider", "dev-smoke-gen-local")
+
+	t.Log("creating a generated container; the first run pulls a base image and installs features")
+	dev("container", "create", name, "--folder", project, "--generate", "--tools", "jq")
+
+	// The tool the operator asked for has to actually be in the container: a
+	// feature reference that resolves is not the same as one that installs.
+	if out := dev("container", "exec", name, "--", "jq", "--version"); !strings.Contains(out, "jq") {
+		t.Errorf("jq is not installed in the generated container: %q", out)
+	}
+
+	// The project folder is dev's to read, never to write.
+	entries, err := os.ReadDir(project)
+	if err != nil {
+		t.Fatalf("reading the project folder: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("dev wrote into the project folder: %v", entries)
+	}
+
+	if out := dev("container", "config", "show", name); !strings.Contains(out, "apt-get-packages") {
+		t.Errorf("config show did not print the stored configuration:\n%s", out)
+	}
+
+	dev("container", "remove", name)
+}

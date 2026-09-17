@@ -8,9 +8,12 @@ import (
 	"path/filepath"
 )
 
-// ErrNoConfig means the folder ships no devcontainer configuration. In this
-// tool that is a hard error, never a cue to generate one: the project owns its
-// container definition.
+// ErrNoConfig means the folder ships no devcontainer configuration.
+//
+// Not a failure by itself: `container create --generate` renders one instead,
+// into dev's own database. What stays true is that dev never writes into the
+// project — a folder with a configuration owns it, and this package only ever
+// reads.
 var ErrNoConfig = errors.New("no devcontainer config")
 
 // Find returns the devcontainer config file inside folder.

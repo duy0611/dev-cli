@@ -22,7 +22,8 @@ Milestone 2. What works:
 - the **local** provider, driving the `devcontainer` CLI against any
   Docker-compatible engine
 - the **k8s** provider, running containers in a cluster as Deployments
-- containers created **from a folder that ships its own `.devcontainer/`**
+- containers created **from a folder**, using the project's own
+  `.devcontainer/` or a generated one (`--generate`, `dev container tools`)
 - workspaces, and per-workspace settings resolved from literals, the macOS
   Keychain, or the 1Password CLI
 - `claude`, `opencode`, `codex` and `hermes` as agents
@@ -55,9 +56,13 @@ One is active at a time (`dev workspace use`), and every container command takes
 `--workspace` to override it. Container names are unique *within* a workspace, so
 the same project can be running twice under two names.
 
-**Container** — a record pointing at a folder that ships its own
-`.devcontainer/`. A folder without one is an error: the project owns its
-container definition, and `dev` will not write one for it.
+**Container** — a record pointing at a folder. When the folder ships its own
+`.devcontainer/`, that is what runs, untouched. When it ships none,
+`--generate` renders a base Ubuntu configuration from a catalog of tools
+(`dev container tools`) and keeps it in dev's database; at a terminal, `create`
+offers this rather than failing. Either way `dev` writes nothing into the
+project: the configuration it generates is its own, and a folder that has one
+of its own always wins.
 
 **Setting** — one environment variable for a workspace's containers, stored as a
 *spec* rather than a value:
