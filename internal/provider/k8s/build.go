@@ -39,7 +39,7 @@ type Lifecycle struct {
 // their own, and only the CLI knows how to combine them. Its merged form uses
 // plural names holding arrays — onCreateCommands, not onCreateCommand — which
 // is why this does not simply unmarshal devcontainer.json itself.
-func readConfiguration(ctx context.Context, folder string) (DevConfig, Lifecycle, error) {
+func readConfiguration(ctx context.Context, folder, configPath string) (DevConfig, Lifecycle, error) {
 	if err := requireBinary(devcontainerBin); err != nil {
 		return DevConfig{}, Lifecycle{}, err
 	}
@@ -56,6 +56,11 @@ func readConfiguration(ctx context.Context, folder string) (DevConfig, Lifecycle
 		"--workspace-folder", folder,
 		"--include-merged-configuration",
 		"--log-format", "json",
+	}
+	// Passed rather than inferred: a generated configuration lives in a
+	// temporary directory, and the CLI's own lookup only searches the folder.
+	if configPath != "" {
+		args = append(args, "--config", configPath)
 	}
 	if engine != dockerBin {
 		args = append(args, "--docker-path", engine)
@@ -143,7 +148,7 @@ func mergeEnv(containerEnv, remoteEnv map[string]string) map[string]string {
 // own, because producing the wrong architecture silently is the worst outcome
 // available — the pod crash-loops with "exec format error", which says nothing
 // about the build.
-func buildAndPush(ctx context.Context, folder, image, platform string, noCache bool, progress io.Writer) error {
+func buildAndPush(ctx context.Context, folder, configPath, image, platform string, noCache bool, progress io.Writer) error {
 	if err := requireBinary(devcontainerBin); err != nil {
 		return err
 	}
@@ -152,6 +157,12 @@ func buildAndPush(ctx context.Context, folder, image, platform string, noCache b
 
 	args := append([]string{"build", "--workspace-folder", folder, "--image-name", image},
 		b.dockerPathArgs()...)
+	// `build` is the one subcommand with no --override-config, so --config is
+	// both the only option and the right one: given explicitly, it is used as
+	// is and the folder is never searched.
+	if configPath != "" {
+		args = append(args, "--config", configPath)
+	}
 	if noCache {
 		args = append(args, "--no-cache")
 	}

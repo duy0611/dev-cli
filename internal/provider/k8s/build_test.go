@@ -42,7 +42,7 @@ func TestBuildAndPushPassesPlatformAndPush(t *testing.T) {
 	s.install(t, devcontainerBin, "", 0)
 	withBuildx(t, s)
 
-	err := buildAndPush(context.Background(), "/projects/api",
+	err := buildAndPush(context.Background(), "/projects/api", "",
 		"reg.example/dev/ws-api:latest", "linux/amd64", false, io.Discard)
 	if err != nil {
 		t.Fatalf("buildAndPush: %v", err)
@@ -76,7 +76,7 @@ func TestBuildAndPushNoCache(t *testing.T) {
 	s.install(t, devcontainerBin, "", 0)
 	withBuildx(t, s)
 
-	if err := buildAndPush(context.Background(), "/p", "img", "linux/amd64", true, io.Discard); err != nil {
+	if err := buildAndPush(context.Background(), "/p", "", "img", "linux/amd64", true, io.Discard); err != nil {
 		t.Fatalf("buildAndPush: %v", err)
 	}
 	if !contains(s.argv(t, devcontainerBin), "--no-cache") {
@@ -89,7 +89,7 @@ func TestBuildAndPushReportsFailure(t *testing.T) {
 	s.install(t, devcontainerBin, "", 1)
 	withBuildx(t, s)
 
-	err := buildAndPush(context.Background(), "/p", "img", "linux/amd64", false, io.Discard)
+	err := buildAndPush(context.Background(), "/p", "", "img", "linux/amd64", false, io.Discard)
 	if err == nil {
 		t.Fatal("buildAndPush succeeded against a failing CLI")
 	}
@@ -105,7 +105,7 @@ func TestBuildAndPushWithoutBuildx(t *testing.T) {
 	s.installScript(t, devcontainerBin, "")
 	withoutBuildx(t, s)
 
-	err := buildAndPush(context.Background(), "/p", "reg.example/x:latest",
+	err := buildAndPush(context.Background(), "/p", "", "reg.example/x:latest",
 		"linux/"+hostArch, false, io.Discard)
 	if err != nil {
 		t.Fatalf("buildAndPush: %v", err)
@@ -132,7 +132,7 @@ func TestBuildAndPushRefusesCrossArchWithoutBuildx(t *testing.T) {
 		other = "arm64"
 	}
 
-	err := buildAndPush(context.Background(), "/p", "img", "linux/"+other, false, io.Discard)
+	err := buildAndPush(context.Background(), "/p", "", "img", "linux/"+other, false, io.Discard)
 	if err == nil {
 		t.Fatal("buildAndPush built for the wrong architecture without complaint")
 	}
@@ -167,7 +167,7 @@ func TestBuildAndPushPrefersPodmanOverAHostArchBuild(t *testing.T) {
 
 	// The cross-architecture request is the point: without podman this would be
 	// refused outright.
-	err := buildAndPush(context.Background(), "/p", "reg.example/x:latest",
+	err := buildAndPush(context.Background(), "/p", "", "reg.example/x:latest",
 		"linux/"+other, false, io.Discard)
 	if err != nil {
 		t.Fatalf("buildAndPush: %v", err)
@@ -196,7 +196,7 @@ func TestBuildAndPushPrefersDockerBuildxOverPodman(t *testing.T) {
 	withBuildx(t, s)
 	withPodman(t, s)
 
-	if err := buildAndPush(context.Background(), "/p", "img", "linux/amd64", false, io.Discard); err != nil {
+	if err := buildAndPush(context.Background(), "/p", "", "img", "linux/amd64", false, io.Discard); err != nil {
 		t.Fatalf("buildAndPush: %v", err)
 	}
 	build := s.calls(t, devcontainerBin)
@@ -291,7 +291,7 @@ func TestReadConfigurationAgainstTheRealCLI(t *testing.T) {
 	  "postStartCommand": { "a": "echo a", "b": ["sh","-c","echo b"] }
 	}`)
 
-	dev, lc, err := readConfiguration(context.Background(), dir)
+	dev, lc, err := readConfiguration(context.Background(), dir, "")
 	if err != nil {
 		t.Fatalf("readConfiguration: %v", err)
 	}
@@ -328,7 +328,7 @@ func TestReadConfigurationDefaultsTheWorkspaceFolder(t *testing.T) {
 
 	dir := fixture(t, `{"name":"nows","image":"docker.io/library/alpine:3.20"}`)
 
-	dev, _, err := readConfiguration(context.Background(), dir)
+	dev, _, err := readConfiguration(context.Background(), dir, "")
 	if err != nil {
 		t.Fatalf("readConfiguration: %v", err)
 	}
@@ -344,7 +344,7 @@ func TestReadConfigurationNamesMissingDocker(t *testing.T) {
 	s := newStubs(t)
 	s.install(t, devcontainerBin, "{}", 0) // present, so docker is what is missing
 
-	_, _, err := readConfiguration(context.Background(), "/projects/api")
+	_, _, err := readConfiguration(context.Background(), "/projects/api", "")
 	if err == nil {
 		t.Fatal("readConfiguration succeeded with no docker on PATH")
 	}
@@ -380,7 +380,7 @@ func TestPushRejectionNamesTheLoginCommand(t *testing.T) {
     ;;
 esac`)
 
-	err := buildAndPush(context.Background(), "/p", "ghcr.io/duy0611/x:latest",
+	err := buildAndPush(context.Background(), "/p", "", "ghcr.io/duy0611/x:latest",
 		"linux/"+hostArch, false, io.Discard)
 	if err == nil {
 		t.Fatal("buildAndPush succeeded against a registry that refused the push")
@@ -402,7 +402,7 @@ func TestPushFailureQuotesTheRegistry(t *testing.T) {
   "push "*) echo 'Error: name unknown: repository does not exist' >&2; exit 125 ;;
 esac`)
 
-	err := buildAndPush(context.Background(), "/p", "ghcr.io/duy0611/x:latest",
+	err := buildAndPush(context.Background(), "/p", "", "ghcr.io/duy0611/x:latest",
 		"linux/"+hostArch, false, io.Discard)
 	if err == nil {
 		t.Fatal("buildAndPush succeeded against a failing push")
@@ -429,5 +429,42 @@ func TestRegistryHost(t *testing.T) {
 		if got := registryHost(image); got != want {
 			t.Errorf("registryHost(%q) = %q, want %q", image, got, want)
 		}
+	}
+}
+
+// The k8s provider reads the configuration and builds the image through the
+// same CLI, so both have to be told where the configuration is: a generated one
+// lives in a temporary directory, not in the folder.
+func TestReadConfigurationPassesTheConfigPath(t *testing.T) {
+	s := newStubs(t)
+	s.install(t, devcontainerBin, `{"configuration":{},"mergedConfiguration":{}}`, 0)
+	s.install(t, dockerBin, "", 0)
+
+	const cfg = "/tmp/dev-config-x/.devcontainer/devcontainer.json"
+	if _, _, err := readConfiguration(context.Background(), "/projects/api", cfg); err != nil {
+		t.Fatalf("readConfiguration: %v", err)
+	}
+
+	argv := s.argv(t, devcontainerBin)
+	if !hasPair(argv, "--config", cfg) {
+		t.Errorf("read-configuration argv %v is missing --config %s", argv, cfg)
+	}
+}
+
+func TestBuildAndPushPassesTheConfigPath(t *testing.T) {
+	s := newStubs(t)
+	s.install(t, devcontainerBin, "", 0)
+	withBuildx(t, s)
+
+	const cfg = "/tmp/dev-config-x/.devcontainer/devcontainer.json"
+	err := buildAndPush(context.Background(), "/projects/api", cfg,
+		"reg.example/dev/ws-api:latest", "linux/amd64", false, io.Discard)
+	if err != nil {
+		t.Fatalf("buildAndPush: %v", err)
+	}
+
+	argv := s.argv(t, devcontainerBin)
+	if !hasPair(argv, "--config", cfg) {
+		t.Errorf("build argv %v is missing --config %s", argv, cfg)
 	}
 }

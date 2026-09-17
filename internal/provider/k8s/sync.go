@@ -23,7 +23,7 @@ import (
 // agent is running in it; overwriting that automatically would destroy work
 // nobody asked to discard.
 func (p *Provider) Sync(ctx context.Context, c model.Container) error {
-	dev, _, err := readConfiguration(ctx, c.Source)
+	dev, _, err := readConfiguration(ctx, c.Source, c.ConfigPath)
 	if err != nil {
 		return err
 	}

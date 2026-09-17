@@ -82,7 +82,7 @@ type applyOpts struct {
 }
 
 func (p *Provider) apply(ctx context.Context, c model.Container, env []provider.EnvVar, opts applyOpts) error {
-	dev, lc, err := readConfiguration(ctx, c.Source)
+	dev, lc, err := readConfiguration(ctx, c.Source, c.ConfigPath)
 	if err != nil {
 		return err
 	}
@@ -90,7 +90,7 @@ func (p *Provider) apply(ctx context.Context, c model.Container, env []provider.
 	image := imageTag(p.cfg.Registry, c)
 	if opts.build {
 		fmt.Fprintf(os.Stderr, "dev: building %s\n", image)
-		if err := buildAndPush(ctx, c.Source, image, p.cfg.Platform, opts.noCache, os.Stderr); err != nil {
+		if err := buildAndPush(ctx, c.Source, c.ConfigPath, image, p.cfg.Platform, opts.noCache, os.Stderr); err != nil {
 			return err
 		}
 	}
@@ -129,7 +129,7 @@ func (p *Provider) Exec(ctx context.Context, c model.Container, command []string
 	if len(command) == 0 {
 		return fmt.Errorf("no command given")
 	}
-	dev, _, err := readConfiguration(ctx, c.Source)
+	dev, _, err := readConfiguration(ctx, c.Source, c.ConfigPath)
 	if err != nil {
 		return err
 	}
