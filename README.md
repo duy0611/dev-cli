@@ -183,7 +183,7 @@ dev workspace use NAME
 dev workspace list
 dev workspace set KEY SPEC
 dev workspace unset KEY
-dev workspace show
+dev workspace show NAME
 dev workspace remove NAME
 
 dev container create NAME --folder PATH [--no-start]

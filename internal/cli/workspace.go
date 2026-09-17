@@ -287,34 +287,32 @@ func newWorkspaceUnsetCmd(a *app) *cobra.Command {
 }
 
 func newWorkspaceShowCmd(a *app) *cobra.Command {
-	var workspace string
-
-	cmd := &cobra.Command{
-		Use:   "show",
+	return &cobra.Command{
+		Use:   "show NAME",
 		Short: "Show a workspace's settings",
 		Long: "Show a workspace's settings.\n\n" +
+			"Names the workspace outright rather than defaulting to the active one:\n" +
+			"this is the command an operator reads before trusting what a container\n" +
+			"will launch with, and it should not depend on a pointer set elsewhere.\n\n" +
 			"Prints the specs, never the resolved values: a secret that reaches a\n" +
 			"terminal reaches the scrollback and the shell history with it.",
-		Args: noArgs(),
+		Args: exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runWorkspaceShow(a, workspace)
+			return runWorkspaceShow(a, args[0])
 		},
 	}
-	addWorkspaceFlag(cmd, &workspace)
-	return cmd
 }
 
-func runWorkspaceShow(a *app, workspace string) error {
-	name, err := a.workspaceName(workspace)
-	if err != nil {
-		return err
-	}
+func runWorkspaceShow(a *app, name string) error {
 	st, err := a.store()
 	if err != nil {
 		return err
 	}
 	ws, err := st.GetWorkspace(name)
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return notFoundErrorf("no such workspace: %s", name)
+		}
 		return err
 	}
 	settings, err := st.ListSettings(name)
