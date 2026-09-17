@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -75,10 +76,15 @@ func newProviderConfigureCmd(a *app) *cobra.Command {
 		Use:   "configure NAME",
 		Short: "Create or update a provider",
 		Long: "Create or update a provider.\n\n" +
-			"Idempotent on purpose: re-running it with a different --kind is how a\n" +
-			"provider is corrected, which beats deleting one that workspaces already\n" +
-			"reference.\n\n" +
-			"The --context and later flags apply to --kind k8s only.",
+			"Re-running it changes the settings named on the command line and\n" +
+			"leaves the rest as they were.\n\n" +
+			"The kind is the exception: it cannot change. Workspaces keep naming\n" +
+			"the provider, and the containers under them stay in the engine they\n" +
+			"were created in, so a flipped kind would leave records pointing at an\n" +
+			"engine that has never heard of them. Remove the provider and\n" +
+			"configure it again instead.\n\n" +
+			"The --context and later flags apply to --kind k8s only. Pass - as the\n" +
+			"value of an optional one to clear it.",
 		Args: exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runProviderConfigure(a, args[0], kind, k8s)
@@ -99,36 +105,15 @@ func newProviderConfigureCmd(a *app) *cobra.Command {
 	return cmd
 }
 
-func runProviderConfigure(a *app, name, kind string, k8sCfg k8s.Config) error {
+func runProviderConfigure(a *app, name, kind string, flags k8s.Config) error {
 	if err := xpath.ValidateName(name); err != nil {
 		return usageError(err)
 	}
 
-	var config string
-	switch model.ProviderKind(kind) {
-	case model.KindLocal:
-	case model.KindK8s:
-		// Ask for whatever the flags did not supply, but only at a terminal: a
-		// scripted run must fail naming the flag rather than block on a prompt
-		// nobody will see.
-		if isTerminal(os.Stdin) {
-			var err error
-			if k8sCfg, err = promptK8s(context.Background(), a, k8sCfg); err != nil {
-				return err
-			}
-		}
-
-		// Validated and defaulted now rather than at first use: a provider
-		// missing its registry would otherwise look fine until a create spends
-		// a minute building and then pushes nowhere.
-		cfg, err := k8s.ParseConfig(mustJSON(k8sCfg))
-		if err != nil {
-			return usageError(err)
-		}
-		if config, err = cfg.Marshal(); err != nil {
-			return err
-		}
-	default:
+	// Checked before the stored provider is, so a misspelt kind is reported as
+	// one rather than as an attempt to change the kind.
+	pk := model.ProviderKind(kind)
+	if pk != model.KindLocal && pk != model.KindK8s {
 		return usageErrorf("unknown provider kind %q (local, k8s)", kind)
 	}
 
@@ -136,9 +121,52 @@ func runProviderConfigure(a *app, name, kind string, k8sCfg k8s.Config) error {
 	if err != nil {
 		return err
 	}
+
+	// Looked up before anything else is done with the input, for two reasons: a
+	// kind change has to be refused before the operator answers eight prompts,
+	// and the stored settings are what the unanswered ones fall back to.
+	existing, err := existingProvider(st, name, pk)
+	if err != nil {
+		return err
+	}
+
+	var config string
+	if pk == model.KindK8s {
+		var stored k8s.Config
+		if existing.Config != "" {
+			if stored, err = k8s.ParseConfig(existing.Config); err != nil {
+				return err
+			}
+		}
+
+		// Ask for whatever the flags did not supply, but only at a terminal: a
+		// scripted run must fail naming the flag rather than block on a prompt
+		// nobody will see. Either way the stored settings are the fallback, so
+		// both paths change only what was named.
+		if isTerminal(os.Stdin) {
+			p := newPrompter(os.Stdin, a.out)
+			if flags, err = promptK8s(context.Background(), p, flags, stored); err != nil {
+				return err
+			}
+		} else {
+			flags = mergeK8s(flags, stored)
+		}
+
+		// Validated and defaulted now rather than at first use: a provider
+		// missing its registry would otherwise look fine until a create spends
+		// a minute building and then pushes nowhere.
+		cfg, err := k8s.ParseConfig(mustJSON(flags))
+		if err != nil {
+			return usageError(err)
+		}
+		if config, err = cfg.Marshal(); err != nil {
+			return err
+		}
+	}
+
 	if err := st.PutProvider(model.Provider{
 		Name:   name,
-		Kind:   model.ProviderKind(kind),
+		Kind:   pk,
 		Config: config,
 	}); err != nil {
 		return err
@@ -147,55 +175,130 @@ func runProviderConfigure(a *app, name, kind string, k8sCfg k8s.Config) error {
 	return nil
 }
 
+// existingProvider returns the provider being reconfigured, or a zero value
+// when this is a new one.
+//
+// A changed kind is refused rather than applied. Workspaces go on naming the
+// provider and the containers under them stay in the engine they were created
+// in, so a flip leaves records pointing at an engine that has never heard of
+// them — `container list` then answers confidently and wrongly, and `remove`
+// can never reach the real container. `provider remove` already refuses while a
+// workspace names it, which is what makes remove-and-recreate the recoverable
+// route rather than a second copy of that rule here.
+func existingProvider(st *store.Store, name string, kind model.ProviderKind) (model.Provider, error) {
+	p, err := st.GetProvider(name)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return model.Provider{}, nil
+	case err != nil:
+		return model.Provider{}, err
+	case p.Kind != kind:
+		return model.Provider{}, usageErrorf(
+			"provider %s is %s, not %s; to change its kind:\n"+
+				"  dev provider remove %s\n"+
+				"  dev provider configure %s --kind %s",
+			name, p.Kind, kind, name, name, kind)
+	}
+	return p, nil
+}
+
+// clearMarker is the value that empties an optional setting.
+//
+// An omitted flag now means "keep what is stored", which on its own would leave
+// no way to remove a pull secret: an empty flag and an absent one are the same
+// string, and pressing return at a prompt keeps the default.
+const clearMarker = "-"
+
+// k8sSetting is one configurable setting: where it is being written, what the
+// stored provider has for it, and how to ask for it.
+type k8sSetting struct {
+	target   *string
+	stored   string
+	label    string
+	fallback string // when neither the flags nor the stored config has one
+	required bool
+}
+
+// k8sSettings pairs every setting with its stored counterpart, so the prompted
+// path and the scripted one walk one list and cannot drift apart.
+func k8sSettings(cfg *k8s.Config, stored k8s.Config, kubeContext, kubeNamespace string) []k8sSetting {
+	return []k8sSetting{
+		{&cfg.Context, stored.Context, "kubeconfig context", kubeContext, false},
+		{&cfg.Namespace, stored.Namespace, "namespace (must already exist)", firstNonEmpty(kubeNamespace, "default"), true},
+		// No default worth guessing, and nothing works without it.
+		{&cfg.Registry, stored.Registry, "registry prefix to push images to", "", true},
+		{&cfg.Platform, stored.Platform, "platform to build for", "linux/amd64", true},
+		{&cfg.StorageSize, stored.StorageSize, "volume size per container", "20Gi", true},
+		{&cfg.StorageClass, stored.StorageClass, "storage class (blank for the cluster default)", "", false},
+		{&cfg.ServiceAccount, stored.ServiceAccount, "service account (blank for the namespace default)", "", false},
+		{&cfg.ImagePullSecret, stored.ImagePullSecret, "image pull secret (blank if the nodes can pull)", "", false},
+	}
+}
+
+// mergeK8s fills in from the stored provider whatever the flags left out.
+//
+// The scripted half of the same rule the prompts follow, so that changing one
+// setting from a script does not drop the seven the operator did not repeat.
+func mergeK8s(flags, stored k8s.Config) k8s.Config {
+	cfg := flags
+	// The kubeconfig defaults are the prompts' business: a scripted run takes
+	// what it was given, and ParseConfig supplies the rest.
+	for _, s := range k8sSettings(&cfg, stored, "", "") {
+		switch *s.target {
+		case "":
+			*s.target = s.stored
+		case clearMarker:
+			*s.target = ""
+		}
+	}
+	return cfg
+}
+
 // promptK8s fills in the settings the flags left empty.
 //
 // Only the empty ones: a flag given on the command line is an answer already,
-// and asking again would make the flags pointless.
-func promptK8s(ctx context.Context, a *app, cfg k8s.Config) (k8s.Config, error) {
-	kubeContext, namespace := k8s.KubeconfigDefaults(ctx)
-	p := newPrompter(os.Stdin, a.out)
+// and asking again would make the flags pointless. Defaults come from the
+// stored provider first and the kubeconfig second, so re-running configure to
+// change one setting and pressing return through the rest is a no-op rather
+// than a reset to linux/amd64 and 20Gi.
+func promptK8s(ctx context.Context, p *prompter, flags, stored k8s.Config) (k8s.Config, error) {
+	kubeContext, kubeNamespace := k8s.KubeconfigDefaults(ctx)
+	cfg := flags
 
-	a.printf("configuring a Kubernetes provider; press return to accept a default\n")
+	fmt.Fprintf(p.out, "configuring a Kubernetes provider; press return to accept a default\n")
 
-	ask := func(target *string, label, def string, required bool) error {
-		if *target != "" {
-			return nil
+	for _, s := range k8sSettings(&cfg, stored, kubeContext, kubeNamespace) {
+		if *s.target != "" {
+			if *s.target == clearMarker {
+				*s.target = ""
+			}
+			continue
 		}
+
+		def := firstNonEmpty(s.stored, s.fallback)
+		label := s.label
+		// Advertised only where it does something: a required setting cannot
+		// be cleared, and neither can one that is already empty.
+		if def != "" && !s.required {
+			label += " (- to clear)"
+		}
+
 		var (
 			answer string
 			err    error
 		)
-		if required {
+		if s.required {
 			answer, err = p.askRequired(label, def)
 		} else {
 			answer, err = p.ask(label, def)
 		}
 		if err != nil {
-			return err
-		}
-		*target = answer
-		return nil
-	}
-
-	for _, q := range []struct {
-		target   *string
-		label    string
-		def      string
-		required bool
-	}{
-		{&cfg.Context, "kubeconfig context", kubeContext, false},
-		{&cfg.Namespace, "namespace (must already exist)", firstNonEmpty(namespace, "default"), true},
-		// No default worth guessing, and nothing works without it.
-		{&cfg.Registry, "registry prefix to push images to", "", true},
-		{&cfg.Platform, "platform to build for", "linux/amd64", true},
-		{&cfg.StorageSize, "volume size per container", "20Gi", true},
-		{&cfg.StorageClass, "storage class (blank for the cluster default)", "", false},
-		{&cfg.ServiceAccount, "service account (blank for the namespace default)", "", false},
-		{&cfg.ImagePullSecret, "image pull secret (blank if the nodes can pull)", "", false},
-	} {
-		if err := ask(q.target, q.label, q.def, q.required); err != nil {
 			return cfg, err
 		}
+		if answer == clearMarker {
+			answer = ""
+		}
+		*s.target = answer
 	}
 	return cfg, nil
 }

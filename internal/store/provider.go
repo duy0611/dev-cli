@@ -8,10 +8,14 @@ import (
 	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/model"
 )
 
-// PutProvider creates the provider or updates its kind and config. `provider
-// configure` is deliberately idempotent: re-running it with a changed kind is
-// how a provider is corrected, and erroring instead would mean deleting and
-// recreating one that workspaces already reference.
+// PutProvider creates the provider or updates its config. `provider configure`
+// is deliberately idempotent, so re-running it to change one setting is the
+// supported way to correct a provider.
+//
+// The kind is written on the same terms as the config, but the caller has
+// already refused to change it: a provider whose kind moves leaves its
+// workspaces' containers behind in the engine they were created in. The refusal
+// lives in internal/cli so the message can name both kinds and the way out.
 func (s *Store) PutProvider(p model.Provider) error {
 	config := p.Config
 	if config == "" {

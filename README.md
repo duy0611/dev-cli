@@ -84,7 +84,9 @@ dev container create api --folder ~/code/api
 Every setting it asks for is also a flag, and a flag given on the command line
 is not asked about again. The prompting happens only when stdin is a terminal:
 run it from a script and a missing setting is an error naming the flag, rather
-than a question nobody is there to answer.
+than a question nobody is there to answer. Re-running it on an existing provider
+defaults every question to what that provider already has, so pressing return
+through all eight changes nothing.
 
 The devcontainer CLI speaks Docker only, so it cannot start a pod. `dev` uses it
 for the two things it alone can do — reading the merged configuration, and
@@ -215,6 +217,16 @@ is not something this tool will do to someone else's repo.
 
 `sync` exists only for providers whose container holds a copy of your files. On
 a local container it exits 2 saying the folder is already mounted.
+
+`provider configure` changes the settings you name and leaves the rest as they
+were, so moving one does not mean restating the other seven; pass `-` as the
+value of an optional k8s setting to clear it. The kind is the one thing that
+cannot change. Workspaces go on naming the provider and their containers stay in
+the engine they were created in, so a flip would leave records pointing at an
+engine that has never heard of them — `container list` would answer confidently
+and wrongly, and `container remove` could never reach the real container. Remove
+the provider and configure it again instead; `provider remove` refuses while a
+workspace still names it, which is what keeps that from happening quietly.
 
 `workspace remove` and `provider remove` refuse while anything still points at
 them — a workspace holding containers (running or not), a provider named by a

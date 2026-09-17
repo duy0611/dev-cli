@@ -110,7 +110,16 @@ provider bind-mounts the folder, so a no-op `Sync` there would be a lie.
    the wrappers in `internal/cli/args.go` and the `SetFlagErrorFunc` in
    `root.go`. Use `exactArgs`/`noArgs`/`minArgs`, never cobra's directly.
 
-8. **Do not edit a project's `devcontainer.json`.** A folder without one is an
+8. **A provider's kind never changes.** `existingProvider` in
+   `internal/cli/provider.go` refuses it; the row is not rewritten. Workspaces
+   go on naming the provider and the containers under them stay in the engine
+   they were created in, so a flip leaves records pointing at an engine that has
+   never heard of them — `container list` answers confidently and wrongly, and
+   `remove` can never reach the real container. Remove and recreate instead:
+   `provider remove` already refuses while a workspace names it, which is what
+   makes that route safe without a second copy of the rule.
+
+9. **Do not edit a project's `devcontainer.json`.** A folder without one is an
    error, and a missing agent is reported as something to add to the project,
    not something `dev` installs. The project owns its container definition.
 
@@ -176,7 +185,10 @@ Beyond the invariants above, these are the parts that bite:
   flags left empty, but `isTerminal(os.Stdin)` guards the prompting: a scripted
   run has to fail naming the missing flag rather than block on a question
   nobody will see. Every prompted value has a flag, and a flag already given is
-  never asked about again.
+  never asked about again. Both paths fall back to the stored provider, so
+  re-running `configure` changes only what it was told to; `k8sSettings` is the
+  one list they walk, and `-` is the only way to empty an optional setting now
+  that an absent flag means "keep".
 - **Tests for external tools use stub executables on a temporary `PATH`**, not
   an interface with a mock. See `internal/provider/local/local_test.go`.
 - **Store tests use a temp file, never `:memory:`** — that database is
