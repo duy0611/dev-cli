@@ -94,3 +94,14 @@ func scanContainer(sc scanner) (model.Container, error) {
 	c.CreatedAt = t
 	return c, nil
 }
+
+// UpdateContainerConfig replaces a container's generated configuration.
+func (s *Store) UpdateContainerConfig(workspace, name, config string) error {
+	res, err := s.db.Exec(
+		`UPDATE containers SET generated_config = ?
+		 WHERE workspace_name = ? AND name = ?`, config, workspace, name)
+	if err != nil {
+		return fmt.Errorf("updating container %s: %w", name, err)
+	}
+	return requireOneRow(res, ErrNotFound)
+}

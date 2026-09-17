@@ -67,3 +67,92 @@ func generatedConfigFor(name string, generate bool, tools []string, in *os.File,
 	}
 	return config, nil
 }
+
+// applyToolDiff works out the new tool set.
+//
+// Every entry prefixed + or - adjusts the current set; entries with no prefix
+// replace it wholesale. Mixing the two forms is refused rather than guessed at:
+// "node,+jq" reads as one intent and means another.
+func applyToolDiff(current, spec []string) ([]string, error) {
+	var diffs, plain int
+	for _, s := range spec {
+		if strings.HasPrefix(s, "+") || strings.HasPrefix(s, "-") {
+			diffs++
+		} else {
+			plain++
+		}
+	}
+	if diffs > 0 && plain > 0 {
+		return nil, usageErrorf("--tools takes either a list or +/- changes, not both")
+	}
+	if diffs == 0 {
+		resolved, err := dcgen.Resolve(spec)
+		if err != nil {
+			return nil, usageError(err)
+		}
+		return resolved, nil
+	}
+
+	set := map[string]bool{}
+	for _, id := range current {
+		set[id] = true
+	}
+	for _, s := range spec {
+		id := s[1:]
+		if id == "" {
+			return nil, usageErrorf("--tools: %q names no tool", s)
+		}
+		if s[0] == '+' {
+			set[id] = true
+		} else {
+			delete(set, id)
+		}
+	}
+
+	out := make([]string, 0, len(set))
+	for id := range set {
+		out = append(out, id)
+	}
+	resolved, err := dcgen.Resolve(out)
+	if err != nil {
+		return nil, usageError(err)
+	}
+	return resolved, nil
+}
+
+// rewriteGeneratedTools changes which tools a generated container installs.
+//
+// Reads the current set back out of the stored document rather than from a
+// column of its own, so a configuration edited by hand is still something this
+// can reason about.
+func rewriteGeneratedTools(a *app, workspace, name string, spec []string) error {
+	t, err := a.resolve(workspace, name)
+	if err != nil {
+		return err
+	}
+	defer t.release()
+
+	if t.container.GeneratedConfig == "" {
+		return usageErrorf("container %s uses the project's own config; edit %s instead",
+			name, t.container.ConfigPath)
+	}
+
+	current, err := dcgen.ToolsOf(t.container.GeneratedConfig)
+	if err != nil {
+		return err
+	}
+	next, err := applyToolDiff(current, spec)
+	if err != nil {
+		return err
+	}
+	config, err := dcgen.Render(name, next)
+	if err != nil {
+		return usageError(err)
+	}
+
+	st, err := a.store()
+	if err != nil {
+		return err
+	}
+	return st.UpdateContainerConfig(t.workspace.Name, name, config)
+}

@@ -372,6 +372,7 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 	var (
 		workspace string
 		noCache   bool
+		toolList  string
 	)
 
 	cmd := &cobra.Command{
@@ -379,6 +380,14 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 		Short: "Recreate a container from its configuration",
 		Args:  exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if tools := parseToolList(toolList); len(tools) > 0 {
+				// Before resolve, so the rebuild materialises the new
+				// configuration rather than the one being replaced.
+				if err := rewriteGeneratedTools(a, workspace, args[0], tools); err != nil {
+					return err
+				}
+			}
+
 			t, err := a.resolve(workspace, args[0])
 			if err != nil {
 				return err
@@ -397,6 +406,8 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 	}
 	addWorkspaceFlag(cmd, &workspace)
 	cmd.Flags().BoolVar(&noCache, "no-cache", false, "rebuild the image without the layer cache")
+	cmd.Flags().StringVar(&toolList, "tools", "",
+		"change a generated container's tools, e.g. +jq,-helm (see: dev container tools)")
 	return cmd
 }
 

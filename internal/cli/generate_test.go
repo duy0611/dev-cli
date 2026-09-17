@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/dcgen"
 	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/model"
 	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/provider/k8s"
 )
@@ -259,5 +260,96 @@ func TestMaterialiseLeavesAProjectOwnedContainerAlone(t *testing.T) {
 	defer cleanup() // must be safe to call even when nothing was written
 	if got.ConfigPath != c.ConfigPath {
 		t.Errorf("ConfigPath = %q, want it untouched", got.ConfigPath)
+	}
+}
+
+func TestApplyToolDiff(t *testing.T) {
+	current := []string{"helm", "node"}
+
+	tests := []struct {
+		name string
+		spec []string
+		want []string
+	}{
+		{"add", []string{"+jq"}, []string{"helm", "jq", "node"}},
+		{"remove", []string{"-helm"}, []string{"node"}},
+		{"both", []string{"+jq", "-helm"}, []string{"jq", "node"}},
+		{"replace", []string{"jq", "yq"}, []string{"jq", "yq"}},
+		{"remove what is absent", []string{"-yq"}, []string{"helm", "node"}},
+		{"add what is present", []string{"+node"}, []string{"helm", "node"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := applyToolDiff(current, tt.spec)
+			if err != nil {
+				t.Fatalf("applyToolDiff: %v", err)
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("applyToolDiff(%v, %v) = %v, want %v", current, tt.spec, got, tt.want)
+			}
+		})
+	}
+}
+
+// "node,+jq" reads as one intent and means another, so it is refused rather
+// than guessed at.
+func TestApplyToolDiffRejectsMixedForms(t *testing.T) {
+	_, err := applyToolDiff([]string{"node"}, []string{"node", "+jq"})
+	if err == nil {
+		t.Fatal("a mixed diff and replacement was accepted")
+	}
+	if got := exitCodeOf(err); got != exitUsage {
+		t.Errorf("exit code = %d, want %d", got, exitUsage)
+	}
+}
+
+func TestRebuildToolsRewritesTheStoredConfig(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+
+	opts := createOpts{generate: true, tools: []string{"jq"}, noStart: true}
+	if err := runContainerCreate(t.Context(), a, "", "demo", t.TempDir(), opts); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// The rebuild itself needs an engine; this asserts the rewrite, which is
+	// the part that belongs to dev.
+	if err := rewriteGeneratedTools(a, "", "demo", []string{"+yq"}); err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+
+	st, err := a.store()
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	c, err := st.GetContainer("ws", "demo")
+	if err != nil {
+		t.Fatalf("GetContainer: %v", err)
+	}
+	tools, err := dcgen.ToolsOf(c.GeneratedConfig)
+	if err != nil {
+		t.Fatalf("ToolsOf: %v", err)
+	}
+	if !slices.Equal(tools, []string{"jq", "yq"}) {
+		t.Errorf("tools = %v, want [jq yq]", tools)
+	}
+}
+
+// A project's configuration is not dev's to rewrite.
+func TestRebuildToolsRefusesAProjectOwnedContainer(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+
+	folder := projectWithConfig(t)
+	if err := runContainerCreate(t.Context(), a, "", "owned", folder, createOpts{noStart: true}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	err := rewriteGeneratedTools(a, "", "owned", []string{"+jq"})
+	if err == nil {
+		t.Fatal("--tools rewrote a project-owned container")
+	}
+	if got := exitCodeOf(err); got != exitUsage {
+		t.Errorf("exit code = %d, want %d", got, exitUsage)
 	}
 }
