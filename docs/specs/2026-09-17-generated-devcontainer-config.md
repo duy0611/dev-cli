@@ -60,7 +60,7 @@ preserved rather than silently dropped on the next rewrite.
 Two entries need more than a key lookup to reverse. The shared
 `kubectl-helm-minikube` reference maps back to whichever of `kubectl` and
 `helm` its options did not disable, and the `apt-get-packages` reference maps
-back through its `packages` array, so a package no catalog entry claims is
+back through its `packages` string, so a package no catalog entry claims is
 carried through untouched.
 
 ## The catalog
@@ -100,7 +100,7 @@ Every reference below returned HTTP 200 from `ghcr.io` on 2026-09-17.
 | `aws` | `ghcr.io/devcontainers/features/aws-cli:1` |
 | `claude-code` | `ghcr.io/anthropics/devcontainer-features/claude-code:1` |
 | `hermes` | `ghcr.io/devcontainer-community/devcontainer-features/hermes-agent.nousresearch.com:1` |
-| `opencode` | `ghcr.io/devcontainers-extra/features/npm-package:1`, `{"package": "opencode-ai"}` |
+| `opencode` | `ghcr.io/devcontainers-extra/features/npm-package:1`, `{"package": "opencode-ai"}` (requires `node`) |
 | `gcloud` | `ghcr.io/dhoeric/features/google-cloud-cli:1` |
 | `jq` | apt |
 | `yq` | apt |
@@ -130,7 +130,7 @@ published at a reference that resolves — every `devcontainers-extra` and
   "image": "mcr.microsoft.com/devcontainers/base:1-ubuntu-24.04",
   "features": {
     "ghcr.io/devcontainers-extra/features/apt-get-packages:1": {
-      "packages": ["jq", "yq"]
+      "packages": "jq,yq"
     },
     "ghcr.io/devcontainers/features/node:1": {}
   },
@@ -150,6 +150,11 @@ here would give the same setting two homes.
 
 An empty tool list is legal and renders the same document with no `features`
 key: a bare Ubuntu box is a reasonable thing to ask for.
+
+One dependency exists between catalog entries: `opencode` installs through the
+npm-package feature, which needs a node runtime. Selecting it without `node`
+adds `node` silently and says so, rather than building an image whose install
+step fails.
 
 ## The create flow
 
