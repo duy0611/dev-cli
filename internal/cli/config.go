@@ -61,6 +61,7 @@ func runContainerConfigShow(a *app, workspace, name string) error {
 	if err != nil {
 		return err
 	}
+	defer t.release()
 	if t.container.GeneratedConfig == "" {
 		// Not an empty configuration: a different kind of container, whose
 		// configuration is a file the operator can already open.

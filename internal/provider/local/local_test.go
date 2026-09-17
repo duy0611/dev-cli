@@ -296,3 +296,39 @@ func TestMissingBinaryIsReportedByName(t *testing.T) {
 		t.Errorf("error %q does not name the missing binary", err)
 	}
 }
+
+// The config path is passed explicitly rather than left to the CLI's own
+// lookup, because a generated configuration lives in a temporary directory the
+// CLI would never find, and because being explicit costs nothing for a
+// project-owned one.
+func TestUpPassesTheConfigPath(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, devcontainerBin, "", 0)
+
+	c := testContainer()
+	if err := (&Provider{}).Up(context.Background(), c, nil); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	argv := f.argv(t, devcontainerBin)
+	if !contains(argv, []string{"--config", c.ConfigPath}) {
+		t.Errorf("up argv missing --config %s: %v", c.ConfigPath, argv)
+	}
+}
+
+func TestExecPassesTheConfigPath(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, devcontainerBin, "", 0)
+
+	c := testContainer()
+	err := (&Provider{}).Exec(context.Background(), c, []string{"true"},
+		provider.ExecOpts{Stdout: io.Discard, Stderr: io.Discard})
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+
+	argv := f.argv(t, devcontainerBin)
+	if !contains(argv, []string{"--config", c.ConfigPath}) {
+		t.Errorf("exec argv missing --config %s: %v", c.ConfigPath, argv)
+	}
+}

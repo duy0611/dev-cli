@@ -3,6 +3,9 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 
 	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/env"
 	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/model"
@@ -17,6 +20,18 @@ type target struct {
 	container model.Container
 	workspace model.Workspace
 	provider  provider.Provider
+	// cleanup removes whatever resolve had to write to disk for this
+	// container, which is the generated configuration and nothing else. Every
+	// caller defers release; see materialise.
+	cleanup func()
+}
+
+// release removes anything resolve wrote for this container. Safe on a nil
+// cleanup, so every caller can defer it without checking.
+func (t *target) release() {
+	if t != nil && t.cleanup != nil {
+		t.cleanup()
+	}
 }
 
 // resolve looks up a container by name in the given workspace (or the active
@@ -47,7 +62,54 @@ func (a *app) resolve(workspace, name string) (*target, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &target{container: c, workspace: ws, provider: p}, nil
+
+	// Done here rather than in each command: every provider call needs a
+	// container whose ConfigPath a child process can open, and a command that
+	// forgot would fail only for generated containers.
+	c, cleanup, err := materialise(c)
+	if err != nil {
+		return nil, err
+	}
+	return &target{container: c, workspace: ws, provider: p, cleanup: cleanup}, nil
+}
+
+// materialise gives a container a config path a child process can open.
+//
+// A generated configuration lives in the database, and the devcontainer CLI
+// takes a path and nothing else — so it becomes a file for the length of one
+// invocation. Written into a .devcontainer directory because the CLI reads the
+// layout around the file, and named devcontainer.json because it rejects any
+// other filename outright.
+//
+// The returned cleanup is always safe to call, including for a project-owned
+// container where nothing was written.
+func materialise(c model.Container) (model.Container, func(), error) {
+	if c.GeneratedConfig == "" {
+		return c, func() {}, nil
+	}
+
+	dir, err := os.MkdirTemp("", "dev-config-")
+	if err != nil {
+		return c, func() {}, fmt.Errorf("preparing the generated config: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(dir) }
+
+	// 0700 on the directory and 0600 on the file: the configuration says what
+	// the operator is building, and on a shared host that is nobody else's
+	// business.
+	nested := filepath.Join(dir, ".devcontainer")
+	if err := os.MkdirAll(nested, 0o700); err != nil {
+		cleanup()
+		return c, func() {}, fmt.Errorf("preparing the generated config: %w", err)
+	}
+	path := filepath.Join(nested, "devcontainer.json")
+	if err := os.WriteFile(path, []byte(c.GeneratedConfig), 0o600); err != nil {
+		cleanup()
+		return c, func() {}, fmt.Errorf("writing the generated config: %w", err)
+	}
+
+	c.ConfigPath = path
+	return c, cleanup, nil
 }
 
 // providerFor builds the Provider a workspace runs on.

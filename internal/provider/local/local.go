@@ -55,6 +55,12 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 
 	args := []string{"up", "--workspace-folder", c.Source}
 	args = append(args, idLabelArgs(c)...)
+	// The config path is passed rather than inferred. A generated one lives in
+	// a temporary directory the CLI's own lookup would never reach, and for a
+	// project-owned one this is the path dcconfig already resolved.
+	if c.ConfigPath != "" {
+		args = append(args, "--config", c.ConfigPath)
+	}
 	if recreate {
 		args = append(args, "--remove-existing-container")
 	}
@@ -86,6 +92,12 @@ func (p *Provider) Exec(ctx context.Context, c model.Container, command []string
 
 	args := []string{"exec", "--workspace-folder", c.Source}
 	args = append(args, idLabelArgs(c)...)
+	// The config path is passed rather than inferred. A generated one lives in
+	// a temporary directory the CLI's own lookup would never reach, and for a
+	// project-owned one this is the path dcconfig already resolved.
+	if c.ConfigPath != "" {
+		args = append(args, "--config", c.ConfigPath)
+	}
 	args = append(args, remoteEnvArgs(opts.Env)...)
 	args = append(args, command...)
 

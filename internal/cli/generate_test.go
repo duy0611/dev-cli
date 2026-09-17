@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/model"
 	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/provider/k8s"
 )
 
@@ -212,5 +213,51 @@ func TestConfigShowOnAProjectOwnedContainer(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), ".devcontainer") {
 		t.Errorf("error %q does not point at the project's own config", err)
+	}
+}
+
+// The devcontainer CLI only accepts a path, so a configuration that lives in
+// the database has to become a file for the length of one invocation — and
+// stop being one afterwards.
+func TestMaterialiseWritesAndCleansUp(t *testing.T) {
+	c := model.Container{Name: "demo", GeneratedConfig: "{\"name\":\"demo\"}\n"}
+
+	got, cleanup, err := materialise(c)
+	if err != nil {
+		t.Fatalf("materialise: %v", err)
+	}
+	if got.ConfigPath == "" {
+		t.Fatal("materialise produced no config path")
+	}
+	if filepath.Base(got.ConfigPath) != "devcontainer.json" ||
+		filepath.Base(filepath.Dir(got.ConfigPath)) != ".devcontainer" {
+		// The CLI reads the layout around the file and rejects any other
+		// filename outright, so the temporary copy mirrors a real project.
+		t.Errorf("unexpected layout: %s", got.ConfigPath)
+	}
+	body, err := os.ReadFile(got.ConfigPath)
+	if err != nil {
+		t.Fatalf("reading the materialised config: %v", err)
+	}
+	if string(body) != c.GeneratedConfig {
+		t.Errorf("materialised %q, want %q", body, c.GeneratedConfig)
+	}
+
+	cleanup()
+	if _, err := os.Stat(got.ConfigPath); !os.IsNotExist(err) {
+		t.Errorf("cleanup left the file behind: %v", err)
+	}
+}
+
+func TestMaterialiseLeavesAProjectOwnedContainerAlone(t *testing.T) {
+	c := model.Container{Name: "demo", ConfigPath: "/proj/.devcontainer/devcontainer.json"}
+
+	got, cleanup, err := materialise(c)
+	if err != nil {
+		t.Fatalf("materialise: %v", err)
+	}
+	defer cleanup() // must be safe to call even when nothing was written
+	if got.ConfigPath != c.ConfigPath {
+		t.Errorf("ConfigPath = %q, want it untouched", got.ConfigPath)
 	}
 }

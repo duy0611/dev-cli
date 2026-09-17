@@ -54,6 +54,7 @@ func runContainerAgent(ctx context.Context, a *app, workspace, name, agentID str
 	if err != nil {
 		return err
 	}
+	defer t.release()
 
 	environ, err := a.containerEnv(ctx, t.workspace.Name)
 	if err != nil {

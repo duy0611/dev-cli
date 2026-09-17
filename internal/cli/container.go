@@ -253,6 +253,7 @@ func newContainerStartCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer t.release()
 			return a.start(cmd.Context(), t.workspace.Name, t.container)
 		},
 	}
@@ -278,6 +279,15 @@ func (a *app) start(ctx context.Context, workspace string, c model.Container) er
 	if err != nil {
 		return err
 	}
+
+	// The create path builds its own container value and never goes through
+	// resolve, so a generated configuration has to become a file here too.
+	c, cleanup, err := materialise(c)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
 	if err := p.Up(ctx, c, environ); err != nil {
 		return err
 	}
@@ -297,6 +307,7 @@ func newContainerStopCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer t.release()
 			if err := t.provider.Stop(cmd.Context(), t.container); err != nil {
 				return err
 			}
@@ -337,6 +348,7 @@ func runContainerRemove(ctx context.Context, a *app, workspace, name string, for
 	if err != nil {
 		return err
 	}
+	defer t.release()
 
 	if err := t.provider.Remove(ctx, t.container); err != nil {
 		if !force {
@@ -371,6 +383,7 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer t.release()
 			environ, err := a.containerEnv(cmd.Context(), t.workspace.Name)
 			if err != nil {
 				return err
@@ -402,6 +415,7 @@ func newContainerLogsCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer t.release()
 			return t.provider.Logs(cmd.Context(), t.container, follow, a.out)
 		},
 	}
@@ -434,6 +448,7 @@ func runContainerSync(ctx context.Context, a *app, workspace, name string) error
 	if err != nil {
 		return err
 	}
+	defer t.release()
 
 	syncer, ok := t.provider.(provider.Syncer)
 	if !ok {
@@ -475,6 +490,7 @@ func runContainerShell(ctx context.Context, a *app, workspace, name string) erro
 	if err != nil {
 		return err
 	}
+	defer t.release()
 	if err := a.requireRunning(ctx, t); err != nil {
 		return err
 	}
@@ -547,6 +563,7 @@ func runContainerExec(ctx context.Context, a *app, workspace, name string, comma
 	if err != nil {
 		return err
 	}
+	defer t.release()
 	if err := a.requireRunning(ctx, t); err != nil {
 		return err
 	}
