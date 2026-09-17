@@ -161,3 +161,56 @@ func projectWithConfig(t *testing.T) string {
 	}
 	return folder
 }
+
+func TestContainerToolsListsTheCatalog(t *testing.T) {
+	a, out := newTestApp(t)
+	if err := runContainerTools(a); err != nil {
+		t.Fatalf("tools: %v", err)
+	}
+	got := out.String()
+	for _, want := range []string{"node", "claude-code", "official", "community"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("tools output is missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// With the configuration in the database rather than on disk, this is the only
+// way to see what a container was built from.
+func TestConfigShowPrintsTheStoredConfig(t *testing.T) {
+	a, out := newTestApp(t)
+	seedWorkspace(t, a)
+
+	opts := createOpts{generate: true, tools: []string{"jq"}, noStart: true}
+	if err := runContainerCreate(t.Context(), a, "", "demo", t.TempDir(), opts); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	out.Reset()
+
+	if err := runContainerConfigShow(a, "", "demo"); err != nil {
+		t.Fatalf("config show: %v", err)
+	}
+	if !strings.Contains(out.String(), "apt-get-packages") {
+		t.Errorf("config show printed nothing useful:\n%s", out.String())
+	}
+}
+
+// A project-owned container has no stored configuration, and printing "" would
+// look like an empty one rather than a different kind of container.
+func TestConfigShowOnAProjectOwnedContainer(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+
+	folder := projectWithConfig(t)
+	if err := runContainerCreate(t.Context(), a, "", "owned", folder, createOpts{noStart: true}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	err := runContainerConfigShow(a, "", "owned")
+	if err == nil {
+		t.Fatal("config show invented a configuration for a project-owned container")
+	}
+	if !strings.Contains(err.Error(), ".devcontainer") {
+		t.Errorf("error %q does not point at the project's own config", err)
+	}
+}
