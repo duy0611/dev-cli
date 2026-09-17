@@ -38,36 +38,56 @@ func newContainerCmd(a *app) *cobra.Command {
 
 // --- create -------------------------------------------------------------------
 
+// createOpts is what `container create` was asked for beyond the name and the
+// folder. A struct rather than more parameters: the list grows, and six
+// positional booleans at a call site say nothing about which is which.
+type createOpts struct {
+	noStart  bool
+	generate bool
+	tools    []string
+}
+
 func newContainerCreateCmd(a *app) *cobra.Command {
 	var (
 		workspace string
 		folder    string
-		noStart   bool
+		toolList  string
+		opts      createOpts
 	)
 
 	cmd := &cobra.Command{
 		Use:   "create NAME",
 		Short: "Create a container from a folder and start it",
 		Long: "Create a container from a folder and start it.\n\n" +
-			"The folder must ship its own .devcontainer configuration. This tool\n" +
-			"never writes one: the project owns its container definition.",
+			"A folder that ships its own .devcontainer configuration is used as it\n" +
+			"is; dev never edits it. For a folder with none, --generate builds a\n" +
+			"base Ubuntu configuration from the tools --tools names, and keeps it\n" +
+			"in dev's own database rather than writing into the project.",
 		Args: exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runContainerCreate(cmd.Context(), a, workspace, args[0], folder, noStart)
+			opts.tools = parseToolList(toolList)
+			return runContainerCreate(cmd.Context(), a, workspace, args[0], folder, opts)
 		},
 	}
 	addWorkspaceFlag(cmd, &workspace)
 	cmd.Flags().StringVar(&folder, "folder", "", "host folder holding the project (required)")
-	cmd.Flags().BoolVar(&noStart, "no-start", false, "record the container without starting it")
+	cmd.Flags().BoolVar(&opts.noStart, "no-start", false, "record the container without starting it")
+	cmd.Flags().BoolVar(&opts.generate, "generate", false,
+		"generate a base Ubuntu configuration when the folder ships none")
+	cmd.Flags().StringVar(&toolList, "tools", "",
+		"comma-separated tools to install in a generated container (see: dev container tools)")
 	return cmd
 }
 
-func runContainerCreate(ctx context.Context, a *app, workspace, name, folder string, noStart bool) error {
+func runContainerCreate(ctx context.Context, a *app, workspace, name, folder string, opts createOpts) error {
 	if err := xpath.ValidateName(name); err != nil {
 		return usageError(err)
 	}
 	if folder == "" {
 		return usageErrorf("--folder is required")
+	}
+	if len(opts.tools) > 0 && !opts.generate {
+		return usageErrorf("--tools only applies with --generate")
 	}
 
 	// Physical path, before anything stores or mounts it: the engine resolves
@@ -79,8 +99,32 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 		return usageError(err)
 	}
 	configPath, err := dcconfig.Find(source)
-	if err != nil {
+	switch {
+	case err == nil && opts.generate:
+		// The project ships one. Generating a second would shadow the
+		// definition the project owns, with no way to tell from the outside
+		// which of the two built the container.
+		return usageErrorf("%s already has a devcontainer config; --generate would shadow it",
+			xpath.Shorten(source))
+	case err != nil && !errors.Is(err, dcconfig.ErrNoConfig):
 		return usageError(err)
+	}
+
+	// A folder with no configuration of its own is not the end of the road:
+	// dev can render one, and keeps it in the database rather than writing into
+	// a project it does not own.
+	var generated string
+	if errors.Is(err, dcconfig.ErrNoConfig) {
+		generated, err = generatedConfigFor(name, opts.generate, opts.tools, os.Stdin, a.out)
+		if err != nil {
+			return err
+		}
+		if generated == "" {
+			return usageErrorf("no devcontainer config in %s "+
+				"(--generate builds a base Ubuntu one; dev container tools lists what it can add)",
+				source)
+		}
+		configPath = ""
 	}
 
 	wsName, err := a.workspaceName(workspace)
@@ -98,6 +142,9 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 		SourceKind:    model.SourceFolder,
 		Source:        source,
 		ConfigPath:    configPath,
+		// Exactly one of these two is set: a project-owned container has a
+		// path, a generated one has the document itself.
+		GeneratedConfig: generated,
 	}
 	err = st.CreateContainer(c)
 	if errors.Is(err, store.ErrExists) {
@@ -108,7 +155,7 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 	}
 	a.printf("container %s (workspace %s) from %s\n", name, wsName, xpath.Shorten(source))
 
-	if noStart {
+	if opts.noStart {
 		return nil
 	}
 	return a.start(ctx, wsName, c)
