@@ -60,7 +60,13 @@ type Container struct {
 	SourceKind    SourceKind
 	Source        string // absolute physical host path when SourceKind is folder
 	ConfigPath    string // the resolved .devcontainer config file
-	CreatedAt     time.Time
+	// GeneratedConfig is the devcontainer.json dev wrote for this container,
+	// empty when the project ships its own. It lives here rather than on disk
+	// so that deleting the workspace takes it too, and so a cloud provider
+	// inherits it with the row. The devcontainer CLI only accepts a path, so
+	// it is materialised to a temporary file per invocation.
+	GeneratedConfig string
+	CreatedAt       time.Time
 }
 
 // Status is a container's liveness as the engine reports it.

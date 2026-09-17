@@ -340,3 +340,43 @@ func TestWorkspacesUsing(t *testing.T) {
 		t.Errorf("WorkspacesUsing(other) = %v, %v; want empty", got, err)
 	}
 }
+
+// A generated container carries its configuration in the row rather than on
+// disk, so the round-trip has to preserve it exactly: it is the input to the
+// devcontainer CLI on every later invocation.
+func TestContainerRoundTripsAGeneratedConfig(t *testing.T) {
+	s := openTest(t)
+	seed(t, s)
+
+	const cfg = "{\n  \"name\": \"demo\"\n}"
+	want := model.Container{
+		Name:            "demo",
+		WorkspaceName:   "ws",
+		SourceKind:      model.SourceFolder,
+		Source:          "/tmp/demo",
+		ConfigPath:      "",
+		GeneratedConfig: cfg,
+	}
+	if err := s.CreateContainer(want); err != nil {
+		t.Fatalf("CreateContainer: %v", err)
+	}
+
+	got, err := s.GetContainer("ws", "demo")
+	if err != nil {
+		t.Fatalf("GetContainer: %v", err)
+	}
+	if got.GeneratedConfig != cfg {
+		t.Errorf("GeneratedConfig = %q, want %q", got.GeneratedConfig, cfg)
+	}
+	if got.ConfigPath != "" {
+		t.Errorf("ConfigPath = %q, want empty for a generated container", got.ConfigPath)
+	}
+
+	list, err := s.ListContainers("ws")
+	if err != nil {
+		t.Fatalf("ListContainers: %v", err)
+	}
+	if len(list) != 1 || list[0].GeneratedConfig != cfg {
+		t.Errorf("ListContainers lost the generated config: %+v", list)
+	}
+}

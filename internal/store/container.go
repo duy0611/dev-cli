@@ -14,9 +14,10 @@ import (
 func (s *Store) CreateContainer(c model.Container) error {
 	_, err := s.db.Exec(
 		`INSERT INTO containers
-		   (name, workspace_name, source_kind, source, config_path, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		c.Name, c.WorkspaceName, string(c.SourceKind), c.Source, c.ConfigPath, nowString())
+		   (name, workspace_name, source_kind, source, config_path, generated_config, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		c.Name, c.WorkspaceName, string(c.SourceKind), c.Source, c.ConfigPath,
+		c.GeneratedConfig, nowString())
 	if err != nil {
 		if isUniqueViolation(err) {
 			return ErrExists
@@ -28,7 +29,7 @@ func (s *Store) CreateContainer(c model.Container) error {
 
 func (s *Store) GetContainer(workspace, name string) (model.Container, error) {
 	row := s.db.QueryRow(
-		`SELECT name, workspace_name, source_kind, source, config_path, created_at
+		`SELECT name, workspace_name, source_kind, source, config_path, generated_config, created_at
 		 FROM containers WHERE workspace_name = ? AND name = ?`, workspace, name)
 	return scanContainer(row)
 }
@@ -36,7 +37,7 @@ func (s *Store) GetContainer(workspace, name string) (model.Container, error) {
 // ListContainers returns the containers in one workspace, or in every workspace
 // when workspace is empty.
 func (s *Store) ListContainers(workspace string) ([]model.Container, error) {
-	query := `SELECT name, workspace_name, source_kind, source, config_path, created_at
+	query := `SELECT name, workspace_name, source_kind, source, config_path, generated_config, created_at
 	          FROM containers`
 	args := []any{}
 	if workspace != "" {
@@ -77,7 +78,8 @@ func scanContainer(sc scanner) (model.Container, error) {
 		kind      string
 		createdAt string
 	)
-	if err := sc.Scan(&c.Name, &c.WorkspaceName, &kind, &c.Source, &c.ConfigPath, &createdAt); err != nil {
+	if err := sc.Scan(&c.Name, &c.WorkspaceName, &kind, &c.Source, &c.ConfigPath,
+		&c.GeneratedConfig, &createdAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return model.Container{}, ErrNotFound
 		}
