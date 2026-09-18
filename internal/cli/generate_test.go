@@ -33,9 +33,9 @@ func TestParseToolList(t *testing.T) {
 	}{
 		{"", nil},
 		{"node", []string{"node"}},
-		{"node,jq", []string{"node", "jq"}},
-		{" node , jq ", []string{"node", "jq"}},
-		{"node,,jq", []string{"node", "jq"}},
+		{"node,yq", []string{"node", "yq"}},
+		{" node , yq ", []string{"node", "yq"}},
+		{"node,,yq", []string{"node", "yq"}},
 	}
 	for _, tt := range tests {
 		if got := parseToolList(tt.in); !slices.Equal(got, tt.want) {
@@ -68,7 +68,7 @@ func TestCreateGeneratesAConfig(t *testing.T) {
 	seedWorkspace(t, a)
 
 	folder := t.TempDir()
-	opts := createOpts{generate: true, tools: []string{"jq"}, noStart: true}
+	opts := createOpts{generate: true, tools: []string{"yq"}, noStart: true}
 	if err := runContainerCreate(t.Context(), a, "", "demo", folder, opts); err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestCreateGeneratesAConfig(t *testing.T) {
 		t.Fatalf("GetContainer: %v", err)
 	}
 	if !strings.Contains(c.GeneratedConfig, "apt-get-packages") {
-		t.Errorf("stored config does not install jq:\n%s", c.GeneratedConfig)
+		t.Errorf("stored config does not install yq:\n%s", c.GeneratedConfig)
 	}
 	if c.ConfigPath != "" {
 		t.Errorf("ConfigPath = %q, want empty for a generated container", c.ConfigPath)
@@ -121,7 +121,7 @@ func TestToolsWithoutGenerateIsRejected(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
 
-	opts := createOpts{tools: []string{"jq"}, noStart: true}
+	opts := createOpts{tools: []string{"yq"}, noStart: true}
 	err := runContainerCreate(t.Context(), a, "", "demo", t.TempDir(), opts)
 	if err == nil {
 		t.Fatal("--tools was accepted without --generate")
@@ -183,7 +183,7 @@ func TestConfigShowPrintsTheStoredConfig(t *testing.T) {
 	a, out := newTestApp(t)
 	seedWorkspace(t, a)
 
-	opts := createOpts{generate: true, tools: []string{"jq"}, noStart: true}
+	opts := createOpts{generate: true, tools: []string{"yq"}, noStart: true}
 	if err := runContainerCreate(t.Context(), a, "", "demo", t.TempDir(), opts); err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -271,11 +271,11 @@ func TestApplyToolDiff(t *testing.T) {
 		spec []string
 		want []string
 	}{
-		{"add", []string{"+jq"}, []string{"helm", "jq", "node"}},
+		{"add", []string{"+yq"}, []string{"helm", "node", "yq"}},
 		{"remove", []string{"-helm"}, []string{"node"}},
-		{"both", []string{"+jq", "-helm"}, []string{"jq", "node"}},
-		{"replace", []string{"jq", "yq"}, []string{"jq", "yq"}},
-		{"remove what is absent", []string{"-yq"}, []string{"helm", "node"}},
+		{"both", []string{"+yq", "-helm"}, []string{"node", "yq"}},
+		{"replace", []string{"python", "yq"}, []string{"python", "yq"}},
+		{"remove what is absent", []string{"-python"}, []string{"helm", "node"}},
 		{"add what is present", []string{"+node"}, []string{"helm", "node"}},
 	}
 	for _, tt := range tests {
@@ -291,10 +291,10 @@ func TestApplyToolDiff(t *testing.T) {
 	}
 }
 
-// "node,+jq" reads as one intent and means another, so it is refused rather
+// "node,+yq" reads as one intent and means another, so it is refused rather
 // than guessed at.
 func TestApplyToolDiffRejectsMixedForms(t *testing.T) {
-	_, err := applyToolDiff([]string{"node"}, []string{"node", "+jq"})
+	_, err := applyToolDiff([]string{"node"}, []string{"node", "+yq"})
 	if err == nil {
 		t.Fatal("a mixed diff and replacement was accepted")
 	}
@@ -307,14 +307,14 @@ func TestRebuildToolsRewritesTheStoredConfig(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
 
-	opts := createOpts{generate: true, tools: []string{"jq"}, noStart: true}
+	opts := createOpts{generate: true, tools: []string{"yq"}, noStart: true}
 	if err := runContainerCreate(t.Context(), a, "", "demo", t.TempDir(), opts); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
 	// The rebuild itself needs an engine; this asserts the rewrite, which is
 	// the part that belongs to dev.
-	if err := rewriteGeneratedTools(a, "", "demo", []string{"+yq"}); err != nil {
+	if err := rewriteGeneratedTools(a, "", "demo", []string{"+python"}); err != nil {
 		t.Fatalf("rewrite: %v", err)
 	}
 
@@ -330,8 +330,8 @@ func TestRebuildToolsRewritesTheStoredConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ToolsOf: %v", err)
 	}
-	if !slices.Equal(tools, []string{"jq", "yq"}) {
-		t.Errorf("tools = %v, want [jq yq]", tools)
+	if !slices.Equal(tools, []string{"python", "yq"}) {
+		t.Errorf("tools = %v, want [python yq]", tools)
 	}
 }
 
@@ -345,7 +345,7 @@ func TestRebuildToolsRefusesAProjectOwnedContainer(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	err := rewriteGeneratedTools(a, "", "owned", []string{"+jq"})
+	err := rewriteGeneratedTools(a, "", "owned", []string{"+yq"})
 	if err == nil {
 		t.Fatal("--tools rewrote a project-owned container")
 	}

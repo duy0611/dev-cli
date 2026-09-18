@@ -24,6 +24,10 @@ const (
 	kubeFeature = "ghcr.io/devcontainers/features/kubectl-helm-minikube:1"
 	// aptFeature installs plain distribution packages, for the tools no
 	// feature publishes at a reference that resolves.
+	//
+	// Only for what the base image lacks. jq is not here because common-utils,
+	// which base:ubuntu already includes, installs it — offering a tool that is
+	// present would be a menu entry that does nothing.
 	aptFeature = "ghcr.io/devcontainers-extra/features/apt-get-packages:1"
 	// npmFeature installs one global npm package. It needs a node runtime,
 	// which is why every tool using it declares Requires.
@@ -69,7 +73,6 @@ var catalog = []Tool{
 	{ID: "helm", Summary: "Helm", Official: true, Feature: kubeFeature},
 	{ID: "hermes", Summary: "Hermes agent",
 		Feature: "ghcr.io/devcontainer-community/devcontainer-features/hermes-agent.nousresearch.com:1"},
-	{ID: "jq", Summary: "jq", Apt: "jq"},
 	{ID: "kubectl", Summary: "kubectl", Official: true, Feature: kubeFeature},
 	{ID: "node", Summary: "Node.js", Official: true,
 		Feature: "ghcr.io/devcontainers/features/node:1"},

@@ -407,7 +407,7 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 	addWorkspaceFlag(cmd, &workspace)
 	cmd.Flags().BoolVar(&noCache, "no-cache", false, "rebuild the image without the layer cache")
 	cmd.Flags().StringVar(&toolList, "tools", "",
-		"change a generated container's tools, e.g. +jq,-helm (see: dev container tools)")
+		"change a generated container's tools, e.g. +yq,-helm (see: dev container tools)")
 	return cmd
 }
 

@@ -72,7 +72,7 @@ func generatedConfigFor(name string, generate bool, tools []string, in *os.File,
 //
 // Every entry prefixed + or - adjusts the current set; entries with no prefix
 // replace it wholesale. Mixing the two forms is refused rather than guessed at:
-// "node,+jq" reads as one intent and means another.
+// "node,+yq" reads as one intent and means another.
 func applyToolDiff(current, spec []string) ([]string, error) {
 	var diffs, plain int
 	for _, s := range spec {

@@ -102,7 +102,6 @@ Every reference below returned HTTP 200 from `ghcr.io` on 2026-09-17.
 | `hermes` | `ghcr.io/devcontainer-community/devcontainer-features/hermes-agent.nousresearch.com:1` |
 | `opencode` | `ghcr.io/devcontainers-extra/features/npm-package:1`, `{"package": "opencode-ai"}` (requires `node`) |
 | `gcloud` | `ghcr.io/dhoeric/features/google-cloud-cli:1` |
-| `jq` | apt |
 | `yq` | apt |
 
 `kubectl` and `helm` share one feature reference, which is the one place the
@@ -116,9 +115,15 @@ Four references are not first-party: `devcontainers-extra/npm-package`,
 community hermes feature. They are pinned by major version and marked
 `Official: false` so `dev container tools` can say so.
 
-`jq` and `yq` are apt packages because no single-tool feature for either is
-published at a reference that resolves — every `devcontainers-extra` and
+`yq` is an apt package because no single-tool feature for it is published at a
+reference that resolves — every `devcontainers-extra` and
 `devcontainers-contrib` spelling tried returned 403.
+
+`jq` is deliberately absent. `base:ubuntu` includes the `common-utils` feature,
+whose Debian package list installs it, so a catalog entry would offer a tool
+that is already there — and a test asserting it was installed would pass with
+the feature omitted entirely. The catalog carries only what the base image
+lacks.
 
 ### Render
 
@@ -130,7 +135,7 @@ published at a reference that resolves — every `devcontainers-extra` and
   "image": "mcr.microsoft.com/devcontainers/base:1-ubuntu-24.04",
   "features": {
     "ghcr.io/devcontainers-extra/features/apt-get-packages:1": {
-      "packages": "jq,yq"
+      "packages": "yq"
     },
     "ghcr.io/devcontainers/features/node:1": {}
   },
@@ -165,7 +170,7 @@ catalog ids. Unknown id is exit 2, naming the id and pointing at
 `dev container tools`. No prompting on this path at all, so it scripts.
 
 ```sh
-dev container create demo --folder ./ --generate --tools node,jq,claude-code
+dev container create demo --folder ./ --generate --tools node,yq,claude-code
 ```
 
 **No flag, stdin is a terminal.** Ask, then show the picker:
@@ -229,7 +234,7 @@ database, no container row left behind.
 ## Mutation
 
 ```sh
-dev container rebuild demo --tools +jq,-helm
+dev container rebuild demo --tools +yq,-helm
 ```
 
 Every element carrying a `+` or `-` makes the list a diff against the derived
@@ -302,7 +307,9 @@ implementation plan is what closes that gap, on a host that has an engine.
   the `+`/`-` diff parser including the mixed-form rejection.
 - `store`: a round-trip of the new column, and that deleting a workspace takes
   a generated container's configuration with it.
-- `smoke`: create with `--generate --tools jq`, then exec `jq --version`.
+- `smoke`: create with `--generate --tools yq`, then exec `yq --version` — a
+  tool the base image does not already ship, so the assertion proves the
+  feature installed rather than that the image was always going to have it.
 
 ## Documentation
 

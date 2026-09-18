@@ -207,12 +207,16 @@ func TestSmokeGeneratedConfig(t *testing.T) {
 	dev("workspace", "init", "dev-smoke-gen-ws", "--provider", "dev-smoke-gen-local")
 
 	t.Log("creating a generated container; the first run pulls a base image and installs features")
-	dev("container", "create", name, "--folder", project, "--generate", "--tools", "jq")
+	dev("container", "create", name, "--folder", project, "--generate", "--tools", "yq")
 
 	// The tool the operator asked for has to actually be in the container: a
 	// feature reference that resolves is not the same as one that installs.
-	if out := dev("container", "exec", name, "--", "jq", "--version"); !strings.Contains(out, "jq") {
-		t.Errorf("jq is not installed in the generated container: %q", out)
+	//
+	// yq rather than something the base image already ships — an assertion on a
+	// tool that is present either way would pass with the feature omitted
+	// entirely, and prove nothing.
+	if out := dev("container", "exec", name, "--", "yq", "--version"); !strings.Contains(out, "yq") {
+		t.Errorf("yq is not installed in the generated container: %q", out)
 	}
 
 	// The project folder is dev's to read, never to write.

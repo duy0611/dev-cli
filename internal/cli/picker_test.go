@@ -46,7 +46,7 @@ func testItems() []pickItem {
 	return []pickItem{
 		{ID: "node", Summary: "Node.js", Note: "official"},
 		{ID: "gh", Summary: "GitHub CLI", Note: "official"},
-		{ID: "jq", Summary: "jq", Note: "community"},
+		{ID: "yq", Summary: "yq", Note: "community"},
 	}
 }
 
@@ -57,8 +57,8 @@ func TestMultiSelectTogglesAndAccepts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("multiSelect: %v", err)
 	}
-	if !slices.Equal(got, []string{"node", "jq"}) {
-		t.Errorf("selected %v, want [node jq]", got)
+	if !slices.Equal(got, []string{"node", "yq"}) {
+		t.Errorf("selected %v, want [node yq]", got)
 	}
 }
 
@@ -107,8 +107,8 @@ func TestMultiSelectClampsTheCursor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("multiSelect: %v", err)
 	}
-	if !slices.Equal(got, []string{"jq"}) {
-		t.Errorf("selected %v, want [jq]", got)
+	if !slices.Equal(got, []string{"yq"}) {
+		t.Errorf("selected %v, want [yq]", got)
 	}
 }
 

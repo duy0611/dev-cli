@@ -58,7 +58,7 @@ func TestOpencodeDependsOnNode(t *testing.T) {
 // The stored string is compared and committed, so it has to be byte-stable:
 // sorted keys, two-space indent, one trailing newline.
 func TestRenderIsExactAndStable(t *testing.T) {
-	got, err := Render("demo", []string{"node", "jq", "yq"})
+	got, err := Render("demo", []string{"node", "yq"})
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestRenderIsExactAndStable(t *testing.T) {
 	want := `{
   "features": {
     "ghcr.io/devcontainers-extra/features/apt-get-packages:1": {
-      "packages": "jq,yq"
+      "packages": "yq"
     },
     "ghcr.io/devcontainers/features/node:1": {}
   },
@@ -79,7 +79,7 @@ func TestRenderIsExactAndStable(t *testing.T) {
 		t.Errorf("Render =\n%s\nwant\n%s", got, want)
 	}
 
-	again, err := Render("demo", []string{"yq", "node", "jq"})
+	again, err := Render("demo", []string{"yq", "node"})
 	if err != nil {
 		t.Fatalf("Render again: %v", err)
 	}
@@ -149,19 +149,19 @@ func TestResolveAddsRequirements(t *testing.T) {
 }
 
 func TestResolveDeduplicates(t *testing.T) {
-	got, err := Resolve([]string{"jq", "jq", "node"})
+	got, err := Resolve([]string{"yq", "yq", "node"})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if !slices.Equal(got, []string{"jq", "node"}) {
-		t.Errorf("Resolve = %v, want [jq node]", got)
+	if !slices.Equal(got, []string{"node", "yq"}) {
+		t.Errorf("Resolve = %v, want [node yq]", got)
 	}
 }
 
 // The tool set is derived from the stored document rather than stored beside
 // it, so `rebuild --tools +x` has to be able to read back what it wrote.
 func TestToolsOfRoundTrips(t *testing.T) {
-	want := []string{"claude-code", "helm", "jq", "kubectl", "node", "opencode"}
+	want := []string{"claude-code", "helm", "kubectl", "node", "opencode", "yq"}
 	cfg, err := Render("demo", want)
 	if err != nil {
 		t.Fatalf("Render: %v", err)
