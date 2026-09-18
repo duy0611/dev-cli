@@ -182,6 +182,22 @@ func dockerPS(t *testing.T, args ...string) []string {
 	return ids
 }
 
+// dockerVolumes returns the volume names matching a name filter.
+func dockerVolumes(t *testing.T, name string) []string {
+	t.Helper()
+	out, err := exec.Command("docker", "volume", "ls", "-q", "--filter", "name="+name).Output()
+	if err != nil {
+		t.Fatalf("docker volume ls: %v", err)
+	}
+	var names []string
+	for _, l := range strings.Split(string(out), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			names = append(names, l)
+		}
+	}
+	return names
+}
+
 // A folder with no configuration of its own is the whole point of --generate,
 // so the fixture is a bare directory.
 func TestSmokeGeneratedConfig(t *testing.T) {
@@ -233,4 +249,53 @@ func TestSmokeGeneratedConfig(t *testing.T) {
 	}
 
 	dev("container", "remove", name)
+}
+
+// The claim a folderless container rests on: work survives a stop and a start,
+// because it is in a volume rather than in the container filesystem.
+func TestSmokeFolderless(t *testing.T) {
+	requireBinaries(t, "devcontainer", "docker")
+
+	state := t.TempDir()
+	t.Setenv("DEV_STATE", state)
+
+	bin := buildBinary(t)
+	dev := func(args ...string) string {
+		t.Helper()
+		return run(t, bin, args...)
+	}
+
+	const (
+		name = "dev-smoke-none"
+		ws   = "dev-smoke-none-ws"
+	)
+	t.Cleanup(func() {
+		_ = exec.Command(bin, "container", "remove", name, "--force").Run()
+		// The volume outlives a failed remove, and the next run would mount
+		// the previous run's files.
+		_ = exec.Command("docker", "volume", "rm", "--force", "dev-"+ws+"-"+name).Run()
+	})
+
+	dev("provider", "configure", "dev-smoke-none-local", "--kind", "local")
+	dev("workspace", "init", ws, "--provider", "dev-smoke-none-local")
+
+	t.Log("creating a folderless container; the first run pulls a base image")
+	dev("container", "create", name, "--no-folder")
+
+	dev("container", "exec", name, "--", "sh", "-c", "echo persisted > /workspaces/"+name+"/marker")
+
+	dev("container", "stop", name)
+	dev("container", "start", name)
+
+	got := strings.TrimSpace(dev("container", "exec", name, "--", "cat", "/workspaces/"+name+"/marker"))
+	if got != "persisted" {
+		t.Errorf("the workspace did not survive a stop and start: marker = %q, want %q", got, "persisted")
+	}
+
+	// The volume is dev's to remove. Left behind, it accumulates silently.
+	volume := "dev-" + ws + "-" + name
+	dev("container", "remove", name)
+	if out := dockerVolumes(t, volume); len(out) != 0 {
+		t.Errorf("remove left the volume behind: %v", out)
+	}
 }
