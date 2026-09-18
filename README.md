@@ -20,7 +20,7 @@ Task walkthroughs and the full command reference are in
 
 ## Status
 
-Milestone 2. What works:
+**0.1.0**, the first tagged release. What works:
 
 - the **local** provider, driving the `devcontainer` CLI against any
   Docker-compatible engine
@@ -39,10 +39,12 @@ What does not exist yet: minted cloud credentials, IDE integration, and the UI.
 ## Install
 
 ```sh
+git clone git@github.com:duy0611/dev-cli.git
+cd dev-cli
 make install        # builds dist/dev and copies it to ~/.local/bin/dev
 ```
 
-Requires Go 1.25 or newer to build. At runtime you need:
+Requires Go 1.26 or newer to build. At runtime you need:
 
 | Tool | Why |
 |---|---|

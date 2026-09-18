@@ -7,7 +7,7 @@ Guidance for Claude Code (claude.ai/code) working in this repository.
 `dev`, a Go CLI that manages devcontainers and runs coding agents inside them.
 One binary, a SQLite database, and the external binaries it shells out to:
 `devcontainer` and `docker` always, `kubectl` for the k8s provider. No CI, one
-operator, unpublished.
+operator. The module is `github.com/duy0611/dev-cli`, released as 0.1.0.
 
 The design record is `docs/specs/2026-09-14-dev-cli.md`. Read it for intent;
 read the code for current state. `docs/USAGE.md` is the operator-facing
@@ -256,9 +256,10 @@ Beyond the invariants above, these are the parts that bite:
 - **Store tests use a temp file, never `:memory:`** — that database is
   per-connection, and the pool hands the migration to one connection and the
   query to another.
-- Unpublished, one operator, no external users. A rename is just a rename: no
-  aliases, no deprecation notes, no "used to be X" in comments or docs. State
-  the current rule; git holds the history.
+- One operator, no external users. The repository is public but nothing depends
+  on it, so a rename is just a rename: no aliases, no deprecation notes, no
+  "used to be X" in comments or docs. State the current rule; git holds the
+  history.
 
 ## Commits
 
