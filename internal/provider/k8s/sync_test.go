@@ -151,3 +151,18 @@ func keys(m map[string]*tar.Header) []string {
 	}
 	return out
 }
+
+// There is no host tree to push. Copying nothing over a workspace an agent is
+// working in would be worse than refusing.
+func TestSyncRefusesAFolderlessContainer(t *testing.T) {
+	clusterStubs(t, true)
+
+	c := model.Container{Name: "scratch", WorkspaceName: "ws", SourceKind: model.SourceNone}
+	err := testProvider().Sync(context.Background(), c)
+	if err == nil {
+		t.Fatal("Sync accepted a container with no folder")
+	}
+	if !strings.Contains(err.Error(), "no folder") {
+		t.Errorf("error %q does not say why", err)
+	}
+}

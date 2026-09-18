@@ -115,8 +115,9 @@ func (p *Provider) apply(ctx context.Context, c model.Container, env []provider.
 	}
 
 	// Before the lifecycle commands, not after: postCreate is usually "install
-	// what this project needs", and it needs the project to be there.
-	if opts.firstCreate {
+	// what this project needs", and it needs the project to be there. A
+	// folderless container has no host tree, and Sync refuses one.
+	if opts.firstCreate && c.SourceKind == model.SourceFolder {
 		if err := p.Sync(ctx, c); err != nil {
 			return err
 		}

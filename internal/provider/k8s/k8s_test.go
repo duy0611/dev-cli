@@ -356,3 +356,19 @@ func TestFactoryBuildsAConfiguredProvider(t *testing.T) {
 		t.Fatal("provider.New returned nothing")
 	}
 }
+
+// The first create syncs the host folder in before postCreate runs. A
+// folderless container has none, and the sync would fail the create.
+func TestUpSkipsTheFirstCreateSyncWithoutAFolder(t *testing.T) {
+	s := clusterStubs(t, false)
+
+	c := model.Container{Name: "scratch", WorkspaceName: "ws", SourceKind: model.SourceNone, Source: t.TempDir()}
+	if err := testProvider().Up(context.Background(), c, nil); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	for _, call := range kubectlCalls(t, s) {
+		if strings.Contains(call, "tar -x") {
+			t.Errorf("Up synced a folderless container: %q", call)
+		}
+	}
+}

@@ -508,6 +508,9 @@ func runContainerSync(ctx context.Context, a *app, workspace, name string) error
 	}
 	defer t.release()
 
+	if t.container.SourceKind == model.SourceNone {
+		return usageErrorf("container %s has no folder to sync from", name)
+	}
 	syncer, ok := t.provider.(provider.Syncer)
 	if !ok {
 		// The local provider bind-mounts the folder: the container is already

@@ -23,12 +23,15 @@ import (
 // agent is running in it; overwriting that automatically would destroy work
 // nobody asked to discard.
 func (p *Provider) Sync(ctx context.Context, c model.Container) error {
+	if c.SourceKind != model.SourceFolder {
+		// Checked before reading the configuration: a refusal that needs a
+		// cluster to produce it is a refusal that fails for the wrong reason
+		// when the cluster is unreachable.
+		return fmt.Errorf("container %s has no folder to sync from", c.Name)
+	}
 	dev, _, err := readConfiguration(ctx, c.Source, c.ConfigPath)
 	if err != nil {
 		return err
-	}
-	if c.SourceKind != model.SourceFolder {
-		return fmt.Errorf("container %s was not created from a folder", c.Name)
 	}
 
 	// -p keeps the modes the archive carries; without it the container's umask
