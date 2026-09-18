@@ -81,6 +81,10 @@ func (a *app) resolve(workspace, name string) (*target, error) {
 // layout around the file, and named devcontainer.json because it rejects any
 // other filename outright.
 //
+// For a folderless container, the temporary directory holding the configuration
+// is also supplied as the workspace folder, since the CLI requires one and the
+// container has no host directory.
+//
 // The returned cleanup is always safe to call, including for a project-owned
 // container where nothing was written.
 func materialise(c model.Container) (model.Container, func(), error) {
@@ -106,6 +110,15 @@ func materialise(c model.Container) (model.Container, func(), error) {
 	if err := os.WriteFile(path, []byte(c.GeneratedConfig), 0o600); err != nil {
 		cleanup()
 		return c, func() {}, fmt.Errorf("writing the generated config: %w", err)
+	}
+
+	// A folderless container has no host directory, but the devcontainer CLI
+	// takes --workspace-folder on every invocation and the k8s provider uses
+	// it as a build context. The temporary directory holding the configuration
+	// serves as both: it exists, it is empty, and the generated document names
+	// an explicit workspaceFolder so nothing downstream depends on its name.
+	if c.SourceKind == model.SourceNone {
+		c.Source = dir
 	}
 
 	c.ConfigPath = path
