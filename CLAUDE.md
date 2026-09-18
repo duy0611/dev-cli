@@ -132,6 +132,18 @@ provider bind-mounts the folder, so a no-op `Sync` there would be a lie.
    which is why every `model.Container` reaching a provider has a usable
    `ConfigPath` and neither provider knows where it came from.
 
+   A container need not have a folder at all: `--no-folder` records
+   `SourceKind` as `none` with an empty `Source`, always generates its
+   configuration, and mounts a volume `dev` owns — a docker named volume called
+   `dev-<workspace>-<container>` on local, the existing PVC on k8s. The
+   generated document names both `workspaceMount` and `workspaceFolder`,
+   because without the second the CLI would derive the in-container path from
+   the temporary directory `materialise` creates and it would change every
+   invocation. That temporary directory is also what such a container passes as
+   `--workspace-folder`, which is why neither provider knows what a folderless
+   container is. The local provider removes the volume in `Remove`, matching
+   k8s deleting its PVC; `rebuild` keeps it on both.
+
 ## Kubernetes provider
 
 The devcontainer CLI speaks Docker only. It is used for reading the merged
