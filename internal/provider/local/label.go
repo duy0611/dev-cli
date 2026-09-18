@@ -49,3 +49,17 @@ func dockerFilterArgs(c model.Container) []string {
 	}
 	return args
 }
+
+// VolumeName is the docker volume a folderless container keeps its work in.
+//
+// Here rather than beside the caller, and for the same reason as the id
+// labels: the name is written at create, read at up, and passed to `docker
+// volume rm` at remove. A second spelling in any one of those leaks the volume
+// or mounts an empty one.
+//
+// xpath.ValidateName already restricts both names to letters, digits, dot,
+// underscore and hyphen, which is a subset of what docker accepts for a volume
+// name, so no escaping is needed here.
+func VolumeName(workspace, container string) string {
+	return fmt.Sprintf("dev-%s-%s", workspace, container)
+}
