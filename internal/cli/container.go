@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/dcconfig"
+	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/dcgen"
 	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/model"
 	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/provider"
 	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/store"
@@ -45,6 +46,7 @@ func newContainerCmd(a *app) *cobra.Command {
 // positional booleans at a call site say nothing about which is which.
 type createOpts struct {
 	noStart  bool
+	noFolder bool
 	generate bool
 	tools    []string
 }
@@ -59,12 +61,14 @@ func newContainerCreateCmd(a *app) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "create NAME",
-		Short: "Create a container from a folder and start it",
-		Long: "Create a container from a folder and start it.\n\n" +
-			"A folder that ships its own .devcontainer configuration is used as it\n" +
-			"is; dev never edits it. For a folder with none, --generate builds a\n" +
-			"base Ubuntu configuration from the tools --tools names, and keeps it\n" +
-			"in dev's own database rather than writing into the project.",
+		Short: "Create a container and start it",
+		Long: "Create a container and start it.\n\n" +
+			"With --folder, a project that ships its own .devcontainer configuration\n" +
+			"is used as it is; dev never edits it. For a folder with none, --generate\n" +
+			"builds a base Ubuntu configuration from the tools --tools names.\n\n" +
+			"With --no-folder there is no host directory at all: the container's work\n" +
+			"lives in a volume dev creates and removes with it. That configuration is\n" +
+			"always generated, and kept in dev's own database.",
 		Args: exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.tools = parseToolList(toolList)
@@ -74,6 +78,8 @@ func newContainerCreateCmd(a *app) *cobra.Command {
 	addWorkspaceFlag(cmd, &workspace)
 	cmd.Flags().StringVar(&folder, "folder", "", "host folder holding the project (required)")
 	cmd.Flags().BoolVar(&opts.noStart, "no-start", false, "record the container without starting it")
+	cmd.Flags().BoolVar(&opts.noFolder, "no-folder", false,
+		"create a container with no host folder; its work lives in a volume dev owns")
 	cmd.Flags().BoolVar(&opts.generate, "generate", false,
 		"generate a base Ubuntu configuration when the folder ships none")
 	cmd.Flags().StringVar(&toolList, "tools", "",
@@ -85,63 +91,57 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 	if err := xpath.ValidateName(name); err != nil {
 		return usageError(err)
 	}
-	if folder == "" {
-		return usageErrorf("--folder is required")
-	}
-	if len(opts.tools) > 0 && !opts.generate {
-		return usageErrorf("--tools only applies with --generate")
-	}
-
-	// Physical path, before anything stores or mounts it: the engine resolves
-	// the string inside its VM on macOS, where /tmp is a real directory rather
-	// than a symlink to /private/tmp, so an unresolved path mounts an empty
-	// directory with no error to show for it.
-	source, err := xpath.Resolve(folder)
-	if err != nil {
-		return usageError(err)
-	}
-	configPath, err := dcconfig.Find(source)
 	switch {
-	case err == nil && opts.generate:
-		// The project ships one. Generating a second would shadow the
-		// definition the project owns, with no way to tell from the outside
-		// which of the two built the container.
-		return usageErrorf("%s already has a devcontainer config; --generate would shadow it",
-			xpath.Shorten(source))
-	case err != nil && !errors.Is(err, dcconfig.ErrNoConfig):
-		return usageError(err)
+	case folder == "" && !opts.noFolder:
+		// Guessing either way is expensive: a forgotten --folder would build an
+		// empty sandbox, which is only noticed when the agent cannot find the
+		// project.
+		return usageErrorf("give --folder PATH, or --no-folder for a container with no host folder")
+	case folder != "" && opts.noFolder:
+		return usageErrorf("--folder and --no-folder contradict each other")
 	}
-
-	// A folder with no configuration of its own is not the end of the road:
-	// dev can render one, and keeps it in the database rather than writing into
-	// a project it does not own.
-	var generated string
-	if errors.Is(err, dcconfig.ErrNoConfig) {
-		generated, err = generatedConfigFor(name, opts.generate, opts.tools, os.Stdin, a.out)
-		if err != nil {
-			return err
-		}
-		if generated == "" {
-			return usageErrorf("no devcontainer config in %s "+
-				"(--generate builds a base Ubuntu one; dev container tools lists what it can add)",
-				source)
-		}
-		configPath = ""
+	if len(opts.tools) > 0 && !opts.generate && !opts.noFolder {
+		return usageErrorf("--tools only applies with --generate")
 	}
 
 	wsName, err := a.workspaceName(workspace)
 	if err != nil {
 		return err
 	}
+
+	var (
+		source     string
+		configPath string
+		generated  string
+	)
+	if opts.noFolder {
+		// No project, so nothing can ship a configuration and there is nothing
+		// for --generate to shadow: a folderless container is always generated.
+		generated, err = generatedConfigFor(name, true, opts.tools,
+			folderlessMount(wsName, name), os.Stdin, a.out)
+		if err != nil {
+			return err
+		}
+	} else {
+		source, configPath, generated, err = folderSource(name, folder, opts, a)
+		if err != nil {
+			return err
+		}
+	}
+
 	st, err := a.store()
 	if err != nil {
 		return err
 	}
 
+	kind := model.SourceFolder
+	if opts.noFolder {
+		kind = model.SourceNone
+	}
 	c := model.Container{
 		Name:          name,
 		WorkspaceName: wsName,
-		SourceKind:    model.SourceFolder,
+		SourceKind:    kind,
 		Source:        source,
 		ConfigPath:    configPath,
 		// Exactly one of these two is set: a project-owned container has a
@@ -155,12 +155,59 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 	if err != nil {
 		return err
 	}
-	a.printf("container %s (workspace %s) from %s\n", name, wsName, xpath.Shorten(source))
+	if opts.noFolder {
+		a.printf("container %s (workspace %s) with no folder\n", name, wsName)
+	} else {
+		a.printf("container %s (workspace %s) from %s\n", name, wsName, xpath.Shorten(source))
+	}
 
 	if opts.noStart {
 		return nil
 	}
 	return a.start(ctx, wsName, c)
+}
+
+// folderSource works out what a --folder container is built from: the resolved
+// path, the project's own config if it has one, and a generated document if it
+// does not.
+func folderSource(name, folder string, opts createOpts, a *app) (source, configPath, generated string, err error) {
+	// Physical path, before anything stores or mounts it: the engine resolves
+	// the string inside its VM on macOS, where /tmp is a real directory rather
+	// than a symlink to /private/tmp, so an unresolved path mounts an empty
+	// directory with no error to show for it.
+	source, err = xpath.Resolve(folder)
+	if err != nil {
+		return "", "", "", usageError(err)
+	}
+	configPath, err = dcconfig.Find(source)
+	switch {
+	case err == nil && opts.generate:
+		// The project ships one. Generating a second would shadow the
+		// definition the project owns, with no way to tell from the outside
+		// which of the two built the container.
+		return "", "", "", usageErrorf("%s already has a devcontainer config; --generate would shadow it",
+			xpath.Shorten(source))
+	case err != nil && !errors.Is(err, dcconfig.ErrNoConfig):
+		return "", "", "", usageError(err)
+	}
+
+	if errors.Is(err, dcconfig.ErrNoConfig) {
+		// A folder with no configuration of its own is not the end of the
+		// road: dev can render one, and keeps it in the database rather than
+		// writing into a project it does not own. The zero Mount leaves the
+		// CLI's own bind mount of the folder in place.
+		generated, err = generatedConfigFor(name, opts.generate, opts.tools, dcgen.Mount{}, os.Stdin, a.out)
+		if err != nil {
+			return "", "", "", err
+		}
+		if generated == "" {
+			return "", "", "", usageErrorf("no devcontainer config in %s "+
+				"(--generate builds a base Ubuntu one; dev container tools lists what it can add)",
+				source)
+		}
+		configPath = ""
+	}
+	return source, configPath, generated, nil
 }
 
 // --- list ---------------------------------------------------------------------

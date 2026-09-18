@@ -353,3 +353,115 @@ func TestRebuildToolsRefusesAProjectOwnedContainer(t *testing.T) {
 		t.Errorf("exit code = %d, want %d", got, exitUsage)
 	}
 }
+
+// Omitting both is the likeliest typo, and guessing either way is expensive:
+// an empty sandbox is only noticed when the agent cannot find the code.
+func TestCreateWithNeitherFolderNorNoFolderIsRejected(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+
+	err := runContainerCreate(t.Context(), a, "", "scratch", "", createOpts{noStart: true})
+	if err == nil {
+		t.Fatal("create succeeded with neither --folder nor --no-folder")
+	}
+	if got := exitCodeOf(err); got != exitUsage {
+		t.Errorf("exit code = %d, want %d", got, exitUsage)
+	}
+	for _, want := range []string{"--folder", "--no-folder"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not name %s", err, want)
+		}
+	}
+}
+
+func TestCreateWithBothFolderAndNoFolderIsRejected(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+
+	opts := createOpts{noFolder: true, noStart: true}
+	err := runContainerCreate(t.Context(), a, "", "scratch", t.TempDir(), opts)
+	if err == nil {
+		t.Fatal("create accepted both --folder and --no-folder")
+	}
+	if got := exitCodeOf(err); got != exitUsage {
+		t.Errorf("exit code = %d, want %d", got, exitUsage)
+	}
+}
+
+// A folderless container is always a generated one: there is no project to
+// ship a configuration. The document must carry the volume, and the row must
+// record that there is no source.
+func TestCreateNoFolderStoresAVolumeBackedConfig(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+
+	opts := createOpts{noFolder: true, tools: []string{"yq"}, noStart: true}
+	if err := runContainerCreate(t.Context(), a, "", "scratch", "", opts); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	st, err := a.store()
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	c, err := st.GetContainer("ws", "scratch")
+	if err != nil {
+		t.Fatalf("GetContainer: %v", err)
+	}
+	if c.SourceKind != model.SourceNone {
+		t.Errorf("SourceKind = %q, want %q", c.SourceKind, model.SourceNone)
+	}
+	if c.Source != "" {
+		t.Errorf("Source = %q, want empty", c.Source)
+	}
+	if !strings.Contains(c.GeneratedConfig, `"source=dev-ws-scratch,target=/workspaces/scratch,type=volume"`) {
+		t.Errorf("stored config does not mount the volume:\n%s", c.GeneratedConfig)
+	}
+	if !strings.Contains(c.GeneratedConfig, `"workspaceFolder": "/workspaces/scratch"`) {
+		t.Errorf("stored config does not pin the workspace folder:\n%s", c.GeneratedConfig)
+	}
+}
+
+// --no-folder needs no --generate: there is no project configuration for a
+// generated one to shadow, which is the only thing --generate guards against.
+// A scripted run must not block on the picker either.
+func TestCreateNoFolderNeedsNoGenerateFlag(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+
+	opts := createOpts{noFolder: true, noStart: true}
+	if err := runContainerCreate(t.Context(), a, "", "scratch", "", opts); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+}
+
+// rebuild --tools re-renders the whole document. Dropping the mount here would
+// be invisible until the next up, which would start a container with an empty
+// workspace and the operator's work still in an unreferenced volume.
+func TestRebuildToolsKeepsTheVolumeMount(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+
+	opts := createOpts{noFolder: true, tools: []string{"yq"}, noStart: true}
+	if err := runContainerCreate(t.Context(), a, "", "scratch", "", opts); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := rewriteGeneratedTools(a, "", "scratch", []string{"+node"}); err != nil {
+		t.Fatalf("rewriteGeneratedTools: %v", err)
+	}
+
+	st, err := a.store()
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	c, err := st.GetContainer("ws", "scratch")
+	if err != nil {
+		t.Fatalf("GetContainer: %v", err)
+	}
+	if !strings.Contains(c.GeneratedConfig, "workspaceMount") {
+		t.Errorf("rebuild --tools dropped the volume mount:\n%s", c.GeneratedConfig)
+	}
+	if !strings.Contains(c.GeneratedConfig, "node") {
+		t.Errorf("rebuild --tools did not add node:\n%s", c.GeneratedConfig)
+	}
+}

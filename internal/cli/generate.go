@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/dcgen"
+	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/model"
+	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/provider/local"
 )
 
 // parseToolList splits a --tools value. Empty entries are dropped rather than
@@ -23,13 +25,25 @@ func parseToolList(s string) []string {
 	return out
 }
 
+// folderlessMount describes where a folderless container keeps its work.
+//
+// The container name is the in-container path as well as half the volume name,
+// so that two containers in one workspace never share a workspace directory
+// and `docker volume ls` reads as the container list.
+func folderlessMount(workspace, container string) dcgen.Mount {
+	return dcgen.Mount{
+		Volume: local.VolumeName(workspace, container),
+		Folder: "/workspaces/" + container,
+	}
+}
+
 // generatedConfigFor decides whether to generate a configuration and renders it.
 //
 // Three paths, matching `provider configure`: told to, so do it; not told but
 // at a terminal, so ask; neither, so return nothing and let the caller report
 // the missing configuration. The scripted run must never block on a question
 // nobody will see.
-func generatedConfigFor(name string, generate bool, tools []string, in *os.File, out io.Writer) (string, error) {
+func generatedConfigFor(name string, generate bool, tools []string, mount dcgen.Mount, in *os.File, out io.Writer) (string, error) {
 	if !generate {
 		if !isTerminal(in) {
 			return "", nil // the caller reports the missing configuration
@@ -61,7 +75,7 @@ func generatedConfigFor(name string, generate bool, tools []string, in *os.File,
 		}
 	}
 
-	config, err := dcgen.Render(name, resolved, dcgen.Mount{})
+	config, err := dcgen.Render(name, resolved, mount)
 	if err != nil {
 		return "", usageError(err)
 	}
@@ -145,7 +159,15 @@ func rewriteGeneratedTools(a *app, workspace, name string, spec []string) error 
 	if err != nil {
 		return err
 	}
-	config, err := dcgen.Render(name, next, dcgen.Mount{})
+
+	// Derived from the stored row, not from a flag: a rebuild must not be able
+	// to change what a container is mounted on. A folder container renders the
+	// zero Mount, which is the CLI's own bind mount.
+	var mount dcgen.Mount
+	if t.container.SourceKind == model.SourceNone {
+		mount = folderlessMount(t.workspace.Name, name)
+	}
+	config, err := dcgen.Render(name, next, mount)
 	if err != nil {
 		return usageError(err)
 	}
