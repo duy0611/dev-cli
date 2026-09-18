@@ -206,6 +206,11 @@ func TestToolsOfRejectsBrokenJSON(t *testing.T) {
 // the basename of --workspace-folder, which for a folderless container is a
 // per-invocation temporary directory: the in-container path would change on
 // every command, and on k8s the PVC would mount somewhere new each time.
+//
+// postCreateCommand chowns the mount to the remote user. Docker creates a
+// named volume owned by root, and unlike a bind mount — which the devcontainer
+// CLI UID-remaps to the host user automatically — a fresh volume gets no such
+// fixup, so the first write from vscode fails with EACCES.
 func TestRenderWithAVolumeNamesBothFields(t *testing.T) {
 	got, err := Render("scratch", nil, Mount{Volume: "dev-ws-scratch", Folder: "/workspaces/scratch"})
 	if err != nil {
@@ -215,6 +220,7 @@ func TestRenderWithAVolumeNamesBothFields(t *testing.T) {
 	want := `{
   "image": "mcr.microsoft.com/devcontainers/base:1-ubuntu-24.04",
   "name": "scratch",
+  "postCreateCommand": "sudo chown vscode:vscode /workspaces/scratch",
   "remoteUser": "vscode",
   "workspaceFolder": "/workspaces/scratch",
   "workspaceMount": "source=dev-ws-scratch,target=/workspaces/scratch,type=volume"
@@ -227,13 +233,14 @@ func TestRenderWithAVolumeNamesBothFields(t *testing.T) {
 
 // The zero Mount is a folder-backed container, where the CLI's own default
 // bind mount is exactly what is wanted. Emitting either field there would
-// override that bind mount with nothing.
+// override that bind mount with nothing, and the bind mount needs no chown:
+// the CLI already UID-remaps it to the host user.
 func TestRenderWithoutAVolumeOmitsBothFields(t *testing.T) {
 	got, err := Render("demo", nil, Mount{})
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	for _, key := range []string{"workspaceMount", "workspaceFolder"} {
+	for _, key := range []string{"workspaceMount", "workspaceFolder", "postCreateCommand"} {
 		if strings.Contains(got, key) {
 			t.Errorf("a folder container's document carries %s:\n%s", key, got)
 		}

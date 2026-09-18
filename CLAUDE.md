@@ -148,6 +148,15 @@ provider bind-mounts the folder, so a no-op `Sync` there would be a lie.
    both); and `container sync` refuses a folderless container on both
    providers, since there is no host tree to push.
 
+   The generated document also carries a `postCreateCommand` that chowns the
+   mount to `vscode`. Docker creates a named volume owned by root, and unlike a
+   bind mount — which the devcontainer CLI UID-remaps to the host user itself —
+   a volume gets no such fixup, so the first write from the non-root remote
+   user fails with permission denied. One `sudo chown` after create is enough,
+   since the volume's ownership then persists across every later start; k8s
+   runs the same command but it is a no-op there, because the pod's `fsGroup`
+   already makes the PVC group-writable.
+
 ## Kubernetes provider
 
 The devcontainer CLI speaks Docker only. It is used for reading the merged

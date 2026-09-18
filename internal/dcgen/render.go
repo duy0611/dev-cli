@@ -83,6 +83,14 @@ func Render(name string, toolIDs []string, mount Mount) (string, error) {
 		// every invocation.
 		doc["workspaceFolder"] = mount.Folder
 		doc["workspaceMount"] = fmt.Sprintf("source=%s,target=%s,type=volume", mount.Volume, mount.Folder)
+		// Docker creates a named volume owned by root. A bind mount gets
+		// UID-remapped to the host user by the devcontainer CLI itself
+		// (updateRemoteUserUID), but a volume gets no such fixup, so the
+		// remote user's first write fails with permission denied. The base
+		// image's vscode user already has passwordless sudo, so one chown
+		// after create is enough — the volume's ownership then persists
+		// across every later start.
+		doc["postCreateCommand"] = fmt.Sprintf("sudo chown vscode:vscode %s", mount.Folder)
 	}
 	if features := featuresFor(ids); len(features) > 0 {
 		doc["features"] = features
