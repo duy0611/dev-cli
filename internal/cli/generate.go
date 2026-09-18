@@ -61,7 +61,7 @@ func generatedConfigFor(name string, generate bool, tools []string, in *os.File,
 		}
 	}
 
-	config, err := dcgen.Render(name, resolved)
+	config, err := dcgen.Render(name, resolved, dcgen.Mount{})
 	if err != nil {
 		return "", usageError(err)
 	}
@@ -145,7 +145,7 @@ func rewriteGeneratedTools(a *app, workspace, name string, spec []string) error 
 	if err != nil {
 		return err
 	}
-	config, err := dcgen.Render(name, next)
+	config, err := dcgen.Render(name, next, dcgen.Mount{})
 	if err != nil {
 		return usageError(err)
 	}

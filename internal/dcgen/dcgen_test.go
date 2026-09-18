@@ -58,7 +58,7 @@ func TestOpencodeDependsOnNode(t *testing.T) {
 // The stored string is compared and committed, so it has to be byte-stable:
 // sorted keys, two-space indent, one trailing newline.
 func TestRenderIsExactAndStable(t *testing.T) {
-	got, err := Render("demo", []string{"node", "yq"})
+	got, err := Render("demo", []string{"node", "yq"}, Mount{})
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestRenderIsExactAndStable(t *testing.T) {
 		t.Errorf("Render =\n%s\nwant\n%s", got, want)
 	}
 
-	again, err := Render("demo", []string{"yq", "node"})
+	again, err := Render("demo", []string{"yq", "node"}, Mount{})
 	if err != nil {
 		t.Fatalf("Render again: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestRenderIsExactAndStable(t *testing.T) {
 // A bare Ubuntu box is a reasonable thing to ask for, and an empty features
 // object would be noise in the stored document.
 func TestRenderWithNoToolsOmitsFeatures(t *testing.T) {
-	got, err := Render("bare", nil)
+	got, err := Render("bare", nil, Mount{})
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestRenderWithNoToolsOmitsFeatures(t *testing.T) {
 // JSON object, so the failure mode is the second overwriting the first and
 // quietly disabling a tool the operator asked for.
 func TestKubectlAndHelmShareOneFeature(t *testing.T) {
-	both, err := Render("k", []string{"kubectl", "helm"})
+	both, err := Render("k", []string{"kubectl", "helm"}, Mount{})
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestKubectlAndHelmShareOneFeature(t *testing.T) {
 
 	// Asking for one must not install the other: the feature defaults all
 	// three on, so the ones not selected have to be turned off explicitly.
-	only, err := Render("k", []string{"kubectl"})
+	only, err := Render("k", []string{"kubectl"}, Mount{})
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestKubectlAndHelmShareOneFeature(t *testing.T) {
 }
 
 func TestRenderRejectsAnUnknownTool(t *testing.T) {
-	if _, err := Render("x", []string{"node", "kubctl"}); err == nil {
+	if _, err := Render("x", []string{"node", "kubctl"}, Mount{}); err == nil {
 		t.Fatal("Render accepted a misspelled tool")
 	} else if !strings.Contains(err.Error(), "kubctl") {
 		t.Errorf("error %q does not name the offending id", err)
@@ -162,7 +162,7 @@ func TestResolveDeduplicates(t *testing.T) {
 // it, so `rebuild --tools +x` has to be able to read back what it wrote.
 func TestToolsOfRoundTrips(t *testing.T) {
 	want := []string{"claude-code", "helm", "kubectl", "node", "opencode", "yq"}
-	cfg, err := Render("demo", want)
+	cfg, err := Render("demo", want, Mount{})
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
@@ -196,5 +196,63 @@ func TestToolsOfIgnoresUnknownFeatures(t *testing.T) {
 func TestToolsOfRejectsBrokenJSON(t *testing.T) {
 	if _, err := ToolsOf("{not json"); err == nil {
 		t.Fatal("ToolsOf accepted a document that is not JSON")
+	}
+}
+
+// A folderless container has no host directory to bind-mount, so the document
+// has to name a volume and the path it appears at.
+//
+// workspaceFolder is not optional here. Left unset, the CLI derives one from
+// the basename of --workspace-folder, which for a folderless container is a
+// per-invocation temporary directory: the in-container path would change on
+// every command, and on k8s the PVC would mount somewhere new each time.
+func TestRenderWithAVolumeNamesBothFields(t *testing.T) {
+	got, err := Render("scratch", nil, Mount{Volume: "dev-ws-scratch", Folder: "/workspaces/scratch"})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	want := `{
+  "image": "mcr.microsoft.com/devcontainers/base:1-ubuntu-24.04",
+  "name": "scratch",
+  "remoteUser": "vscode",
+  "workspaceFolder": "/workspaces/scratch",
+  "workspaceMount": "source=dev-ws-scratch,target=/workspaces/scratch,type=volume"
+}
+`
+	if got != want {
+		t.Errorf("Render =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// The zero Mount is a folder-backed container, where the CLI's own default
+// bind mount is exactly what is wanted. Emitting either field there would
+// override that bind mount with nothing.
+func TestRenderWithoutAVolumeOmitsBothFields(t *testing.T) {
+	got, err := Render("demo", nil, Mount{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	for _, key := range []string{"workspaceMount", "workspaceFolder"} {
+		if strings.Contains(got, key) {
+			t.Errorf("a folder container's document carries %s:\n%s", key, got)
+		}
+	}
+}
+
+// rebuild --tools re-renders from scratch. A round trip that drops the mount
+// would leave the next up creating a fresh empty workspace in the container
+// filesystem, with the volume still there and no longer referenced.
+func TestToolsOfSurvivesAVolumeDocument(t *testing.T) {
+	cfg, err := Render("scratch", []string{"yq"}, Mount{Volume: "dev-ws-scratch", Folder: "/workspaces/scratch"})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	got, err := ToolsOf(cfg)
+	if err != nil {
+		t.Fatalf("ToolsOf: %v", err)
+	}
+	if !slices.Equal(got, []string{"yq"}) {
+		t.Errorf("ToolsOf = %v, want [yq]", got)
 	}
 }

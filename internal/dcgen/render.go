@@ -50,8 +50,19 @@ func Resolve(toolIDs []string) ([]string, error) {
 	return out, nil
 }
 
-// Render produces the devcontainer.json for a selection of tools.
-func Render(name string, toolIDs []string) (string, error) {
+// Mount says where a generated container keeps its work.
+//
+// The zero value means the devcontainer CLI's own default: a bind mount of the
+// workspace folder, which is what a folder-backed container wants. A
+// folderless one has no host directory to bind, so it names a volume instead.
+type Mount struct {
+	// Volume is the name of a volume to mount. Empty for a folder container.
+	Volume string
+	// Folder is where the volume appears inside the container.
+	Folder string
+}
+
+func Render(name string, toolIDs []string, mount Mount) (string, error) {
 	ids, err := Resolve(toolIDs)
 	if err != nil {
 		return "", err
@@ -64,6 +75,14 @@ func Render(name string, toolIDs []string) (string, error) {
 		// installs into a home directory installs into the one the operator
 		// will be sitting in.
 		"remoteUser": "vscode",
+	}
+	if mount.Volume != "" {
+		// Both, never one. workspaceMount alone leaves the CLI deriving the
+		// in-container path from the host directory's basename, which for a
+		// folderless container is a temporary directory with a different name
+		// every invocation.
+		doc["workspaceFolder"] = mount.Folder
+		doc["workspaceMount"] = fmt.Sprintf("source=%s,target=%s,type=volume", mount.Volume, mount.Folder)
 	}
 	if features := featuresFor(ids); len(features) > 0 {
 		doc["features"] = features
