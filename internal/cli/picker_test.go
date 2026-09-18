@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/dcgen"
+	"github.com/duy0611/dev-cli/internal/dcgen"
 )
 
 // Escape sequences arrive as whole reads most of the time and split across two

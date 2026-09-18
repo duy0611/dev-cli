@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/model"
+	"github.com/duy0611/dev-cli/internal/model"
 )
 
 // Label keys, the same pair the local provider puts on a container. Two

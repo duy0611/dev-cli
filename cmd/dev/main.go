@@ -4,7 +4,7 @@ package main
 import (
 	"os"
 
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/cli"
+	"github.com/duy0611/dev-cli/internal/cli"
 )
 
 // Set by the linker: `go build -ldflags "-X main.version=..."`. See the Makefile.

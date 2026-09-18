@@ -6,7 +6,7 @@ import (
 	"io"
 	"text/tabwriter"
 
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/store"
+	"github.com/duy0611/dev-cli/internal/store"
 )
 
 // app is what every command needs: the database and somewhere to print.

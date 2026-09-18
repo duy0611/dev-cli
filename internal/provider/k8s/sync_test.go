@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/model"
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/provider"
+	"github.com/duy0611/dev-cli/internal/model"
+	"github.com/duy0611/dev-cli/internal/provider"
 )
 
 // readTar returns the archive's entries by name.

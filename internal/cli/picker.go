@@ -9,7 +9,7 @@ import (
 
 	"golang.org/x/term"
 
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/dcgen"
+	"github.com/duy0611/dev-cli/internal/dcgen"
 )
 
 // errPickCancelled is returned when the operator abandons the picker. The

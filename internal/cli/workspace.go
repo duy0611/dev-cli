@@ -5,9 +5,9 @@ import (
 	"io"
 	"strings"
 
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/model"
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/store"
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/xpath"
+	"github.com/duy0611/dev-cli/internal/model"
+	"github.com/duy0611/dev-cli/internal/store"
+	"github.com/duy0611/dev-cli/internal/xpath"
 	"github.com/spf13/cobra"
 )
 

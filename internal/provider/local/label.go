@@ -3,7 +3,7 @@ package local
 import (
 	"fmt"
 
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/model"
+	"github.com/duy0611/dev-cli/internal/model"
 )
 
 // Label keys. Namespaced so they cannot collide with the devcontainer CLI's own

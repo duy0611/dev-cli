@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/model"
+	"github.com/duy0611/dev-cli/internal/model"
 )
 
 // openTest returns a Store backed by a temp file. Deliberately not

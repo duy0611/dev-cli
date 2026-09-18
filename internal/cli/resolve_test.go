@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/model"
+	"github.com/duy0611/dev-cli/internal/model"
 )
 
 // Every provider call needs a --workspace-folder that exists: the devcontainer

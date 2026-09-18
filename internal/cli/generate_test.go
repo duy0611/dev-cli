@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/dcgen"
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/model"
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/provider/k8s"
+	"github.com/duy0611/dev-cli/internal/dcgen"
+	"github.com/duy0611/dev-cli/internal/model"
+	"github.com/duy0611/dev-cli/internal/provider/k8s"
 )
 
 // seedWorkspace gives a test app a usable provider and workspace, since every

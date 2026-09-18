@@ -7,11 +7,11 @@ import (
 	"os"
 	"path/filepath"
 
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/env"
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/model"
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/provider"
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/secret"
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/store"
+	"github.com/duy0611/dev-cli/internal/env"
+	"github.com/duy0611/dev-cli/internal/model"
+	"github.com/duy0611/dev-cli/internal/provider"
+	"github.com/duy0611/dev-cli/internal/secret"
+	"github.com/duy0611/dev-cli/internal/store"
 )
 
 // target is everything a container command needs: the record, the provider

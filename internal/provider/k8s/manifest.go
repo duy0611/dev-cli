@@ -6,8 +6,8 @@ import (
 	"path"
 	"strings"
 
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/model"
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/provider"
+	"github.com/duy0611/dev-cli/internal/model"
+	"github.com/duy0611/dev-cli/internal/provider"
 )
 
 // Manifests are hand-rolled structs rather than client-go types. The whole

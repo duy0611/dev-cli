@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/model"
+	"github.com/duy0611/dev-cli/internal/model"
 )
 
 // CreateContainer records a container. The name has to be free within the

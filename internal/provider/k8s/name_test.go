@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/model"
+	"github.com/duy0611/dev-cli/internal/model"
 )
 
 // What Kubernetes accepts for a label value, which is the stricter of the two

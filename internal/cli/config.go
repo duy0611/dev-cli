@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/dcgen"
+	"github.com/duy0611/dev-cli/internal/dcgen"
 )
 
 func newContainerToolsCmd(a *app) *cobra.Command {

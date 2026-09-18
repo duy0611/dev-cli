@@ -533,7 +533,7 @@ func folderlessMount(workspace, container string) dcgen.Mount {
 }
 ```
 
-The import is `"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/provider/local"`. Note `internal/cli/root.go` already blank-imports this package, so this only changes it to a named import in one more file — it does not add a dependency the CLI did not already have.
+The import is `"github.com/duy0611/dev-cli/internal/provider/local"`. Note `internal/cli/root.go` already blank-imports this package, so this only changes it to a named import in one more file — it does not add a dependency the CLI did not already have.
 
 - [ ] **Step 4: Thread the mount through the two renderers**
 
@@ -560,7 +560,7 @@ In `rewriteGeneratedTools`, derive the mount from the container being rewritten 
 	config, err := dcgen.Render(name, next, mount)
 ```
 
-`generate.go` does not import `model` yet — add `"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/model"` alongside the `local` import from Step 3.
+`generate.go` does not import `model` yet — add `"github.com/duy0611/dev-cli/internal/model"` alongside the `local` import from Step 3.
 
 - [ ] **Step 5: Add the flag and the create path**
 
@@ -768,7 +768,7 @@ import (
 	"strings"
 	"testing"
 
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/model"
+	"github.com/duy0611/dev-cli/internal/model"
 )
 
 // Every provider call needs a --workspace-folder that exists: the devcontainer

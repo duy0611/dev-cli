@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/provider"
+	"github.com/duy0611/dev-cli/internal/provider"
 )
 
 func testInput() manifestInput {

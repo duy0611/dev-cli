@@ -8,9 +8,9 @@ import (
 	"slices"
 	"strings"
 
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/dcgen"
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/model"
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/provider/local"
+	"github.com/duy0611/dev-cli/internal/dcgen"
+	"github.com/duy0611/dev-cli/internal/model"
+	"github.com/duy0611/dev-cli/internal/provider/local"
 )
 
 // parseToolList splits a --tools value. Empty entries are dropped rather than

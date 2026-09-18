@@ -7,12 +7,12 @@ import (
 	"os"
 	"strings"
 
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/dcconfig"
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/dcgen"
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/model"
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/provider"
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/store"
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/xpath"
+	"github.com/duy0611/dev-cli/internal/dcconfig"
+	"github.com/duy0611/dev-cli/internal/dcgen"
+	"github.com/duy0611/dev-cli/internal/model"
+	"github.com/duy0611/dev-cli/internal/provider"
+	"github.com/duy0611/dev-cli/internal/store"
+	"github.com/duy0611/dev-cli/internal/xpath"
 	"github.com/spf13/cobra"
 )
 

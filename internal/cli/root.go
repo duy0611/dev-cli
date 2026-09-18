@@ -10,8 +10,8 @@ import (
 
 	// Register the providers with the factory. Blank because nothing here
 	// calls them directly; the registry is the whole interface.
-	_ "git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/provider/k8s"
-	_ "git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/provider/local"
+	_ "github.com/duy0611/dev-cli/internal/provider/k8s"
+	_ "github.com/duy0611/dev-cli/internal/provider/local"
 )
 
 // Execute runs the command tree and returns the process exit code.

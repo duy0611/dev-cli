@@ -1180,7 +1180,7 @@ func catalogItems(tools []dcgen.Tool, preselect []string) []pickItem {
 }
 ```
 
-Drop `catalogItems`' unused `preselect` parameter and the `slices` import if the compiler flags them — Task 6 is the only caller and passes nothing. Add the `dcgen` import: `"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/dcgen"`.
+Drop `catalogItems`' unused `preselect` parameter and the `slices` import if the compiler flags them — Task 6 is the only caller and passes nothing. Add the `dcgen` import: `"github.com/duy0611/dev-cli/internal/dcgen"`.
 
 - [ ] **Step 4: Run the tests**
 
@@ -1382,7 +1382,7 @@ import (
 	"slices"
 	"strings"
 
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/dcgen"
+	"github.com/duy0611/dev-cli/internal/dcgen"
 )
 
 // parseToolList splits a --tools value. Empty entries are dropped rather than
@@ -1619,7 +1619,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/dcgen"
+	"github.com/duy0611/dev-cli/internal/dcgen"
 )
 
 func newContainerToolsCmd(a *app) *cobra.Command {

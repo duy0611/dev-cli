@@ -1,4 +1,4 @@
-module git.supermetrics.com/duy-nguyen/devcontainer-claude-setup
+module github.com/duy0611/dev-cli
 
 go 1.26.0
 

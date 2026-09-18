@@ -1,4 +1,4 @@
-# dev
+# DEV CLI
 
 A CLI for managing devcontainers and running coding agents inside them.
 

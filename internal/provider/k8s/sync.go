@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/model"
+	"github.com/duy0611/dev-cli/internal/model"
 )
 
 // Sync copies the host folder into the container's workspace.

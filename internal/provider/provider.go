@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"io"
 
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/model"
+	"github.com/duy0611/dev-cli/internal/model"
 )
 
 // EnvVar is one resolved environment variable to inject into a container.

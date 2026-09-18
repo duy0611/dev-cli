@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/model"
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/provider"
-	"git.supermetrics.com/duy-nguyen/devcontainer-claude-setup/internal/secret"
+	"github.com/duy0611/dev-cli/internal/model"
+	"github.com/duy0611/dev-cli/internal/provider"
+	"github.com/duy0611/dev-cli/internal/secret"
 )
 
 // fakeGit puts a git stub on PATH that answers user.name and user.email.
