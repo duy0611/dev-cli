@@ -124,10 +124,25 @@ func (p *Provider) Remove(ctx context.Context, c model.Container) error {
 	if err != nil {
 		return err
 	}
-	if id == "" {
-		return nil
+	if id != "" {
+		if err := runDocker(ctx, "rm", "-f", id); err != nil {
+			return err
+		}
 	}
-	return runDocker(ctx, "rm", "-f", id)
+
+	// The volume is named in workspaceMount rather than created by the
+	// container, so `docker rm` leaves it behind. Removing it here is what
+	// makes `container remove` mean the container is gone, and matches the k8s
+	// provider deleting its PVC. Last, because the volume cannot be removed
+	// while a container still references it.
+	if c.SourceKind == model.SourceNone {
+		name := VolumeName(c.WorkspaceName, c.Name)
+		fmt.Fprintf(os.Stderr, "dev: removing volume %s\n", name)
+		// --force: a folderless container that was never started has no
+		// volume, and "no such volume" is not a failure to report.
+		return runDocker(ctx, "volume", "rm", "--force", name)
+	}
+	return nil
 }
 
 func (p *Provider) Status(ctx context.Context, c model.Container) (model.Status, error) {

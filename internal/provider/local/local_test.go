@@ -332,3 +332,41 @@ func TestExecPassesTheConfigPath(t *testing.T) {
 		t.Errorf("exec argv missing --config %s: %v", c.ConfigPath, argv)
 	}
 }
+
+func folderlessContainer() model.Container {
+	return model.Container{
+		Name:          "scratch",
+		WorkspaceName: "ws",
+		SourceKind:    model.SourceNone,
+		Source:        "/tmp/dev-config-x",
+		ConfigPath:    "/tmp/dev-config-x/.devcontainer/devcontainer.json",
+	}
+}
+
+// docker rm does not touch a named volume: it is external to the container, so
+// without this it survives every remove and accumulates until a disk fills.
+func TestRemoveDeletesTheVolumeOfAFolderlessContainer(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, dockerBin, "abc123\n", 0)
+
+	if err := (&Provider{}).Remove(context.Background(), folderlessContainer()); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if !contains(f.argv(t, dockerBin), []string{"volume", "rm", "--force", "dev-ws-scratch"}) {
+		t.Errorf("Remove did not delete the volume; last docker call was %v", f.argv(t, dockerBin))
+	}
+}
+
+// A folder container's work is on the host and there is no volume to remove.
+// Asking docker to remove one would fail on every remove.
+func TestRemoveDoesNotDeleteAVolumeForAFolderContainer(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, dockerBin, "abc123\n", 0)
+
+	if err := (&Provider{}).Remove(context.Background(), testContainer()); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if contains(f.argv(t, dockerBin), []string{"volume"}) {
+		t.Errorf("Remove touched a volume for a folder container: %v", f.argv(t, dockerBin))
+	}
+}
