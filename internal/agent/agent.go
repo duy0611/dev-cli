@@ -26,15 +26,6 @@ func (a Agent) Command(extra []string) []string {
 	return append(cmd, extra...)
 }
 
-// Env is what the agent needs in its environment beyond the workspace's own
-// settings.
-//
-// HERDR_AGENT is how a tmux front-end such as Herdr tells an agent pane from a
-// shell pane. Harmless when nothing is watching for it.
-func (a Agent) Env() map[string]string {
-	return map[string]string{"HERDR_AGENT": a.ID}
-}
-
 // registry is the set of agents this tool can start. Adding one is a line here;
 // nothing else in the codebase names an agent.
 var registry = map[string]Agent{

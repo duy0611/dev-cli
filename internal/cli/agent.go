@@ -60,9 +60,6 @@ func runContainerAgent(ctx context.Context, a *app, workspace, name, agentID str
 	if err != nil {
 		return err
 	}
-	for k, v := range ag.Env() {
-		environ = append(environ, provider.EnvVar{Key: k, Value: v})
-	}
 
 	// The command starts the container rather than refusing: asking for an
 	// agent is asking for a working container.
@@ -77,6 +74,15 @@ func runContainerAgent(ctx context.Context, a *app, workspace, name, agentID str
 	}
 
 	if err := a.ensureAgentPresent(ctx, t, ag, environ); err != nil {
+		return err
+	}
+
+	// Herdr classifies a pane by inspecting the foreground process it can see
+	// on the host, not anything inside the container — its own docs say so
+	// plainly: "Herdr cannot see it if you set it only inside a VM or
+	// container." `dev` is the process sitting in the pane, so this is the
+	// only copy of the variable that can reach it.
+	if err := os.Setenv("HERDR_AGENT", ag.ID); err != nil {
 		return err
 	}
 

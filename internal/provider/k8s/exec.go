@@ -22,10 +22,9 @@ func shellJoin(argv []string) string {
 // envPrefix renders environment variables as an `env` invocation.
 //
 // The Secret already carries the workspace's settings, so this is not how they
-// normally arrive. It matters for two things: a variable that belongs to one
-// invocation rather than the container (HERDR_AGENT), and a secret rotated
-// since the pod started — the pod's own environment is fixed at start, but a
-// command exec'd into it gets the current value.
+// normally arrive. It matters for a secret rotated since the pod started — the
+// pod's own environment is fixed at start, but a command exec'd into it gets
+// the current value.
 func envPrefix(env []envVar) []string {
 	if len(env) == 0 {
 		return nil

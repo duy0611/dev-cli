@@ -49,19 +49,6 @@ func TestCommandAppendsExtraArgs(t *testing.T) {
 	}
 }
 
-// Herdr classifies a pane by this variable, so every agent has to carry it.
-func TestEnvCarriesTheAgentID(t *testing.T) {
-	for _, id := range IDs() {
-		a, err := Lookup(id)
-		if err != nil {
-			t.Fatalf("Lookup(%q): %v", id, err)
-		}
-		if got := a.Env()["HERDR_AGENT"]; got != id {
-			t.Errorf("%s: HERDR_AGENT = %q, want %q", id, got, id)
-		}
-	}
-}
-
 func TestIDsAreSorted(t *testing.T) {
 	ids := IDs()
 	if len(ids) == 0 {

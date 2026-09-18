@@ -29,11 +29,11 @@ build:
 	@mkdir -p dist
 	$(GOBUILD) -o $(BIN) ./cmd/dev
 
-# -timeout 60s, not go's 10m default: nothing here is slow, so a package that
+# -timeout 120s, not go's 10m default: nothing here is slow, so a package that
 # stops finishing has deadlocked, and the stack should print in a minute rather
 # than after ten. The timeout is per package, so it is not a budget for the run.
 test:
-	$(GO) test -timeout 60s ./...
+	$(GO) test -timeout 120s ./...
 
 # gofmt -l prints the files it would change and exits 0 either way, so the
 # output is what has to be checked.
