@@ -117,6 +117,33 @@ func TestUpPassesWorkspaceFolderAndIDLabels(t *testing.T) {
 	}
 }
 
+// A folderless container still hands the CLI a workspace folder — the
+// materialised temporary directory holding its generated config — and the
+// same id-labels as a folder container. The provider does not need to know
+// there is no project behind it; only the generated document's own
+// workspaceMount differs, and that is dcgen's concern, not Up's.
+func TestUpPassesWorkspaceFolderAndIDLabelsForAFolderlessContainer(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, devcontainerBin, "", 0)
+
+	c := folderlessContainer()
+	p := &Provider{}
+	if err := p.Up(context.Background(), c, nil); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	argv := f.argv(t, devcontainerBin)
+	for _, want := range [][]string{
+		{"--workspace-folder", c.Source},
+		{"--id-label", "dev.workspace=ws"},
+		{"--id-label", "dev.container=scratch"},
+	} {
+		if !contains(argv, want) {
+			t.Errorf("argv %v is missing %v", argv, want)
+		}
+	}
+}
+
 // The invariant most likely to break silently: a call that spells the labels
 // differently looks up a container that does not exist, and the CLI creates a
 // second one rather than failing.

@@ -424,7 +424,10 @@ func TestCreateNoFolderStoresAVolumeBackedConfig(t *testing.T) {
 
 // --no-folder needs no --generate: there is no project configuration for a
 // generated one to shadow, which is the only thing --generate guards against.
-// A scripted run must not block on the picker either.
+// A scripted run must not block on the picker either. Under `go test` stdin is
+// /dev/null, which isTerminal rejects, so this is the scripted path: per the
+// spec it must succeed with a bare Ubuntu image and no tools, not fail the
+// way folderSource does for a folder with no config.
 func TestCreateNoFolderNeedsNoGenerateFlag(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -432,6 +435,25 @@ func TestCreateNoFolderNeedsNoGenerateFlag(t *testing.T) {
 	opts := createOpts{noFolder: true, noStart: true}
 	if err := runContainerCreate(t.Context(), a, "", "scratch", "", opts); err != nil {
 		t.Fatalf("create: %v", err)
+	}
+
+	st, err := a.store()
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	c, err := st.GetContainer("ws", "scratch")
+	if err != nil {
+		t.Fatalf("GetContainer: %v", err)
+	}
+	// A scripted run with no --tools must not silently install anything.
+	if strings.Contains(c.GeneratedConfig, "apt-get-packages") {
+		t.Errorf("bare no-folder container installed a tool it was not asked for:\n%s", c.GeneratedConfig)
+	}
+	// The volume mount must still be there: a bare image is still a
+	// folderless one, and materialise still points the provider at the
+	// generated document rather than an empty one.
+	if !strings.Contains(c.GeneratedConfig, "workspaceMount") {
+		t.Errorf("bare no-folder container lost its volume mount:\n%s", c.GeneratedConfig)
 	}
 }
 

@@ -76,7 +76,7 @@ func newContainerCreateCmd(a *app) *cobra.Command {
 		},
 	}
 	addWorkspaceFlag(cmd, &workspace)
-	cmd.Flags().StringVar(&folder, "folder", "", "host folder holding the project (required)")
+	cmd.Flags().StringVar(&folder, "folder", "", "host folder holding the project")
 	cmd.Flags().BoolVar(&opts.noStart, "no-start", false, "record the container without starting it")
 	cmd.Flags().BoolVar(&opts.noFolder, "no-folder", false,
 		"create a container with no host folder; its work lives in a volume dev owns")
@@ -116,11 +116,25 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 	)
 	if opts.noFolder {
 		// No project, so nothing can ship a configuration and there is nothing
-		// for --generate to shadow: a folderless container is always generated.
-		generated, err = generatedConfigFor(name, true, opts.tools,
+		// for --generate to shadow: --generate is accepted but redundant here.
+		// Passing opts.generate rather than a hardcoded true lets a terminal
+		// run without --tools fall into generatedConfigFor's picker branch,
+		// same as the folder path.
+		generated, err = generatedConfigFor(name, opts.generate, opts.tools,
 			folderlessMount(wsName, name), os.Stdin, a.out)
 		if err != nil {
 			return err
+		}
+		if generated == "" {
+			// generatedConfigFor returns "" only for a scripted run with no
+			// --tools: unlike folderSource, that is not an error here, since a
+			// folderless container always has something to generate and the
+			// spec promises a bare Ubuntu image rather than a picker nobody
+			// can see.
+			generated, err = dcgen.Render(name, nil, folderlessMount(wsName, name))
+			if err != nil {
+				return usageError(err)
+			}
 		}
 	} else {
 		source, configPath, generated, err = folderSource(name, folder, opts, a)
@@ -250,7 +264,7 @@ func runContainerList(ctx context.Context, a *app, workspace string, all bool) e
 		return err
 	}
 	if len(containers) == 0 {
-		a.printf("no containers; run: dev container create NAME --folder PATH\n")
+		a.printf("no containers; run: dev container create NAME --folder PATH (or --no-folder)\n")
 		return nil
 	}
 

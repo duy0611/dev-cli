@@ -140,9 +140,13 @@ provider bind-mounts the folder, so a no-op `Sync` there would be a lie.
    because without the second the CLI would derive the in-container path from
    the temporary directory `materialise` creates and it would change every
    invocation. That temporary directory is also what such a container passes as
-   `--workspace-folder`, which is why neither provider knows what a folderless
-   container is. The local provider removes the volume in `Remove`, matching
-   k8s deleting its PVC; `rebuild` keeps it on both.
+   `--workspace-folder`, which is why neither provider needs to know what a
+   folderless container is to run one — Up, Exec, Stop, Status and Logs are
+   unchanged. The three places that do branch on `SourceKind` do it to remove
+   the volume and to refuse or skip a sync: the local provider removes the
+   volume in `Remove`, matching k8s deleting its PVC (`rebuild` keeps it on
+   both); and `container sync` refuses a folderless container on both
+   providers, since there is no host tree to push.
 
 ## Kubernetes provider
 
