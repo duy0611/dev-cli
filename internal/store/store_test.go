@@ -407,3 +407,31 @@ func TestDeletingAWorkspaceTakesTheGeneratedConfig(t *testing.T) {
 		t.Errorf("the container outlived its workspace: %+v", list)
 	}
 }
+
+// A folderless container stores an empty source. The column is NOT NULL, not
+// non-empty, and nothing on the way through may turn "" into a default.
+func TestContainerRoundTripsAnEmptySource(t *testing.T) {
+	s := openTest(t)
+	seed(t, s)
+
+	want := model.Container{
+		Name: "scratch", WorkspaceName: "ws",
+		SourceKind:      model.SourceNone,
+		Source:          "",
+		GeneratedConfig: `{"name":"scratch"}`,
+	}
+	if err := s.CreateContainer(want); err != nil {
+		t.Fatalf("CreateContainer: %v", err)
+	}
+
+	got, err := s.GetContainer("ws", "scratch")
+	if err != nil {
+		t.Fatalf("GetContainer: %v", err)
+	}
+	if got.SourceKind != model.SourceNone {
+		t.Errorf("SourceKind = %q, want %q", got.SourceKind, model.SourceNone)
+	}
+	if got.Source != "" {
+		t.Errorf("Source = %q, want empty", got.Source)
+	}
+}

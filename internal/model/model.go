@@ -48,6 +48,10 @@ const (
 	// SourceFolder is a directory on the host that ships its own
 	// .devcontainer configuration.
 	SourceFolder SourceKind = "folder"
+	// SourceNone is a container with no host folder at all. Its work lives in
+	// a volume the provider owns — a docker named volume on local, the PVC on
+	// k8s — because there is no host directory to bind-mount.
+	SourceNone SourceKind = "none"
 )
 
 // Container is a devcontainer this tool knows about. It records what the
@@ -58,7 +62,7 @@ type Container struct {
 	Name          string
 	WorkspaceName string
 	SourceKind    SourceKind
-	Source        string // absolute physical host path when SourceKind is folder
+	Source        string // absolute physical host path when SourceKind is folder, empty when none
 	ConfigPath    string // the resolved .devcontainer config file
 	// GeneratedConfig is the devcontainer.json dev wrote for this container,
 	// empty when the project ships its own. It lives here rather than on disk
