@@ -465,3 +465,32 @@ func TestRebuildToolsKeepsTheVolumeMount(t *testing.T) {
 		t.Errorf("rebuild --tools did not add node:\n%s", c.GeneratedConfig)
 	}
 }
+
+// An empty SOURCE column reads as a bug in the table. A dash says "there is
+// none" rather than "something went wrong printing it".
+func TestListShowsADashForAFolderlessContainer(t *testing.T) {
+	a, out := newTestApp(t)
+	seedWorkspace(t, a)
+
+	opts := createOpts{noFolder: true, noStart: true}
+	if err := runContainerCreate(t.Context(), a, "", "scratch", "", opts); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	out.Reset()
+
+	if err := runContainerList(t.Context(), a, "", false); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	line := ""
+	for _, l := range strings.Split(out.String(), "\n") {
+		if strings.Contains(l, "scratch") {
+			line = l
+		}
+	}
+	if line == "" {
+		t.Fatalf("scratch is not in the list:\n%s", out.String())
+	}
+	if !strings.HasSuffix(strings.TrimSpace(line), "-") {
+		t.Errorf("SOURCE column is not a dash: %q", line)
+	}
+}

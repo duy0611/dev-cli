@@ -278,10 +278,19 @@ func runContainerList(ctx context.Context, a *app, workspace string, all bool) e
 		return string(s)
 	}
 
+	// An empty cell reads as a printing bug rather than as "there is no
+	// folder".
+	sourceOf := func(c model.Container) string {
+		if c.SourceKind == model.SourceNone {
+			return "-"
+		}
+		return xpath.Shorten(c.Source)
+	}
+
 	return a.table(func(w io.Writer) {
 		header(w, "WORKSPACE", "NAME", "STATUS", "SOURCE")
 		for _, c := range containers {
-			row(w, c.WorkspaceName, c.Name, statusOf(c), xpath.Shorten(c.Source))
+			row(w, c.WorkspaceName, c.Name, statusOf(c), sourceOf(c))
 		}
 	})
 }
