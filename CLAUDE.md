@@ -10,7 +10,14 @@ One binary, a SQLite database, and the external binaries it shells out to:
 operator, unpublished.
 
 The design record is `docs/specs/2026-09-14-dev-cli.md`. Read it for intent;
-read the code for current state.
+read the code for current state. `docs/USAGE.md` is the operator-facing
+reference — walkthroughs and every command and flag. A change to a command's
+surface is not finished until that file matches it.
+
+The k8s provider is **experimental**: it works and it is tested, but its
+provider settings, object layout and lifecycle handling are still free to
+change, and a change there does not owe anyone a migration. The local provider
+is the stable one. Say so wherever the two are presented side by side.
 
 ## Commands
 
@@ -157,11 +164,16 @@ provider bind-mounts the folder, so a no-op `Sync` there would be a lie.
    runs the same command but it is a no-op there, because the pod's `fsGroup`
    already makes the PVC group-writable.
 
-## Kubernetes provider
+## Kubernetes provider (experimental)
 
 The devcontainer CLI speaks Docker only. It is used for reading the merged
 configuration and building the image; `kubectl` does everything else. The image
 is built on the host and pushed, so a k8s provider still needs Docker locally.
+
+Experimental means the settings in `Config`, the three objects, and the way
+lifecycle commands are driven can all still change. It does not license a
+sloppy change: the invariants below are what make the provider work at all, and
+breaking one produces a failure far from its cause whatever the label says.
 
 Beyond the invariants above, these are the parts that bite:
 

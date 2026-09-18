@@ -15,21 +15,26 @@ dev container create api --folder ~/code/api
 dev container agent api --agent claude
 ```
 
+Task walkthroughs and the full command reference are in
+[docs/USAGE.md](docs/USAGE.md).
+
 ## Status
 
 Milestone 2. What works:
 
 - the **local** provider, driving the `devcontainer` CLI against any
   Docker-compatible engine
-- the **k8s** provider, running containers in a cluster as Deployments
+- the **k8s** provider, running containers in a cluster as Deployments —
+  **experimental**, see below
 - containers created **from a folder**, using the project's own
   `.devcontainer/` or a generated one (`--generate`, `dev container tools`)
+- containers created **with no folder at all** (`--no-folder`), whose work lives
+  in a volume `dev` owns
 - workspaces, and per-workspace settings resolved from literals, the macOS
   Keychain, or the 1Password CLI
 - `claude`, `opencode`, `codex` and `hermes` as agents
 
-What does not exist yet: git-URL and image sources, minted cloud credentials,
-IDE integration, and the UI.
+What does not exist yet: minted cloud credentials, IDE integration, and the UI.
 
 ## Install
 
@@ -56,13 +61,21 @@ One is active at a time (`dev workspace use`), and every container command takes
 `--workspace` to override it. Container names are unique *within* a workspace, so
 the same project can be running twice under two names.
 
-**Container** — a record pointing at a folder. When the folder ships its own
-`.devcontainer/`, that is what runs, untouched. When it ships none,
-`--generate` renders a base Ubuntu configuration from a catalog of tools
-(`dev container tools`) and keeps it in dev's database; at a terminal, `create`
-offers this rather than failing. Either way `dev` writes nothing into the
-project: the configuration it generates is its own, and a folder that has one
-of its own always wins.
+**Container** — a record of something to run, usually pointing at a folder. When
+the folder ships its own `.devcontainer/`, that is what runs, untouched. When it
+ships none, `--generate` renders a base Ubuntu configuration from a catalog of
+tools (`dev container tools`) and keeps it in dev's database; at a terminal,
+`create` offers this rather than failing. Either way `dev` writes nothing into
+the project: the configuration it generates is its own, and a folder that has
+one of its own always wins.
+
+A container can also have **no folder** — `dev container create scratch
+--no-folder`. Nothing on your host is mounted; the work lives in
+`/workspaces/scratch` on a volume `dev` creates and removes with the container,
+and the configuration is always generated. It survives a stop, a start and a
+rebuild, and only `container remove` destroys it. That is the shape to reach for
+when there is no project yet: somewhere an agent can clone into, scaffold in, or
+experiment.
 
 **Setting** — one environment variable for a workspace's containers, stored as a
 *spec* rather than a value:
@@ -78,7 +91,13 @@ rebuild. `dev workspace show` prints the specs and never the values. Your git
 `user.name` and `user.email` are passed through automatically, so the first
 commit inside a container works; an explicit setting of the same name wins.
 
-## The k8s provider
+## The k8s provider (experimental)
+
+> **Experimental.** It works and it is tested, but it is the newest part of this
+> tool and the least exercised. Its provider settings, object layout and
+> lifecycle handling may change, and a change may need you to remove a provider
+> and configure it again rather than being migrated for you. The local provider
+> is the stable one.
 
 ```sh
 dev provider configure prod --kind k8s     # prompts, defaulting from kubeconfig
@@ -174,73 +193,20 @@ and `start`.
 
 ## Commands
 
+Every command, every flag, and the notes that go with them:
+[docs/USAGE.md](docs/USAGE.md#command-reference). The short version:
+
 ```
-dev provider configure NAME --kind local
-dev provider configure NAME --kind k8s [--context CTX] [--namespace NS]
-                                       [--registry PREFIX] [--platform linux/amd64]
-                                       [--storage-size 20Gi] [--storage-class SC]
-                                       [--service-account SA] [--image-pull-secret NAME]
-dev provider list
-dev provider remove NAME
-
-dev workspace init NAME --provider NAME
-dev workspace use NAME
-dev workspace list
-dev workspace set KEY SPEC
-dev workspace unset KEY
-dev workspace show NAME
-dev workspace remove NAME
-
-dev container create NAME --folder PATH [--no-start]
-dev container list [--all]
-dev container start|stop NAME
-dev container remove NAME [--force]
-dev container rebuild NAME [--no-cache]
-dev container logs NAME [-f]
-dev container shell NAME
-dev container exec NAME -- CMD [ARGS...]
-dev container agent NAME --agent claude [-- ARGS...]
-dev container sync NAME                       # k8s only
+dev provider   configure|list|remove
+dev workspace  init|use|list|set|unset|show|remove
+dev container  create|list|start|stop|remove|rebuild|logs|shell|exec|agent|sync|tools|config
 ```
 
-Every container command accepts `--workspace NAME`.
+Every container command accepts `--workspace NAME`, defaulting to the active
+workspace.
 
 Exit codes: `0` success, `1` the work failed, `2` the request was malformed,
 `3` something named does not exist.
-
-### Notes on a few of them
-
-`create` resolves the folder to a physical path before recording it. On macOS
-the engine runs in a VM and resolves paths inside it, where `/tmp` is a real
-directory rather than a symlink to `/private/tmp` — an unresolved path mounts an
-empty directory, silently.
-
-`agent` starts the container if it is stopped, then checks the agent is actually
-installed in the image. If it is not, `dev` offers a rebuild and points at the
-project's `devcontainer.json`: installing an agent means adding it there, which
-is not something this tool will do to someone else's repo.
-
-`sync` exists only for providers whose container holds a copy of your files. On
-a local container it exits 2 saying the folder is already mounted.
-
-`provider configure` changes the settings you name and leaves the rest as they
-were, so moving one does not mean restating the other seven; pass `-` as the
-value of an optional k8s setting to clear it. The kind is the one thing that
-cannot change. Workspaces go on naming the provider and their containers stay in
-the engine they were created in, so a flip would leave records pointing at an
-engine that has never heard of them — `container list` would answer confidently
-and wrongly, and `container remove` could never reach the real container. Remove
-the provider and configure it again instead; `provider remove` refuses while a
-workspace still names it, which is what keeps that from happening quietly.
-
-`workspace remove` and `provider remove` refuse while anything still points at
-them — a workspace holding containers (running or not), a provider named by a
-workspace. Remove the containers first. Removing the active workspace leaves
-none active rather than a dangling pointer.
-
-`container remove` never touches the project folder. If the engine refuses, the record is
-kept so the command can be retried; `--force` drops it anyway, which is how you
-clean up after an engine that no longer exists.
 
 ## State
 
