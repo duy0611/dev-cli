@@ -1,0 +1,65 @@
+## Runs what `make lint && make test` runs locally, and nothing else.
+##
+## The point is that a green tick means the same thing as a clean local run — so
+## this file installs the tools and calls the Makefile targets, rather than
+## restating the commands. A check that drifts from the Makefile is worse than no
+## check: it fails on things the operator cannot reproduce, or passes on things
+## that are broken.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A second push to the same branch makes the first run's answer irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          # From go.mod, so the toolchain is not pinned in two places and
+          # cannot disagree with what the module requires.
+          go-version-file: go.mod
+          cache: true
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          # Pinned: a new release adds linters, which would fail a tree that
+          # was clean when it was pushed. Raise it deliberately.
+          version: v2.13.2
+          # The action runs golangci-lint itself; `make lint` also runs gofmt
+          # and go vet, which the next step covers.
+          args: --timeout 5m
+
+      - name: gofmt and vet
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then echo "$out"; echo "run: gofmt -w ."; exit 1; fi
+          go vet ./...
+
+      # Builds the relay for both architectures, then dev with them embedded.
+      # Before the tests, because a test asserts the embedded relay is a real
+      # ELF executable and skips when it is absent — so without this the check
+      # that the cross-build works would quietly not run.
+      - name: Build
+        run: make build
+
+      - name: Test
+        run: make test
+
+      # Nothing here runs `make smoke`: it needs a real container engine, the
+      # devcontainer CLI, and a registry to push to. It is a local and manual
+      # check, and pretending otherwise would make this workflow flaky rather
+      # than useful.

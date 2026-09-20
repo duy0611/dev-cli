@@ -18,28 +18,18 @@ dev container agent api --agent claude
 Task walkthroughs and the full command reference are in
 [docs/USAGE.md](docs/USAGE.md).
 
-## Status
-
-**0.1.0**, the first tagged release. What works:
-
-- the **local** provider, driving the `devcontainer` CLI against any
-  Docker-compatible engine
-- the **k8s** provider, running containers in a cluster as Deployments —
-  **experimental**, see below
-- containers created **from a folder**, using the project's own
-  `.devcontainer/` or a generated one (`--generate`, `dev container tools`)
-- containers created **with no folder at all** (`--no-folder`), whose work lives
-  in a volume `dev` owns
-- workspaces, and per-workspace settings resolved from literals, the macOS
-  Keychain, or the 1Password CLI
-- **ssh agent forwarding** (`--ssh-forward`), so a container can push to git and
-  sign commits using the agent on your machine, without a key or token ever
-  being placed inside it
-- `claude`, `opencode`, `codex` and `hermes` as agents
-
-What does not exist yet: minted cloud credentials, IDE integration, and the UI.
-
 ## Install
+
+Download a binary for your platform from
+[the latest release](https://github.com/duy0611/dev-cli/releases/latest),
+verify it against `SHA256SUMS`, and put it on your `PATH`:
+
+```sh
+tar xzf dev_*_darwin_arm64.tar.gz
+install -m 0755 dev ~/.local/bin/dev
+```
+
+Or build it yourself:
 
 ```sh
 git clone git@github.com:duy0611/dev-cli.git
