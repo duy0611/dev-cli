@@ -75,7 +75,19 @@ lint:
 	@echo "==> golangci-lint"
 	@if command -v golangci-lint >/dev/null 2>&1; then \
 	  golangci-lint run ./...; \
-	else echo "    golangci-lint absent, skipped"; fi
+	else echo "    golangci-lint absent, skipped — install it, see below"; fi
+
+# golangci-lint is not vendored, and `make lint` skips rather than fails without
+# it — so a machine that never installed it lints a third less than it appears
+# to. Install with the same version the tree was last cleaned against:
+#
+#   V=2.13.2; A=$$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/'); \
+#   curl -sSL https://github.com/golangci/golangci-lint/releases/download/v$$V/golangci-lint-$$V-linux-$$A.tar.gz \
+#     | tar xz -C /tmp && install -m0755 /tmp/golangci-lint-$$V-linux-$$A/golangci-lint ~/.local/bin/
+#
+# No config file: the default linters are what the tree is clean against, and
+# errcheck is the one that has actually caught things here. An error deliberately
+# ignored is written `_ = f()`, which says it was considered.
 
 # Behind a build tag so `make test` never tries to reach a container engine.
 smoke:

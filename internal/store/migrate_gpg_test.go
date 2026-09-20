@@ -70,7 +70,7 @@ VALUES ('legacy', 'local', 1, 1, '2026-09-01T00:00:00Z');
 	if err != nil {
 		t.Fatalf("opening a pre-0003 database: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	// The row survives the drop, and the flag that is still meaningful keeps
 	// its value: dropping a column beside it must not disturb it.

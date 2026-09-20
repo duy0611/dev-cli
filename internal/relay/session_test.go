@@ -39,7 +39,7 @@ func newFakeContainer(t *testing.T) *fakeContainer {
 			}
 		}
 		f.mu.Unlock()
-		os.RemoveAll(root)
+		_ = os.RemoveAll(root)
 	})
 	return f
 }
@@ -168,7 +168,7 @@ func TestSessionEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	want := "through the session"
 	if _, err := conn.Write([]byte(want)); err != nil {

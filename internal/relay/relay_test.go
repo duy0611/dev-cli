@@ -26,7 +26,7 @@ func connect(t *testing.T, agentSocket string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	socket := filepath.Join(dir, "s")
 
 	toHost, hostIn := io.Pipe()       // container stdout -> host
@@ -40,8 +40,8 @@ func connect(t *testing.T, agentSocket string) string {
 	t.Cleanup(func() {
 		// Closing the container's inbound pipe ends its read loop, which is
 		// how a session is stopped for real.
-		toContainer.Close()
-		hostIn.Close()
+		_ = toContainer.Close()
+		_ = hostIn.Close()
 		wg.Wait()
 	})
 
@@ -69,14 +69,14 @@ func echoServer(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	path := filepath.Join(dir, "s")
 
 	ln, err := net.Listen("unix", path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { ln.Close() })
+	t.Cleanup(func() { _ = ln.Close() })
 
 	go func() {
 		for {
@@ -85,7 +85,7 @@ func echoServer(t *testing.T) string {
 				return
 			}
 			go func() {
-				defer conn.Close()
+				defer func() { _ = conn.Close() }()
 				_, _ = io.Copy(conn, conn)
 			}()
 		}
@@ -100,7 +100,7 @@ func TestRelayRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	want := "hello through the relay"
 	if _, err := conn.Write([]byte(want)); err != nil {
@@ -131,7 +131,7 @@ func TestRelayConcurrent(t *testing.T) {
 				t.Error(err)
 				return
 			}
-			defer conn.Close()
+			defer func() { _ = conn.Close() }()
 
 			// Distinct per connection, and long enough to span several reads,
 			// so a crossed channel shows up as wrong content rather than by
@@ -163,7 +163,7 @@ func TestRelayAgentUnreachable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 
 	if _, err := conn.Write([]byte("anyone there?")); err != nil {
@@ -188,7 +188,7 @@ func TestRelayWithRealAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
 	agentSocket := filepath.Join(dir, "a")
 	agent := exec.Command("ssh-agent", "-D", "-a", agentSocket)

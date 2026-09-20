@@ -73,7 +73,7 @@ func hostConn(m *mux, id uint32, p *pipe, agentSocket string) {
 		_ = m.send(frame{kind: kindClose, channel: id})
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	defer func() { _ = m.send(frame{kind: kindClose, channel: id}) }()
 
 	// Container to agent.

@@ -34,8 +34,8 @@ func Serve(socketPath string, in io.Reader, out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("listening on %s: %w", socketPath, err)
 	}
-	defer ln.Close()
-	defer os.Remove(socketPath)
+	defer func() { _ = ln.Close() }()
+	defer func() { _ = os.Remove(socketPath) }()
 
 	if err := os.Chmod(socketPath, 0o600); err != nil {
 		return fmt.Errorf("securing %s: %w", socketPath, err)
@@ -48,7 +48,7 @@ func Serve(socketPath string, in io.Reader, out io.Writer) error {
 	done := make(chan struct{})
 	go func() {
 		<-done
-		ln.Close()
+		_ = ln.Close()
 	}()
 
 	var wg sync.WaitGroup
@@ -94,7 +94,7 @@ func Serve(socketPath string, in io.Reader, out io.Writer) error {
 // serveConn carries one accepted connection over the stream. The channel is
 // already registered; p is the pipe its inbound data arrives on.
 func serveConn(m *mux, id uint32, p *pipe, conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	defer m.remove(id)
 
