@@ -9,7 +9,7 @@
 package relaybin
 
 import (
-	_ "embed"
+	"embed"
 	"fmt"
 	"runtime"
 	"strings"
@@ -22,39 +22,35 @@ import (
 // container before anything works, and a `dev` that fetched it at runtime would
 // fail on an air-gapped host and would need somewhere trusted to fetch from.
 //
-// The real files come from `make relay`. The placeholders committed beside this
-// file keep `go build ./...` working before it has been run, and produce a
-// clear error rather than a corrupt binary if one reaches a container.
+// A directory rather than one //go:embed per file, because the binaries are
+// build output and are not committed. A file pattern that matches nothing is a
+// compile error, so naming them directly would break `go build ./...` on a
+// fresh checkout; a directory pattern is satisfied by the README beside them,
+// and a missing binary becomes a runtime error this package can explain.
 //
-//go:embed bin/relay-linux-amd64
-var relayAMD64 []byte
-
-//go:embed bin/relay-linux-arm64
-var relayARM64 []byte
-
-// placeholder marks an unbuilt embed. Kept short and unlikely to collide with
-// the first bytes of a real ELF binary, which begin \x7fELF.
-const placeholder = "placeholder: run make relay\n"
+//go:embed bin
+var binFS embed.FS
 
 // Binary returns the relay built for the given container architecture.
 //
 // arch is as `uname -m` reports it, because that is what is available over an
 // exec channel into a container that might not have Go's naming anywhere.
 func Binary(arch string) ([]byte, error) {
-	var b []byte
+	var name string
 	switch strings.TrimSpace(arch) {
 	case "x86_64", "amd64":
-		b = relayAMD64
+		name = "relay-linux-amd64"
 	case "aarch64", "arm64":
-		b = relayARM64
+		name = "relay-linux-arm64"
 	default:
 		return nil, fmt.Errorf("no relay for architecture %q", arch)
 	}
 
-	// A placeholder means this `dev` was built without `make relay`. Caught
-	// here, naming the fix, rather than in the container as "exec format
-	// error" or "cannot execute binary file".
-	if strings.HasPrefix(string(b), placeholder) {
+	b, err := binFS.ReadFile("bin/" + name)
+	if err != nil {
+		// This `dev` was built without `make relay`. Caught here, naming the
+		// fix, rather than in the container as "exec format error" or "cannot
+		// execute binary file".
 		return nil, fmt.Errorf("this build of dev has no relay binary for %s; rebuild with: make build", arch)
 	}
 	return b, nil

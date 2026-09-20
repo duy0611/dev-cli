@@ -40,16 +40,14 @@ build: relay
 # -s -w strips the symbol table and DWARF. This is copied into a container on
 # every session, so its size is a cost paid repeatedly rather than once.
 #
-# The committed placeholders are deleted first: go build refuses to overwrite a
-# path that exists and is not an object file, which is what they are. That is
-# safe only because the relay lives in internal/relaybin, which nothing on the
-# path to building cmd/dev-relay imports — otherwise removing them would break
-# the build that is meant to replace them.
+# Not committed: they are build output, two megabytes each, and would churn on
+# every rebuild. internal/relaybin embeds the directory rather than the files so
+# that an absent binary is a runtime error it can explain, not a compile error
+# on a fresh checkout.
+#
+# Building the relay here is only possible because it lives in internal/relaybin
+# and nothing on the path to building cmd/dev-relay imports that package.
 RELAY_DIR := internal/relaybin/bin
-# Built beside the target and moved into place, rather than deleted first: a
-# build that fails partway would otherwise leave the paths missing, and the
-# go:embed that needs them makes every later build fail too — including the one
-# meant to fix it.
 relay:
 	@mkdir -p $(RELAY_DIR)
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -trimpath -ldflags "-s -w" \
@@ -98,11 +96,9 @@ install: build
 	install -m 0755 $(BIN) $(PREFIX)/bin/dev
 	@echo "installed $(PREFIX)/bin/dev"
 
-# The relay binaries are tracked paths holding untracked content, so they are
-# restored to their placeholders rather than deleted: leaving them built would
-# show a multi-megabyte diff on every `git status`, and leaving them absent
-# would break `go build ./...` for the next person.
+# The relay binaries go too — they are build output, and gitignored. The README
+# beside them stays: the embed names the directory, and one that matches nothing
+# does not compile.
 clean:
 	rm -rf dist
-	@printf 'placeholder: run make relay\n' > $(RELAY_DIR)/relay-linux-amd64
-	@printf 'placeholder: run make relay\n' > $(RELAY_DIR)/relay-linux-arm64
+	rm -f $(RELAY_DIR)/relay-linux-amd64 $(RELAY_DIR)/relay-linux-arm64

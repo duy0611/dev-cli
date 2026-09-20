@@ -10,7 +10,7 @@ func TestBinaryArchNames(t *testing.T) {
 	// amd64 and arm64, and the arch reaches this code from whichever of the two
 	// the caller had to hand.
 	for _, arch := range []string{"x86_64", "amd64", "aarch64", "arm64"} {
-		if _, err := Binary(arch); err != nil && !isPlaceholder(err) {
+		if _, err := Binary(arch); err != nil && !isNotBuilt(err) {
 			t.Errorf("Binary(%q): %v", arch, err)
 		}
 	}
@@ -28,14 +28,14 @@ func TestBinaryUnknownArch(t *testing.T) {
 	}
 }
 
-// TestBinaryIsBuilt fails when the embedded relay is still the committed
-// placeholder, which means `make relay` has not run. Skipped rather than
-// failed, so `go test ./...` works on a fresh checkout; `make build` depends on
-// `relay`, so a real build always has them.
+// TestBinaryIsBuilt checks the embedded relay is a real executable. Skipped
+// rather than failed when `make relay` has not run, so `go test ./...` works on
+// a fresh checkout where the binaries are absent — they are build output and
+// not committed. `make build` depends on `relay`, so a real build has them.
 func TestBinaryIsBuilt(t *testing.T) {
 	for _, arch := range []string{"x86_64", "aarch64"} {
 		b, err := Binary(arch)
-		if err != nil && isPlaceholder(err) {
+		if err != nil && isNotBuilt(err) {
 			t.Skip("relay not built; run make relay")
 		}
 		if err != nil {
@@ -49,6 +49,8 @@ func TestBinaryIsBuilt(t *testing.T) {
 	}
 }
 
-func isPlaceholder(err error) bool {
+// isNotBuilt distinguishes "make relay has not run" from a genuine failure,
+// such as an architecture with no relay at all.
+func isNotBuilt(err error) bool {
 	return strings.Contains(err.Error(), "no relay binary")
 }
