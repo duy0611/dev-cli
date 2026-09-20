@@ -1,0 +1,12 @@
+-- gpg_forward was reserved for forwarding the host's GPG agent and never read.
+-- It is not going to be: since git 2.34, `gpg.format = ssh` signs commits with
+-- an SSH key, so the agent relay that carries authentication carries signing
+-- too. A second agent, and the version-matched socket forwarding it needs,
+-- would buy nothing.
+--
+-- Dropped rather than left in place, because a column nobody reads is a promise
+-- the tool does not keep.
+--
+-- Portable: ALTER TABLE ... DROP COLUMN is supported by SQLite since 3.35 and
+-- by Postgres, so this replays with the rest.
+ALTER TABLE workspaces DROP COLUMN gpg_forward;

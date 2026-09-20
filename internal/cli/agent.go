@@ -77,6 +77,15 @@ func runContainerAgent(ctx context.Context, a *app, workspace, name, agentID str
 		return err
 	}
 
+	// After the container is up and after any rebuild: the relay runs inside
+	// the container, so it has nothing to attach to before the first, and a
+	// rebuild would take the running relay down with the old container.
+	environ, stopAgent, err := a.forwardAgent(ctx, t, environ)
+	if err != nil {
+		return err
+	}
+	defer stopAgent()
+
 	// Herdr classifies a pane by inspecting the foreground process it can see
 	// on the host, not anything inside the container — its own docs say so
 	// plainly: "Herdr cannot see it if you set it only inside a VM or

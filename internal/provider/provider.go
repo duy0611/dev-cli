@@ -68,6 +68,29 @@ type Syncer interface {
 	Sync(ctx context.Context, c model.Container) error
 }
 
+// AgentForwarder is implemented by providers that can carry the host's SSH
+// agent into a container.
+//
+// Optional for the same reason Syncer is, and discovered the same way — but
+// note the asymmetry runs the other way here: both providers implement this
+// one, because it needs only an exec channel and both have one. It is separate
+// from Provider anyway, so that a provider added later is not obliged to
+// support it before it can run a container at all.
+//
+// The returned socket path is where the agent is reachable inside the
+// container, for SSH_AUTH_SOCK. Callers must Close the session: until they do,
+// anything in the container can ask the operator's agent to sign.
+type AgentForwarder interface {
+	ForwardAgent(ctx context.Context, c model.Container, agentSocket string) (AgentSession, error)
+}
+
+// AgentSession is a live agent relay.
+type AgentSession interface {
+	// Socket is the path inside the container to put in SSH_AUTH_SOCK.
+	Socket() string
+	Close() error
+}
+
 // Factory builds the Provider for a configured provider record.
 type Factory func(p model.Provider) (Provider, error)
 

@@ -28,9 +28,10 @@ type Provider struct {
 type Workspace struct {
 	Name         string
 	ProviderName string
-	SSHForward   bool
-	GPGForward   bool
-	CreatedAt    time.Time
+	// SSHForward carries the host's SSH agent into this workspace's
+	// containers, for the length of one dev command. See internal/relay.
+	SSHForward bool
+	CreatedAt  time.Time
 }
 
 // Setting is one environment variable a workspace contributes to its

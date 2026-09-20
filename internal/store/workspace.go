@@ -13,9 +13,9 @@ import (
 // one to a different provider would strand them.
 func (s *Store) CreateWorkspace(w model.Workspace) error {
 	_, err := s.db.Exec(
-		`INSERT INTO workspaces (name, provider_name, ssh_forward, gpg_forward, created_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		w.Name, w.ProviderName, boolToInt(w.SSHForward), boolToInt(w.GPGForward), nowString())
+		`INSERT INTO workspaces (name, provider_name, ssh_forward, created_at)
+		 VALUES (?, ?, ?, ?)`,
+		w.Name, w.ProviderName, boolToInt(w.SSHForward), nowString())
 	if err != nil {
 		if isUniqueViolation(err) {
 			return ErrExists
@@ -27,14 +27,14 @@ func (s *Store) CreateWorkspace(w model.Workspace) error {
 
 func (s *Store) GetWorkspace(name string) (model.Workspace, error) {
 	row := s.db.QueryRow(
-		`SELECT name, provider_name, ssh_forward, gpg_forward, created_at
+		`SELECT name, provider_name, ssh_forward, created_at
 		 FROM workspaces WHERE name = ?`, name)
 	return scanWorkspace(row)
 }
 
 func (s *Store) ListWorkspaces() ([]model.Workspace, error) {
 	rows, err := s.db.Query(
-		`SELECT name, provider_name, ssh_forward, gpg_forward, created_at
+		`SELECT name, provider_name, ssh_forward, created_at
 		 FROM workspaces ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("listing workspaces: %w", err)
@@ -134,17 +134,16 @@ func (s *Store) ListSettings(workspace string) ([]model.Setting, error) {
 func scanWorkspace(sc scanner) (model.Workspace, error) {
 	var (
 		w         model.Workspace
-		ssh, gpg  int
+		ssh       int
 		createdAt string
 	)
-	if err := sc.Scan(&w.Name, &w.ProviderName, &ssh, &gpg, &createdAt); err != nil {
+	if err := sc.Scan(&w.Name, &w.ProviderName, &ssh, &createdAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return model.Workspace{}, ErrNotFound
 		}
 		return model.Workspace{}, fmt.Errorf("reading workspace: %w", err)
 	}
 	w.SSHForward = ssh != 0
-	w.GPGForward = gpg != 0
 
 	t, err := parseTime(createdAt)
 	if err != nil {

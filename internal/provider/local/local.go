@@ -90,6 +90,21 @@ func (p *Provider) Exec(ctx context.Context, c model.Container, command []string
 		return fmt.Errorf("no command given")
 	}
 
+	args := p.execArgs(c, command, opts.Env...)
+
+	cmd := exec.CommandContext(ctx, devcontainerBin, args...)
+	cmd.Stdin = opts.Stdin
+	cmd.Stdout = opts.Stdout
+	cmd.Stderr = opts.Stderr
+	return cmd.Run()
+}
+
+// execArgs builds the argument list for `devcontainer exec`.
+//
+// Shared with the agent relay, which starts a long-running exec of its own and
+// must reach the same container: the id labels are what decide that, and a
+// second copy of this list would be a second chance to get them wrong.
+func (p *Provider) execArgs(c model.Container, command []string, env ...provider.EnvVar) []string {
 	args := []string{"exec", "--workspace-folder", c.Source}
 	args = append(args, idLabelArgs(c)...)
 	// The config path is passed rather than inferred. A generated one lives in
@@ -98,14 +113,8 @@ func (p *Provider) Exec(ctx context.Context, c model.Container, command []string
 	if c.ConfigPath != "" {
 		args = append(args, "--config", c.ConfigPath)
 	}
-	args = append(args, remoteEnvArgs(opts.Env)...)
-	args = append(args, command...)
-
-	cmd := exec.CommandContext(ctx, devcontainerBin, args...)
-	cmd.Stdin = opts.Stdin
-	cmd.Stdout = opts.Stdout
-	cmd.Stderr = opts.Stderr
-	return cmd.Run()
+	args = append(args, remoteEnvArgs(env)...)
+	return append(args, command...)
 }
 
 func (p *Provider) Stop(ctx context.Context, c model.Container) error {

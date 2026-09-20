@@ -92,20 +92,23 @@ func runWorkspaceRemove(a *app, name string) error {
 
 func newWorkspaceInitCmd(a *app) *cobra.Command {
 	var provider string
+	var sshForward bool
 
 	cmd := &cobra.Command{
 		Use:   "init NAME",
 		Short: "Create a workspace",
 		Args:  exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runWorkspaceInit(a, args[0], provider)
+			return runWorkspaceInit(a, args[0], provider, sshForward)
 		},
 	}
 	cmd.Flags().StringVar(&provider, "provider", "", "provider this workspace runs on (required)")
+	cmd.Flags().BoolVar(&sshForward, "ssh-forward", false,
+		"reach the host's ssh agent from containers, for the length of each command")
 	return cmd
 }
 
-func runWorkspaceInit(a *app, name, provider string) error {
+func runWorkspaceInit(a *app, name, provider string, sshForward bool) error {
 	if err := xpath.ValidateName(name); err != nil {
 		return usageError(err)
 	}
@@ -121,7 +124,11 @@ func runWorkspaceInit(a *app, name, provider string) error {
 		return err
 	}
 
-	err = st.CreateWorkspace(model.Workspace{Name: name, ProviderName: provider})
+	err = st.CreateWorkspace(model.Workspace{
+		Name:         name,
+		ProviderName: provider,
+		SSHForward:   sshForward,
+	})
 	if errors.Is(err, store.ErrExists) {
 		return usageErrorf("workspace %s already exists", name)
 	}
@@ -129,6 +136,9 @@ func runWorkspaceInit(a *app, name, provider string) error {
 		return err
 	}
 	a.printf("workspace %s (provider %s)\n", name, provider)
+	if sshForward {
+		a.printf("ssh agent forwarding is on\n")
+	}
 
 	// The first workspace becomes active, so that a fresh install does not
 	// demand a `workspace use` before anything else works.
@@ -322,6 +332,10 @@ func runWorkspaceShow(a *app, name string) error {
 
 	a.printf("workspace %s\n", ws.Name)
 	a.printf("provider  %s\n", ws.ProviderName)
+	// Printed whichever way it is set. This command exists to say what a
+	// container launches with, and reaching the operator's ssh agent is part of
+	// that however the answer reads.
+	a.printf("ssh agent %s\n", onOff(ws.SSHForward))
 	if len(settings) == 0 {
 		a.printf("settings  none\n")
 		return nil

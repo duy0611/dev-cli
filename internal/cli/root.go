@@ -3,8 +3,11 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -22,6 +25,17 @@ func Execute(version string) int {
 	a := &app{out: os.Stdout}
 	defer a.close()
 
+	// Ctrl-C cancels the command's context rather than killing the process, so
+	// the deferred cleanup along the command path still runs. The ssh agent
+	// relay is the case that needs it: killed outright it would leave its
+	// socket in a container that outlives the session, and a socket nobody is
+	// watching is a channel to the operator's agent nobody is watching.
+	//
+	// stop() restores the default handling, so a second Ctrl-C kills a command
+	// that is ignoring the first.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	root := newRootCmd(version)
 	root.AddCommand(
 		newProviderCmd(a),
@@ -35,7 +49,7 @@ func Execute(version string) int {
 	root.SilenceErrors = true
 	root.SilenceUsage = true
 
-	err := root.Execute()
+	err := root.ExecuteContext(ctx)
 	if err == nil {
 		return exitOK
 	}

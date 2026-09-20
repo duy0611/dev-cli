@@ -1,0 +1,90 @@
+## Builds `dev` for every platform it runs on and attaches them to a tag.
+##
+## `dev` is a host-side tool: it shells out to the devcontainer CLI, docker and
+## kubectl, and reads the macOS Keychain. So it is built for the machines an
+## operator sits at, which is not the same set as the relay's — that one runs
+## inside a Linux container and is always linux/amd64 and linux/arm64, both of
+## which are embedded in every binary here.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  # Runnable by hand so the build can be proved before a tag exists, which is
+  # the only way to find out that a cross-build is broken without publishing a
+  # broken release first.
+  workflow_dispatch:
+
+permissions:
+  contents: write # creating the release and uploading to it
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The Makefile stamps the version from `git describe`, which reads
+          # tags. A shallow clone has none, and every binary would call itself
+          # the same thing.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The whole point of a release build: the tests must pass for the commit
+      # being published, not merely for the commit CI last looked at.
+      - name: Test
+        run: make build && make test
+
+      - name: Build every platform
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME#v}"
+          [ "$version" = "$GITHUB_REF_NAME" ] && version="$(git describe --tags --always)"
+          mkdir -p release
+
+          # The relay is built once. It is linux-only whatever the host is,
+          # because it runs inside a container — and it is the same two binaries
+          # embedded into all four of the below.
+          make relay
+
+          for platform in darwin/arm64 darwin/amd64 linux/arm64 linux/amd64; do
+            os="${platform%/*}"
+            arch="${platform#*/}"
+            echo "==> $os/$arch"
+            # CGO off, as the Makefile does: the SQLite driver is pure Go, so
+            # every one of these is a static binary with no C toolchain in
+            # sight. That is what makes cross-building all four here possible.
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
+              go build -trimpath -ldflags "-s -w -X main.version=$version" \
+              -o "release/dev" ./cmd/dev
+            tar -czf "release/dev_${version}_${os}_${arch}.tar.gz" -C release dev
+            rm release/dev
+          done
+
+          # Checksums, so a download can be verified. Generated in the
+          # directory so the file names in it are bare rather than paths.
+          cd release && sha256sum *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/*.tar.gz
+            release/SHA256SUMS
+          generate_release_notes: true
+
+      # On a manual run there is no tag to attach to, so the binaries are kept
+      # as an artefact instead. That is what makes the dispatch trigger useful:
+      # the cross-build is proved, and nothing is published.
+      - name: Keep the binaries when there is no tag
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dev-binaries
+          path: release/

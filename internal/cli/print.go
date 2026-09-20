@@ -22,6 +22,14 @@ func row(w io.Writer, cells ...string) {
 
 func itoa(n int) string { return strconv.Itoa(n) }
 
+// onOff renders a flag for a human reading a status line.
+func onOff(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
+}
+
 // warnf reports something the operator should know about but that did not stop
 // the command. Stderr, so it stays out of a piped list.
 func warnf(a *app, format string, args ...any) {

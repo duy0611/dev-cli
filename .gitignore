@@ -1,6 +1,18 @@
 # Build output. `make build` writes the binary here.
 /dist/
 
+# Where the release workflow stages the per-platform tarballs. Ignored so that
+# running its build steps by hand, to check a cross-build before tagging, leaves
+# nothing behind.
+/release/
+
+# The in-container relay, built by `make relay` for each architecture and
+# embedded into dev. Build output, and two megabytes each, so it is rebuilt
+# rather than committed. The README beside them is not ignored: the embed
+# pattern names the directory, and one that matches nothing fails to compile.
+/internal/relaybin/bin/*
+!/internal/relaybin/bin/README.md
+
 # Go test artefacts.
 *.test
 *.out
