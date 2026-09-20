@@ -167,6 +167,50 @@ Your git `user.name` and `user.email` are passed through automatically, so the
 first commit inside a container works. An explicit setting of the same name
 wins.
 
+### Push to git from inside a container
+
+A container has no credentials of its own, so `git fetch` in one fails with
+`Permission denied (publickey)`. Turn on agent forwarding and it can reach the
+ssh agent already running on your machine:
+
+```sh
+dev workspace init personal --provider local --ssh-forward
+```
+
+Nothing is copied into the container. An ssh agent signs on request and never
+hands the key over, so `dev` carries the *conversation* rather than the key:
+there is nothing in the container to steal, even if something in it turns
+hostile.
+
+Commits are signed the same way. Since git 2.34 an ssh key can sign a commit,
+so the agent that authenticates the push signs the commit too — no GPG, no
+second key, and the signing happens on your machine:
+
+```sh
+dev container exec api -- git fetch
+dev container exec api -- git commit -m 'signed by the agent on your laptop'
+```
+
+Four things to know:
+
+- **It lasts for one command.** The agent is reachable while a `dev` command is
+  running and no longer. A container you reach some other way — `docker exec`,
+  say — has no relay and no git access.
+- **Your host needs an agent with a key in it.** `ssh-add -l` should list one.
+  If `SSH_AUTH_SOCK` is not set, `dev` says so by name rather than letting git
+  fail later for reasons that look unrelated.
+- **Signing uses the agent's first key.** An agent holding several gives no
+  indication which one you meant. If the first is not the key your forge knows,
+  commits arrive unverified — reorder your `ssh-add` calls, or start a fresh
+  agent holding only the key you want.
+- **Local verification is not set up.** `git log --show-signature` reports that
+  `gpg.ssh.allowedSignersFile` is unset. The commit is signed and your forge
+  verifies it; only local checking needs a file mapping emails to keys, which
+  `dev` cannot write for you.
+
+Both providers support this. On k8s the relay rides `kubectl exec` rather than a
+local socket, so it works the same way from a pod.
+
 ### Run a workspace in Kubernetes
 
 > The k8s provider is **experimental**. It works, but its configuration and
@@ -246,6 +290,37 @@ not happen: the generated configuration chowns the volume to the remote user
 once, at create. If you see it, the `postCreateCommand` did not run — check
 `dev container logs NAME`.
 
+**`no SSH agent on this host: SSH_AUTH_SOCK is not set`** — the workspace
+forwards the agent and there is nothing to forward. Start one and add a key:
+`eval "$(ssh-agent -s)" && ssh-add`. Reported here rather than left to fail
+inside the container, where it surfaces as `error fetching identities:
+communication with agent failed` and says nothing about your machine.
+
+**`Permission denied (publickey)` even with `--ssh-forward`** — check the agent
+is reachable from inside: `dev container exec NAME -- ssh-add -l` should list
+your keys. If it does, the key it lists is not one the forge accepts. If it
+lists nothing, the agent on your machine is empty — `ssh-add` there first.
+
+**git works under `dev` but not in a shell I opened another way** — expected.
+The relay lives for the length of a `dev` command, so a shell started with
+`docker exec` or `kubectl exec` has no agent to reach. Use `dev container shell`.
+
+**My commits arrive unverified** — signing uses the agent's *first* key, and an
+agent holding several gives no indication which you meant. Check with
+`ssh-add -L | head -1`; if that is not the key your forge knows, reorder your
+`ssh-add` calls or run an agent holding only that key.
+
+**`gpg.ssh.allowedSignersFile needs to be configured`** — from
+`git log --show-signature`, and not a failure: the commit is signed and your
+forge will verify it. Only *local* verification needs a file mapping emails to
+public keys, which `dev` does not write because the mapping is yours to decide.
+
+**`GIT_CONFIG_COUNT is set for this workspace; not configuring commit signing`**
+— you have set git's environment-based configuration yourself. Both would arrive
+as the same variables and the last would win, so `dev` leaves yours alone rather
+than silently replacing it. Add `gpg.format`, `user.signingkey` and
+`commit.gpgsign` to your own pairs if you want signing too.
+
 **Everything looks wrong and I want to start over without losing my real state**
 — point `DEV_STATE` somewhere else:
 
@@ -299,7 +374,7 @@ what makes that route safe.
 ### workspace
 
 ```
-dev workspace init NAME --provider NAME
+dev workspace init NAME --provider NAME [--ssh-forward]
 dev workspace use NAME
 dev workspace list
 dev workspace set KEY SPEC
@@ -307,6 +382,12 @@ dev workspace unset KEY
 dev workspace show NAME
 dev workspace remove NAME
 ```
+
+`--ssh-forward` lets containers reach the ssh agent on your machine, for the
+length of each `dev` command, and signs commits with its first key. See
+[Push to git from inside a container](#push-to-git-from-inside-a-container).
+It is fixed at `init`: there is no flag to change it afterwards, so a workspace
+that needs it later is a new workspace.
 
 | Spec | Resolved by |
 |---|---|
@@ -399,6 +480,7 @@ errors on one that uses the project's own.
 |---|---|
 | `DEV_STATE` | where the SQLite database lives; default `~/.local/state/dev/dev.db` |
 | `DOCKER_HOST` | read by `docker`, which `dev` shells out to; how you point at Podman |
+| `SSH_AUTH_SOCK` | your ssh agent, read on the host when a workspace uses `--ssh-forward`. Inside the container it names the relay instead |
 | `DEV_SMOKE_K8S_CONTEXT` | turns on the Kubernetes half of `make smoke` |
 | `DEV_SMOKE_REGISTRY` | the other half of that switch; both must be set |
 | `DEV_SMOKE_K8S_NAMESPACE` | optional, default `default` |

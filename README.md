@@ -32,6 +32,9 @@ Task walkthroughs and the full command reference are in
   in a volume `dev` owns
 - workspaces, and per-workspace settings resolved from literals, the macOS
   Keychain, or the 1Password CLI
+- **ssh agent forwarding** (`--ssh-forward`), so a container can push to git and
+  sign commits using the agent on your machine, without a key or token ever
+  being placed inside it
 - `claude`, `opencode`, `codex` and `hermes` as agents
 
 What does not exist yet: minted cloud credentials, IDE integration, and the UI.
