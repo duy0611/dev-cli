@@ -2,9 +2,14 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/duy0611/dev-cli/internal/model"
 	"github.com/duy0611/dev-cli/internal/provider"
@@ -17,6 +22,56 @@ func touch(path string) error {
 		return err
 	}
 	return f.Close()
+}
+
+// startTestAgent runs a real ssh-agent holding one key, and returns its socket.
+// Real rather than stubbed: the point of these tests is the value handed to
+// git, and only a real agent produces a real key.
+func startTestAgent(t *testing.T) string {
+	t.Helper()
+	for _, bin := range []string{"ssh-agent", "ssh-add", "ssh-keygen"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("%s not installed", bin)
+		}
+	}
+
+	// Short path: a unix socket path is capped near 100 bytes by the kernel,
+	// and t.TempDir() under a long test name can exceed it.
+	dir, err := os.MkdirTemp("", "cliag")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	socket := filepath.Join(dir, "a")
+	agent := exec.Command("ssh-agent", "-D", "-a", socket)
+	if err := agent.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = agent.Process.Kill()
+		_, _ = agent.Process.Wait()
+	})
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(socket); err == nil {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	key := filepath.Join(dir, "id_ed25519")
+	if out, err := exec.Command("ssh-keygen",
+		"-t", "ed25519", "-N", "", "-C", "cli-test", "-f", key).CombinedOutput(); err != nil {
+		t.Fatalf("ssh-keygen: %v\n%s", err, out)
+	}
+	add := exec.Command("ssh-add", key)
+	add.Env = append(os.Environ(), "SSH_AUTH_SOCK="+socket)
+	if out, err := add.CombinedOutput(); err != nil {
+		t.Fatalf("ssh-add: %v\n%s", err, out)
+	}
+	return socket
 }
 
 // notForwarder is a provider that cannot carry the agent, standing in for one
@@ -105,6 +160,72 @@ func TestWorkspaceInitStoresSSHForward(t *testing.T) {
 	// should not have to run a second command to discover.
 	if !strings.Contains(out.String(), "ssh agent forwarding is on") {
 		t.Errorf("init did not report forwarding; got:\n%s", out.String())
+	}
+}
+
+// TestSigningEnvPairsAreContiguous covers the trap in git's environment-based
+// configuration: GIT_CONFIG_COUNT must equal the number of pairs, numbered from
+// zero with no gaps. A gap is a fatal git error, not a skipped entry — so every
+// command in the container would fail, not just the signing.
+func TestSigningEnvPairsAreContiguous(t *testing.T) {
+	socket := startTestAgent(t)
+	env := signingEnv(socket)
+	if len(env) == 0 {
+		t.Fatal("no signing configuration was produced")
+	}
+
+	byKey := map[string]string{}
+	for _, e := range env {
+		byKey[e.Key] = e.Value
+	}
+
+	count := byKey["GIT_CONFIG_COUNT"]
+	n, err := strconv.Atoi(count)
+	if err != nil {
+		t.Fatalf("GIT_CONFIG_COUNT is %q, not a number", count)
+	}
+	for i := range n {
+		if _, ok := byKey[fmt.Sprintf("GIT_CONFIG_KEY_%d", i)]; !ok {
+			t.Errorf("GIT_CONFIG_KEY_%d is missing", i)
+		}
+		if _, ok := byKey[fmt.Sprintf("GIT_CONFIG_VALUE_%d", i)]; !ok {
+			t.Errorf("GIT_CONFIG_VALUE_%d is missing", i)
+		}
+	}
+	// And nothing beyond the count, which git would ignore while the operator
+	// assumed it applied.
+	if _, ok := byKey[fmt.Sprintf("GIT_CONFIG_KEY_%d", n)]; ok {
+		t.Errorf("GIT_CONFIG_KEY_%d is set but the count is %d", n, n)
+	}
+}
+
+// TestSigningEnvUsesKeyPrefix covers the form git needs. Without key:: it reads
+// user.signingkey as a *filename* and fails looking for a file that is not
+// there.
+func TestSigningEnvUsesKeyPrefix(t *testing.T) {
+	socket := startTestAgent(t)
+
+	var signingKey string
+	env := signingEnv(socket)
+	for i, e := range env {
+		if e.Value == "user.signingkey" && i+1 < len(env) {
+			signingKey = env[i+1].Value
+		}
+	}
+	if signingKey == "" {
+		t.Fatal("user.signingkey was not configured")
+	}
+	if !strings.HasPrefix(signingKey, "key::") {
+		t.Errorf("user.signingkey lacks the key:: prefix: %q", signingKey)
+	}
+}
+
+// TestSigningEnvWithoutAgent covers a socket that answers nothing: signing is
+// skipped rather than configured with an empty key, which git would reject on
+// every commit.
+func TestSigningEnvWithoutAgent(t *testing.T) {
+	if env := signingEnv(t.TempDir() + "/absent.sock"); env != nil {
+		t.Errorf("signing was configured without an agent: %v", env)
 	}
 }
 
