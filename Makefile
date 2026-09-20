@@ -1,6 +1,7 @@
 # dev - a CLI for devcontainers
 #
 #   make build      build dist/dev
+#   make relay      build the in-container agent relay, both architectures
 #   make test       go test ./...
 #   make lint       gofmt, go vet, golangci-lint
 #   make smoke      end-to-end test against a real container engine
@@ -20,14 +21,38 @@ GO      ?= go
 GOBUILD := CGO_ENABLED=0 $(GO) build -ldflags "-X main.version=$(VERSION)"
 
 .DEFAULT_GOAL := help
-.PHONY: help build test lint smoke install clean
+.PHONY: help build relay test lint smoke install clean
 
 help:
-	@sed -n '3,9p' $(MAKEFILE_LIST) | sed 's/^# \{0,1\}//'
+	@sed -n '3,10p' $(MAKEFILE_LIST) | sed 's/^# \{0,1\}//'
 
-build:
+build: relay
 	@mkdir -p dist
 	$(GOBUILD) -o $(BIN) ./cmd/dev
+
+# The in-container SSH agent relay, one build per architecture a container might
+# run on, embedded into dev by internal/relay/embed.go.
+#
+# Both architectures every time, not just this host's: the k8s provider builds
+# for linux/amd64 by default whatever the operator is sitting at, so an arm64
+# laptop still has to carry an amd64 relay.
+#
+# -s -w strips the symbol table and DWARF. This is copied into a container on
+# every session, so its size is a cost paid repeatedly rather than once.
+#
+# The committed placeholders are deleted first: go build refuses to overwrite a
+# path that exists and is not an object file, which is what they are. That is
+# safe only because the relay lives in internal/relaybin, which nothing on the
+# path to building cmd/dev-relay imports — otherwise removing them would break
+# the build that is meant to replace them.
+RELAY_DIR := internal/relaybin/bin
+relay:
+	@mkdir -p $(RELAY_DIR)
+	@rm -f $(RELAY_DIR)/relay-linux-amd64 $(RELAY_DIR)/relay-linux-arm64
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -trimpath -ldflags "-s -w" \
+	  -o $(RELAY_DIR)/relay-linux-amd64 ./cmd/dev-relay
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -trimpath -ldflags "-s -w" \
+	  -o $(RELAY_DIR)/relay-linux-arm64 ./cmd/dev-relay
 
 # -timeout 120s, not go's 10m default: nothing here is slow, so a package that
 # stops finishing has deadlocked, and the stack should print in a minute rather
@@ -56,5 +81,11 @@ install: build
 	install -m 0755 $(BIN) $(PREFIX)/bin/dev
 	@echo "installed $(PREFIX)/bin/dev"
 
+# The relay binaries are tracked paths holding untracked content, so they are
+# restored to their placeholders rather than deleted: leaving them built would
+# show a multi-megabyte diff on every `git status`, and leaving them absent
+# would break `go build ./...` for the next person.
 clean:
 	rm -rf dist
+	@printf 'placeholder: run make relay\n' > $(RELAY_DIR)/relay-linux-amd64
+	@printf 'placeholder: run make relay\n' > $(RELAY_DIR)/relay-linux-arm64
