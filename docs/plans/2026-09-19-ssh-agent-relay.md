@@ -292,9 +292,9 @@ dist/dev container exec dev-cli -- git log --show-signature -1
 ## Open questions for review
 
 1. ~~**Is injecting a helper into the container acceptable?**~~ Accepted.
-2. **Is the session-scoped limitation acceptable?** Git stops working in a
+2. ~~**Is the session-scoped limitation acceptable?**~~ Git stops working in a
    container you've attached to by other means. Multiple concurrent `dev`
-   sessions are handled; this is about attaching *without* `dev`.
-3. **Should k8s land in the same change or follow later?** The relay works there
+   sessions are handled; this is about attaching *without* `dev`. Accepted
+3. ~~**Should k8s land in the same change or follow later?**~~ The relay works there
    for the same reason it works locally, so there's no longer a technical reason
-   to split them — only scope.
+   to split them — only scope. Handle now.
