@@ -77,7 +77,7 @@ jobs:
           files: |
             release/*.tar.gz
             release/SHA256SUMS
-          generate_release_notes: true
+          generate_release_notes: false
 
       # On a manual run there is no tag to attach to, so the binaries are kept
       # as an artefact instead. That is what makes the dispatch trigger useful:
