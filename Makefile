@@ -46,13 +46,18 @@ build: relay
 # path to building cmd/dev-relay imports — otherwise removing them would break
 # the build that is meant to replace them.
 RELAY_DIR := internal/relaybin/bin
+# Built beside the target and moved into place, rather than deleted first: a
+# build that fails partway would otherwise leave the paths missing, and the
+# go:embed that needs them makes every later build fail too — including the one
+# meant to fix it.
 relay:
 	@mkdir -p $(RELAY_DIR)
-	@rm -f $(RELAY_DIR)/relay-linux-amd64 $(RELAY_DIR)/relay-linux-arm64
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -trimpath -ldflags "-s -w" \
-	  -o $(RELAY_DIR)/relay-linux-amd64 ./cmd/dev-relay
+	  -o $(RELAY_DIR)/.amd64.tmp ./cmd/dev-relay
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -trimpath -ldflags "-s -w" \
-	  -o $(RELAY_DIR)/relay-linux-arm64 ./cmd/dev-relay
+	  -o $(RELAY_DIR)/.arm64.tmp ./cmd/dev-relay
+	@mv $(RELAY_DIR)/.amd64.tmp $(RELAY_DIR)/relay-linux-amd64
+	@mv $(RELAY_DIR)/.arm64.tmp $(RELAY_DIR)/relay-linux-arm64
 
 # -timeout 120s, not go's 10m default: nothing here is slow, so a package that
 # stops finishing has deadlocked, and the stack should print in a minute rather

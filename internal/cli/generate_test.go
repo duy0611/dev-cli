@@ -21,7 +21,7 @@ func seedWorkspace(t *testing.T, a *app) {
 	}
 	// The first workspace becomes the active one, so nothing needs `workspace
 	// use` afterwards.
-	if err := runWorkspaceInit(a, "ws", "p"); err != nil {
+	if err := runWorkspaceInit(a, "ws", "p", false); err != nil {
 		t.Fatalf("workspace init: %v", err)
 	}
 }

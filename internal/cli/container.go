@@ -582,6 +582,11 @@ func runContainerShell(ctx context.Context, a *app, workspace, name string) erro
 	if err != nil {
 		return err
 	}
+	environ, stopAgent, err := a.forwardAgent(ctx, t, environ)
+	if err != nil {
+		return err
+	}
+	defer stopAgent()
 
 	shell := detectShell(ctx, t)
 	return t.provider.Exec(ctx, t.container, []string{shell}, provider.ExecOpts{
@@ -655,6 +660,11 @@ func runContainerExec(ctx context.Context, a *app, workspace, name string, comma
 	if err != nil {
 		return err
 	}
+	environ, stopAgent, err := a.forwardAgent(ctx, t, environ)
+	if err != nil {
+		return err
+	}
+	defer stopAgent()
 
 	return t.provider.Exec(ctx, t.container, command, provider.ExecOpts{
 		Env:    environ,
