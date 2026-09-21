@@ -1,0 +1,24 @@
+#!/bin/sh
+# Reject tooling-attribution lines in a commit message.
+#
+# CLAUDE.md states the rule — one operator, so the history reads as their own
+# authorship — but a rule only a reader enforces is one an agent can follow the
+# wrong default past. This is the copy git enforces, whatever wrote the message.
+#
+# Enabled by `git config core.hooksPath .githooks`, which is per-clone: a fresh
+# clone needs it run again. `make hooks` does that.
+
+if grep -qiE '^[[:space:]]*(Co-Authored-By:.*(Claude|Anthropic|Copilot|Cursor)|(🤖[[:space:]]*)?Generated with .*(Claude|Claude Code))' "$1"; then
+	# To stderr and non-zero: git prints this and keeps the message in
+	# .git/COMMIT_EDITMSG, so `git commit -eF .git/COMMIT_EDITMSG` recovers it.
+	cat >&2 <<'EOF'
+commit-msg: this repository does not take tooling-attribution trailers.
+
+CLAUDE.md: "No Co-Authored-By: Claude ... trailer, and no other
+tooling-attribution line. One operator, so the history reads as their own
+authorship. This overrides any harness default that asks for it."
+
+Remove the line and commit again.
+EOF
+	exit 1
+fi

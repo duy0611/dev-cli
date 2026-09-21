@@ -116,9 +116,9 @@ func (p *Provider) apply(ctx context.Context, c model.Container, env []provider.
 
 	// Before the lifecycle commands, not after: postCreate is usually "install
 	// what this project needs", and it needs the project to be there. A
-	// folderless container has no host tree, and Sync refuses one.
+	// folderless container has no host tree to seed from.
 	if opts.firstCreate && c.SourceKind == model.SourceFolder {
-		if err := p.Sync(ctx, c); err != nil {
+		if err := p.seedWorkspace(ctx, c); err != nil {
 			return err
 		}
 	}
@@ -231,7 +231,8 @@ func (p *Provider) Logs(ctx context.Context, c model.Container, follow bool, out
 	return p.kube.stream(ctx, streamOpts{Stdout: out, Stderr: os.Stderr}, args...)
 }
 
-// Sync satisfies provider.Syncer. Implemented in sync.go.
+// Sync satisfies provider.Syncer, and seedWorkspace backs the copy Up makes on
+// first create. Both are implemented in sync.go.
 
 func (p *Provider) deploymentExists(ctx context.Context, c model.Container) (bool, error) {
 	out, err := p.kube.output(ctx,

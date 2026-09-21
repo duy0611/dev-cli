@@ -66,10 +66,15 @@ func newRootCmd(version string) *cobra.Command {
 		Version:       version,
 		SilenceErrors: true,
 		SilenceUsage:  true,
-		// With no subcommand, print help rather than succeeding silently.
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmd.Help()
-		},
+		// With no subcommand, print help rather than succeeding silently; with
+		// an unknown one, say so and exit 2.
+		//
+		// Args is set explicitly because cobra's default for a command with
+		// subcommands raises its own "unknown command" error at the root, as a
+		// plain error that would exit 1. Routing it through noArgs makes it a
+		// usage error like every other malformed request.
+		Args: noArgs(),
+		RunE: groupRunE,
 	}
 
 	// A bad flag is a malformed request, so it exits 2 like every other usage

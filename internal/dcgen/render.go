@@ -62,7 +62,16 @@ type Mount struct {
 	Folder string
 }
 
-func Render(name string, toolIDs []string, mount Mount) (string, error) {
+// State says whether a container keeps its agents' configuration on a volume.
+//
+// The zero value means it does not. StateVolume is the name of the volume to
+// mount at StateDir; it is only read by the local provider, since Kubernetes
+// builds its own pod spec and takes the mount from the manifest instead.
+type State struct {
+	Volume string
+}
+
+func Render(name string, toolIDs []string, mount Mount, state State) (string, error) {
 	ids, err := Resolve(toolIDs)
 	if err != nil {
 		return "", err
@@ -76,6 +85,11 @@ func Render(name string, toolIDs []string, mount Mount) (string, error) {
 		// will be sitting in.
 		"remoteUser": "vscode",
 	}
+	// Collected rather than assigned: postCreateCommand is a single string, and
+	// a container that is both folderless and state-persisting needs to chown
+	// two directories. Assigning twice would silently keep only the last.
+	var postCreate []string
+
 	if mount.Volume != "" {
 		// Both, never one. workspaceMount alone leaves the CLI deriving the
 		// in-container path from the host directory's basename, which for a
@@ -83,14 +97,25 @@ func Render(name string, toolIDs []string, mount Mount) (string, error) {
 		// every invocation.
 		doc["workspaceFolder"] = mount.Folder
 		doc["workspaceMount"] = fmt.Sprintf("source=%s,target=%s,type=volume", mount.Volume, mount.Folder)
-		// Docker creates a named volume owned by root. A bind mount gets
-		// UID-remapped to the host user by the devcontainer CLI itself
-		// (updateRemoteUserUID), but a volume gets no such fixup, so the
-		// remote user's first write fails with permission denied. The base
-		// image's vscode user already has passwordless sudo, so one chown
-		// after create is enough — the volume's ownership then persists
-		// across every later start.
-		doc["postCreateCommand"] = fmt.Sprintf("sudo chown vscode:vscode %s", mount.Folder)
+		postCreate = append(postCreate, chown(mount.Folder))
+	}
+
+	if state.Volume != "" {
+		// A volume rather than a bind mount, and so root-owned on creation for
+		// the same reason the workspace volume is: the chown below is what makes
+		// the remote user's first write succeed.
+		doc["mounts"] = []string{
+			fmt.Sprintf("source=%s,target=%s,type=volume", state.Volume, StateDir),
+		}
+		// A map, so encoding/json sorts the keys and the output stays stable.
+		doc["containerEnv"] = StateEnv()
+		postCreate = append(postCreate, chown(StateDir))
+	}
+
+	if len(postCreate) > 0 {
+		// Joined with && rather than ; so that a failure stops there instead of
+		// being hidden by the next command's success.
+		doc["postCreateCommand"] = strings.Join(postCreate, " && ")
 	}
 	if features := featuresFor(ids); len(features) > 0 {
 		doc["features"] = features
@@ -217,4 +242,17 @@ func ToolsOf(config string) ([]string, error) {
 
 	slices.Sort(out)
 	return slices.Compact(out), nil
+}
+
+// chown hands a directory to the remote user.
+//
+// Docker creates a named volume owned by root and, unlike a bind mount, it gets
+// no UID remapping from the devcontainer CLI (updateRemoteUserUID) — so the
+// remote user's first write fails with permission denied. The base image's
+// vscode user has passwordless sudo, and the ownership persists on the volume
+// across every later start, so once after create is enough.
+//
+// A no-op on Kubernetes, where fsGroup has already made the volume writable.
+func chown(dir string) string {
+	return fmt.Sprintf("sudo chown vscode:vscode %s", dir)
 }

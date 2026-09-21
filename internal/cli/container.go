@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/duy0611/dev-cli/internal/dcconfig"
@@ -20,6 +21,12 @@ func newContainerCmd(a *app) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "container",
 		Short: "Create and run devcontainers",
+		// A group, not a command. Both are needed: Args rejects the stray
+		// argument, and RunE overrides the root's inherited "print help and
+		// return nil", which would otherwise exit 0 for a mistyped subcommand
+		// and let a script read it as success.
+		Args: noArgs(),
+		RunE: groupRunE,
 	}
 	cmd.AddCommand(
 		newContainerCreateCmd(a),
@@ -31,7 +38,7 @@ func newContainerCmd(a *app) *cobra.Command {
 		newContainerLogsCmd(a),
 		newContainerShellCmd(a),
 		newContainerExecCmd(a),
-		newContainerAgentCmd(a),
+		newContainerStartAgentCmd(a),
 		newContainerSyncCmd(a),
 		newContainerToolsCmd(a),
 		newContainerConfigCmd(a),
@@ -45,10 +52,11 @@ func newContainerCmd(a *app) *cobra.Command {
 // folder. A struct rather than more parameters: the list grows, and six
 // positional booleans at a call site say nothing about which is which.
 type createOpts struct {
-	noStart  bool
-	noFolder bool
-	generate bool
-	tools    []string
+	noStart        bool
+	noFolder       bool
+	generate       bool
+	noPersistState bool
+	tools          []string
 }
 
 func newContainerCreateCmd(a *app) *cobra.Command {
@@ -68,7 +76,12 @@ func newContainerCreateCmd(a *app) *cobra.Command {
 			"builds a base Ubuntu configuration from the tools --tools names.\n\n" +
 			"With --no-folder there is no host directory at all: the container's work\n" +
 			"lives in a volume dev creates and removes with it. That configuration is\n" +
-			"always generated, and kept in dev's own database.",
+			"always generated, and kept in dev's own database.\n\n" +
+			"The agents' configuration — plugins, marketplaces, MCP servers, and a\n" +
+			"global gitconfig — lives on a volume of its own and outlives a rebuild.\n" +
+			"Credentials do not go there: agents read those from the workspace's\n" +
+			"settings on every command. --no-persist-state opts out. Either way it is\n" +
+			"fixed at create; to change it, remove the container and create it again.",
 		Args: exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.tools = parseToolList(toolList)
@@ -84,6 +97,8 @@ func newContainerCreateCmd(a *app) *cobra.Command {
 		"generate a base Ubuntu configuration when the folder ships none")
 	cmd.Flags().StringVar(&toolList, "tools", "",
 		"comma-separated tools to install in a generated container (see: dev container tools)")
+	cmd.Flags().BoolVar(&opts.noPersistState, "no-persist-state", false,
+		"do not give the container a volume for its agents' configuration")
 	return cmd
 }
 
@@ -121,7 +136,8 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 		// run without --tools fall into generatedConfigFor's picker branch,
 		// same as the folder path.
 		generated, err = generatedConfigFor(name, opts.generate, opts.tools,
-			folderlessMount(wsName, name), os.Stdin, a.out)
+			folderlessMount(wsName, name), stateFor(!opts.noPersistState, wsName, name),
+			os.Stdin, a.out)
 		if err != nil {
 			return err
 		}
@@ -131,13 +147,14 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 			// folderless container always has something to generate and the
 			// spec promises a bare Ubuntu image rather than a picker nobody
 			// can see.
-			generated, err = dcgen.Render(name, nil, folderlessMount(wsName, name))
+			generated, err = dcgen.Render(name, nil, folderlessMount(wsName, name),
+				stateFor(!opts.noPersistState, wsName, name))
 			if err != nil {
 				return usageError(err)
 			}
 		}
 	} else {
-		source, configPath, generated, err = folderSource(name, folder, opts, a)
+		source, configPath, generated, err = folderSource(wsName, name, folder, opts, a)
 		if err != nil {
 			return err
 		}
@@ -161,6 +178,10 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 		// Exactly one of these two is set: a project-owned container has a
 		// path, a generated one has the document itself.
 		GeneratedConfig: generated,
+		// A column rather than only a field in the document above: a
+		// project-owned container has no document at all, and `rebuild --tools`
+		// re-renders a generated one from scratch.
+		PersistState: !opts.noPersistState,
 	}
 	err = st.CreateContainer(c)
 	if errors.Is(err, store.ErrExists) {
@@ -184,7 +205,7 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 // folderSource works out what a --folder container is built from: the resolved
 // path, the project's own config if it has one, and a generated document if it
 // does not.
-func folderSource(name, folder string, opts createOpts, a *app) (source, configPath, generated string, err error) {
+func folderSource(wsName, name, folder string, opts createOpts, a *app) (source, configPath, generated string, err error) {
 	// Physical path, before anything stores or mounts it: the engine resolves
 	// the string inside its VM on macOS, where /tmp is a real directory rather
 	// than a symlink to /private/tmp, so an unresolved path mounts an empty
@@ -210,7 +231,8 @@ func folderSource(name, folder string, opts createOpts, a *app) (source, configP
 		// road: dev can render one, and keeps it in the database rather than
 		// writing into a project it does not own. The zero Mount leaves the
 		// CLI's own bind mount of the folder in place.
-		generated, err = generatedConfigFor(name, opts.generate, opts.tools, dcgen.Mount{}, os.Stdin, a.out)
+		generated, err = generatedConfigFor(name, opts.generate, opts.tools, dcgen.Mount{},
+			stateFor(!opts.noPersistState, wsName, name), os.Stdin, a.out)
 		if err != nil {
 			return "", "", "", err
 		}
@@ -301,10 +323,13 @@ func runContainerList(ctx context.Context, a *app, workspace string, all bool) e
 		return xpath.Shorten(c.Source)
 	}
 
+	// Whether a container keeps its agents' configuration is fixed at create
+	// and invisible otherwise, so the list is the only place to find out
+	// without reading the generated document.
 	return a.table(func(w io.Writer) {
-		header(w, "WORKSPACE", "NAME", "STATUS", "SOURCE")
+		header(w, "WORKSPACE", "NAME", "STATUS", "SOURCE", "STATE")
 		for _, c := range containers {
-			row(w, c.WorkspaceName, c.Name, statusOf(c), sourceOf(c))
+			row(w, c.WorkspaceName, c.Name, statusOf(c), sourceOf(c), onOff(c.PersistState))
 		}
 	})
 }
@@ -345,7 +370,7 @@ func (a *app) start(ctx context.Context, workspace string, c model.Container) er
 	if err != nil {
 		return err
 	}
-	environ, err := a.containerEnv(ctx, workspace)
+	environ, err := a.containerEnv(ctx, c)
 	if err != nil {
 		return err
 	}
@@ -463,7 +488,7 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 				return err
 			}
 			defer t.release()
-			environ, err := a.containerEnv(cmd.Context(), t.workspace.Name)
+			environ, err := a.containerEnv(cmd.Context(), t.container)
 			if err != nil {
 				return err
 			}
@@ -510,11 +535,16 @@ func newContainerSyncCmd(a *app) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "sync NAME",
-		Short: "Copy the host folder into a remote container",
-		Long: "Copy the host folder into a remote container.\n\n" +
-			"One direction, and only when asked: once an agent is working in the\n" +
-			"container, its copy is the live one, and overwriting that on a timer\n" +
-			"would destroy work nobody asked to discard.",
+		Short: "Push the workspace's settings into a container",
+		Long: "Push the workspace's settings into a container.\n\n" +
+			"Your files are never touched. A container an agent has been working in\n" +
+			"holds the only copy of what it has done, and no command should overwrite\n" +
+			"that.\n\n" +
+			"Nothing to do on the local provider, which resolves the settings on every\n" +
+			"command. On k8s it refreshes the Secret the pod is built from, so a pod\n" +
+			"the cluster replaces on its own — an eviction, a drain — comes back with\n" +
+			"current values rather than the ones it was created with. The running pod\n" +
+			"keeps the environment it started with either way.",
 		Args: exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runContainerSync(cmd.Context(), a, workspace, args[0])
@@ -531,24 +561,35 @@ func runContainerSync(ctx context.Context, a *app, workspace, name string) error
 	}
 	defer t.release()
 
-	if t.container.SourceKind == model.SourceNone {
-		return usageErrorf("container %s has no folder to sync from", name)
-	}
 	syncer, ok := t.provider.(provider.Syncer)
 	if !ok {
-		// The local provider bind-mounts the folder: the container is already
-		// looking at the same files.
-		return usageErrorf("provider %s mounts the folder directly; there is nothing to sync",
-			t.workspace.ProviderName)
+		return usageErrorf("provider %s cannot sync settings", t.workspace.ProviderName)
 	}
 	if err := a.requireRunning(ctx, t); err != nil {
 		return err
 	}
-
-	if err := syncer.Sync(ctx, t.container); err != nil {
+	// The same environment `up` would build, state variables included, so the
+	// two cannot disagree about what the container's environment is.
+	environ, err := a.containerEnv(ctx, t.container)
+	if err != nil {
 		return err
 	}
-	a.printf("synced %s into %s\n", xpath.Shorten(t.container.Source), name)
+
+	if err := syncer.Sync(ctx, t.container, environ); err != nil {
+		return err
+	}
+	// Keys, never values — the rule `workspace show` follows. Sorted, because
+	// the environment is assembled in a fixed order that is not this one, and a
+	// list that reshuffles between runs reads as though something changed.
+	keys := make([]string, 0, len(environ))
+	for _, e := range environ {
+		keys = append(keys, e.Key)
+	}
+	slices.Sort(keys)
+	// What is true afterwards, rather than what was done — the same postcondition
+	// Syncer promises. "Synced N settings" would contradict the local provider's
+	// own line a moment earlier saying it had nothing to push.
+	a.printf("%d settings current in %s: %s\n", len(keys), name, strings.Join(keys, ", "))
 	return nil
 }
 
@@ -578,7 +619,7 @@ func runContainerShell(ctx context.Context, a *app, workspace, name string) erro
 	if err := a.requireRunning(ctx, t); err != nil {
 		return err
 	}
-	environ, err := a.containerEnv(ctx, t.workspace.Name)
+	environ, err := a.containerEnv(ctx, t.container)
 	if err != nil {
 		return err
 	}
@@ -656,7 +697,7 @@ func runContainerExec(ctx context.Context, a *app, workspace, name string, comma
 	if err := a.requireRunning(ctx, t); err != nil {
 		return err
 	}
-	environ, err := a.containerEnv(ctx, t.workspace.Name)
+	environ, err := a.containerEnv(ctx, t.container)
 	if err != nil {
 		return err
 	}

@@ -37,13 +37,24 @@ func folderlessMount(workspace, container string) dcgen.Mount {
 	}
 }
 
+// stateFor describes where a container keeps its agents' configuration.
+//
+// The zero value when the container does not persist state, which renders a
+// document with no mounts and no containerEnv.
+func stateFor(persist bool, workspace, container string) dcgen.State {
+	if !persist {
+		return dcgen.State{}
+	}
+	return dcgen.State{Volume: local.StateVolumeName(workspace, container)}
+}
+
 // generatedConfigFor decides whether to generate a configuration and renders it.
 //
 // Three paths, matching `provider configure`: told to, so do it; not told but
 // at a terminal, so ask; neither, so return nothing and let the caller report
 // the missing configuration. The scripted run must never block on a question
 // nobody will see.
-func generatedConfigFor(name string, generate bool, tools []string, mount dcgen.Mount, in *os.File, out io.Writer) (string, error) {
+func generatedConfigFor(name string, generate bool, tools []string, mount dcgen.Mount, state dcgen.State, in *os.File, out io.Writer) (string, error) {
 	if !generate {
 		if !isTerminal(in) {
 			return "", nil // the caller reports the missing configuration
@@ -75,7 +86,7 @@ func generatedConfigFor(name string, generate bool, tools []string, mount dcgen.
 		}
 	}
 
-	config, err := dcgen.Render(name, resolved, mount)
+	config, err := dcgen.Render(name, resolved, mount, state)
 	if err != nil {
 		return "", usageError(err)
 	}
@@ -167,7 +178,12 @@ func rewriteGeneratedTools(a *app, workspace, name string, spec []string) error 
 	if t.container.SourceKind == model.SourceNone {
 		mount = folderlessMount(t.workspace.Name, name)
 	}
-	config, err := dcgen.Render(name, next, mount)
+	// Derived from the stored column for the same reason, and load-bearing: this
+	// re-renders the whole document, so a state mount that lived only in the
+	// stored JSON would be dropped here and the next up would start a container
+	// with no volume and no warning.
+	state := stateFor(t.container.PersistState, t.workspace.Name, name)
+	config, err := dcgen.Render(name, next, mount, state)
 	if err != nil {
 		return usageError(err)
 	}

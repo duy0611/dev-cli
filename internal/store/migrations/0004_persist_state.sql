@@ -1,0 +1,16 @@
+-- Whether a container keeps its agents' configuration on a volume of its own.
+--
+-- A column rather than a field in the generated document: `rebuild --tools`
+-- re-renders that document from the tool list and the source kind alone, so a
+-- mount recorded only there would be dropped by the next one.
+--
+-- Defaulting to 0 while `container create` defaults it to 1 is deliberate. The
+-- default here applies to rows that already exist, and a container created
+-- before this column has no volume: reading it as persisting state would mount
+-- one that was never populated and delete it on the next `container remove`.
+-- New containers get the other answer from the CLI, which is where a default
+-- about intent belongs.
+--
+-- A literal default rather than an expression, and NOT NULL, so the same file
+-- replays against Postgres unchanged.
+ALTER TABLE containers ADD COLUMN persist_state INTEGER NOT NULL DEFAULT 0;

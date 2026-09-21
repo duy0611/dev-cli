@@ -13,6 +13,9 @@ import (
 	"github.com/duy0611/dev-cli/internal/provider"
 )
 
+// callSeparator marks the end of one recorded call in a stub's log.
+const callSeparator = "--- call ---"
+
 // fakeBin writes an executable onto a temp PATH that records its own argv, one
 // argument per line, and prints stdout. Driving the real binaries is what the
 // smoke test is for; here the question is only what got called.
@@ -31,9 +34,11 @@ func newFakePath(t *testing.T) *fakeBin {
 func (f *fakeBin) install(t *testing.T, name, stdout string, code int) {
 	t.Helper()
 	log := filepath.Join(f.dir, name+".argv")
+	// Appended, with a marker between calls: one dev command can run the same
+	// binary more than once, and truncating would hide all but the last.
 	script := "#!/bin/sh\n" +
-		": > " + shellQuote(log) + "\n" +
-		"for a in \"$@\"; do printf '%s\\n' \"$a\" >> " + shellQuote(log) + "; done\n"
+		"for a in \"$@\"; do printf '%s\\n' \"$a\" >> " + shellQuote(log) + "; done\n" +
+		"printf '%s\\n' " + shellQuote(callSeparator) + " >> " + shellQuote(log) + "\n"
 	if stdout != "" {
 		script += "printf '%s' " + shellQuote(stdout) + "\n"
 	}
@@ -45,20 +50,41 @@ func (f *fakeBin) install(t *testing.T, name, stdout string, code int) {
 	}
 }
 
-// argv returns the arguments the named stub was last called with.
-func (f *fakeBin) argv(t *testing.T, name string) []string {
+// argvAll returns every call the named stub recorded, in order, one slice per
+// call. Up runs a second command after the CLI returns, so the last call is not
+// always the one under test.
+func (f *fakeBin) argvAll(t *testing.T, name string) [][]string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(f.dir, name+".argv"))
 	if err != nil {
 		t.Fatalf("fake %s was never called: %v", name, err)
 	}
-	var out []string
+	var out [][]string
+	var cur []string
 	for _, line := range strings.Split(string(b), "\n") {
-		if line != "" {
-			out = append(out, line)
+		switch {
+		case line == callSeparator:
+			out, cur = append(out, cur), nil
+		case line != "":
+			cur = append(cur, line)
 		}
 	}
+	if len(cur) > 0 {
+		out = append(out, cur)
+	}
 	return out
+}
+
+// argv returns the arguments of the stub's first call, which is the one a test
+// set out to make. Up runs a chown afterwards for a state-persisting container,
+// and that must not displace what is being asserted on.
+func (f *fakeBin) argv(t *testing.T, name string) []string {
+	t.Helper()
+	calls := f.argvAll(t, name)
+	if len(calls) == 0 {
+		t.Fatalf("fake %s was never called", name)
+	}
+	return calls[0]
 }
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
@@ -71,6 +97,19 @@ func testContainer() model.Container {
 		Source:        "/projects/demo",
 		ConfigPath:    "/projects/demo/.devcontainer/devcontainer.json",
 	}
+}
+
+// calledWith reports whether any of the stub's calls holds want as a
+// consecutive run. For a command that runs a binary more than once — Remove
+// asks docker for the container id before removing any volume.
+func (f *fakeBin) calledWith(t *testing.T, name string, want []string) bool {
+	t.Helper()
+	for _, argv := range f.argvAll(t, name) {
+		if contains(argv, want) {
+			return true
+		}
+	}
+	return false
 }
 
 // contains reports whether argv holds want as a consecutive run.
@@ -305,9 +344,9 @@ func TestRemoveForcesWhenPresent(t *testing.T) {
 	if err := (&Provider{}).Remove(context.Background(), testContainer()); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
-	// The last docker call is the removal itself.
-	if argv := f.argv(t, dockerBin); !contains(argv, []string{"rm", "-f", "abc123"}) {
-		t.Errorf("argv %v did not force-remove the container", argv)
+	// docker is asked for the container id first, so the removal is a later call.
+	if !f.calledWith(t, dockerBin, []string{"rm", "-f", "abc123"}) {
+		t.Errorf("docker calls %v did not force-remove the container", f.argvAll(t, dockerBin))
 	}
 }
 
@@ -379,8 +418,8 @@ func TestRemoveDeletesTheVolumeOfAFolderlessContainer(t *testing.T) {
 	if err := (&Provider{}).Remove(context.Background(), folderlessContainer()); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
-	if !contains(f.argv(t, dockerBin), []string{"volume", "rm", "--force", "dev-ws-scratch"}) {
-		t.Errorf("Remove did not delete the volume; last docker call was %v", f.argv(t, dockerBin))
+	if !f.calledWith(t, dockerBin, []string{"volume", "rm", "--force", "dev-ws-scratch"}) {
+		t.Errorf("Remove did not delete the volume; docker calls were %v", f.argvAll(t, dockerBin))
 	}
 }
 
@@ -395,5 +434,127 @@ func TestRemoveDoesNotDeleteAVolumeForAFolderContainer(t *testing.T) {
 	}
 	if contains(f.argv(t, dockerBin), []string{"volume"}) {
 		t.Errorf("Remove touched a volume for a folder container: %v", f.argv(t, dockerBin))
+	}
+}
+
+// stateContainer is a folder container that persists its agents' state.
+func stateContainer() model.Container {
+	c := testContainer()
+	c.PersistState = true
+	return c
+}
+
+// The mount goes on up, where the CLI accepts it. A project that ships its own
+// devcontainer.json cannot be given a "mounts" entry — dev does not write into
+// a project folder — so this is the only way such a container gets the volume.
+func TestUpMountsTheStateVolumeForAProjectOwnedContainer(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, devcontainerBin, "", 0)
+
+	if err := (&Provider{}).Up(context.Background(), stateContainer(), nil); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	want := []string{"--mount", "type=volume,source=dev-ws-demo-state,target=/var/dev-state"}
+	if !contains(f.argv(t, devcontainerBin), want) {
+		t.Errorf("argv %v is missing %v", f.argv(t, devcontainerBin), want)
+	}
+}
+
+// A generated document already names the volume in its own "mounts", so adding
+// the flag as well makes docker reject the entire run with "duplicate mount
+// destination" — the container never starts. The unit tests missed this at
+// first because they only covered the project-owned container, where the flag
+// is right; the smoke test caught it against a real engine.
+func TestUpDoesNotMountStateForAGeneratedContainer(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, devcontainerBin, "", 0)
+
+	c := stateContainer()
+	c.GeneratedConfig = `{"name":"demo","mounts":["source=dev-ws-demo-state,target=/var/dev-state,type=volume"]}`
+	if err := (&Provider{}).Up(context.Background(), c, nil); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if contains(f.argv(t, devcontainerBin), []string{"--mount"}) {
+		t.Errorf("up passed --mount for a container whose document already mounts the volume: %v",
+			f.argv(t, devcontainerBin))
+	}
+}
+
+func TestUpDoesNotMountStateWhenOff(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, devcontainerBin, "", 0)
+
+	if err := (&Provider{}).Up(context.Background(), testContainer(), nil); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if contains(f.argv(t, devcontainerBin), []string{"--mount"}) {
+		t.Errorf("Up mounted a state volume for a container that does not persist one: %v",
+			f.argv(t, devcontainerBin))
+	}
+}
+
+// The devcontainer CLI accepts --mount on up and not on exec, so carrying it
+// into execArgs would turn every command run inside the container into a flag
+// error. This is the same shape of mistake as the id-labels, and as invisible
+// until something breaks.
+func TestExecNeverPassesMount(t *testing.T) {
+	argv := (&Provider{}).execArgs(stateContainer(), []string{"true"})
+	if contains(argv, []string{"--mount"}) {
+		t.Errorf("exec argv carries --mount: %v", argv)
+	}
+}
+
+// The volume outlives the container, so nothing else would ever remove it.
+func TestRemoveDeletesTheStateVolume(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, dockerBin, "abc123\n", 0)
+
+	if err := (&Provider{}).Remove(context.Background(), stateContainer()); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	want := []string{"volume", "rm", "--force", "dev-ws-demo-state"}
+	if !f.calledWith(t, dockerBin, want) {
+		t.Errorf("Remove did not delete the state volume; docker calls were %v",
+			f.argvAll(t, dockerBin))
+	}
+}
+
+// A project-owned container has no postCreateCommand dev may add to, so up
+// claims the directory itself. Guarded by a writability test: it runs on every
+// up, and a recursive chown over an agent's accumulated history is not worth
+// repeating once the volume is already the remote user's.
+func TestUpClaimsTheStateDirForAProjectOwnedContainer(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, devcontainerBin, "", 0)
+
+	if err := (&Provider{}).Up(context.Background(), stateContainer(), nil); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	calls := f.argvAll(t, devcontainerBin)
+	if len(calls) != 2 {
+		t.Fatalf("devcontainer was called %d times, want up then the chown: %v", len(calls), calls)
+	}
+	last := strings.Join(calls[1], " ")
+	for _, want := range []string{"exec", "chown", "/var/dev-state", "-w"} {
+		if !strings.Contains(last, want) {
+			t.Errorf("the follow-up call %q is missing %q", last, want)
+		}
+	}
+}
+
+// A generated configuration chowns the directory in its own postCreateCommand,
+// so doing it here as well would be a second answer to the same question.
+func TestUpDoesNotClaimTheStateDirForAGeneratedContainer(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, devcontainerBin, "", 0)
+
+	c := stateContainer()
+	c.GeneratedConfig = `{"name":"demo"}`
+	if err := (&Provider{}).Up(context.Background(), c, nil); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if calls := f.argvAll(t, devcontainerBin); len(calls) != 1 {
+		t.Errorf("devcontainer was called %d times, want only up: %v", len(calls), calls)
 	}
 }

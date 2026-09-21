@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -103,7 +104,7 @@ func TestTarDirSkipsUnarchivableFiles(t *testing.T) {
 	}
 }
 
-func TestSyncStreamsIntoTheWorkspaceFolder(t *testing.T) {
+func TestSeedWorkspaceStreamsIntoTheWorkspaceFolder(t *testing.T) {
 	s := clusterStubs(t, true)
 
 	dir := t.TempDir()
@@ -112,8 +113,8 @@ func TestSyncStreamsIntoTheWorkspaceFolder(t *testing.T) {
 	}
 	c := model.Container{Name: "api", WorkspaceName: "ws", SourceKind: model.SourceFolder, Source: dir}
 
-	if err := testProvider().Sync(context.Background(), c); err != nil {
-		t.Fatalf("Sync: %v", err)
+	if err := testProvider().seedWorkspace(context.Background(), c); err != nil {
+		t.Fatalf("seedWorkspace: %v", err)
 	}
 
 	var call string
@@ -127,11 +128,88 @@ func TestSyncStreamsIntoTheWorkspaceFolder(t *testing.T) {
 	}
 	// The stub's read-configuration answers with this workspaceFolder.
 	if !strings.Contains(call, "tar -x -p -C /workspaces/api") {
-		t.Errorf("sync unpacks somewhere unexpected: %q", call)
+		t.Errorf("the seed unpacks somewhere unexpected: %q", call)
 	}
 	// -i, or kubectl never attaches the stream the archive is written to.
 	if !strings.Contains(call, "exec -i") {
-		t.Errorf("sync did not attach stdin: %q", call)
+		t.Errorf("the seed did not attach stdin: %q", call)
+	}
+}
+
+// Sync applies the Secret and nothing else. The Deployment's absence is the
+// point: a server-side apply drops the fields it does not set, so re-applying
+// the Deployment without a rebuiltAt would clear that annotation, change the
+// pod template, and let the Recreate strategy destroy the work this command
+// exists to leave alone.
+func TestSyncAppliesTheSecretAndNotTheDeployment(t *testing.T) {
+	s := clusterStubs(t, true)
+	c := k8sContainer(t)
+
+	env := []provider.EnvVar{{Key: "GH_TOKEN", Value: "t0ken"}}
+	if err := testProvider().Sync(context.Background(), c, env); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+
+	calls := kubectlCalls(t, s)
+	if !anyCall(calls, "apply --server-side") {
+		t.Fatalf("Sync applied nothing: %v", calls)
+	}
+
+	manifest := s.stdinOf(t, kubectlBin, "apply")
+	var obj struct {
+		Kind       string            `json:"kind"`
+		StringData map[string]string `json:"stringData"`
+	}
+	if err := json.Unmarshal([]byte(manifest), &obj); err != nil {
+		t.Fatalf("the applied manifest is not JSON: %v: %s", err, manifest)
+	}
+	if obj.Kind != "Secret" {
+		t.Errorf("Sync applied a %s; only the Secret may be applied", obj.Kind)
+	}
+	if got := obj.StringData["GH_TOKEN"]; got != "t0ken" {
+		t.Errorf("GH_TOKEN = %q, want %q", got, "t0ken")
+	}
+	// Belt and braces: a List carrying a Deployment would unmarshal with an
+	// unsurprising kind above and still restart the pod.
+	if strings.Contains(manifest, "Deployment") {
+		t.Errorf("the applied manifest names a Deployment, which would restart the pod: %s", manifest)
+	}
+	for _, call := range calls {
+		if strings.HasPrefix(call, "scale") || strings.Contains(call, "rollout restart") {
+			t.Errorf("Sync disturbed the pod: %q", call)
+		}
+	}
+}
+
+// A setting the workspace no longer has must leave the cluster's copy. The
+// apply replaces the object's stringData wholesale, so this falls out of the
+// mechanism — but it is the operator-visible half of "rotate and unset", and
+// nothing else asserts it.
+func TestSyncCarriesAnUnsetKeyAway(t *testing.T) {
+	s := clusterStubs(t, true)
+	c := k8sContainer(t)
+
+	if err := testProvider().Sync(context.Background(), c, []provider.EnvVar{{Key: "KEPT", Value: "y"}}); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+
+	manifest := s.stdinOf(t, kubectlBin, "apply")
+	if strings.Contains(manifest, "GONE") {
+		t.Errorf("the applied Secret still carries a setting the workspace does not have: %s", manifest)
+	}
+	if !strings.Contains(manifest, "KEPT") {
+		t.Errorf("the applied Secret is missing the setting the workspace does have: %s", manifest)
+	}
+}
+
+// Settings belong to a container whether or not it has a folder. The old
+// refusal was about files, and there are none here to be missing.
+func TestSyncAcceptsAFolderlessContainer(t *testing.T) {
+	clusterStubs(t, true)
+
+	c := model.Container{Name: "scratch", WorkspaceName: "ws", SourceKind: model.SourceNone}
+	if err := testProvider().Sync(context.Background(), c, nil); err != nil {
+		t.Fatalf("Sync refused a folderless container: %v", err)
 	}
 }
 
@@ -152,15 +230,16 @@ func keys(m map[string]*tar.Header) []string {
 	return out
 }
 
-// There is no host tree to push. Copying nothing over a workspace an agent is
-// working in would be worse than refusing.
-func TestSyncRefusesAFolderlessContainer(t *testing.T) {
+// There is no host tree to copy. Unpacking nothing over a workspace an agent is
+// working in would be worse than complaining, and the caller is Up rather than
+// the operator, so this is a bug report and not a usage error.
+func TestSeedWorkspaceRefusesAFolderlessContainer(t *testing.T) {
 	clusterStubs(t, true)
 
 	c := model.Container{Name: "scratch", WorkspaceName: "ws", SourceKind: model.SourceNone}
-	err := testProvider().Sync(context.Background(), c)
+	err := testProvider().seedWorkspace(context.Background(), c)
 	if err == nil {
-		t.Fatal("Sync accepted a container with no folder")
+		t.Fatal("seedWorkspace accepted a container with no folder")
 	}
 	if !strings.Contains(err.Error(), "no folder") {
 		t.Errorf("error %q does not say why", err)

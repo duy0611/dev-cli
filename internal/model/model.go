@@ -71,7 +71,15 @@ type Container struct {
 	// inherits it with the row. The devcontainer CLI only accepts a path, so
 	// it is materialised to a temporary file per invocation.
 	GeneratedConfig string
-	CreatedAt       time.Time
+	// PersistState says whether this container keeps its agents' configuration
+	// on a volume of its own, so that plugins, marketplaces and MCP definitions
+	// outlive a rebuild. Fixed at create: a rebuild must not be able to change
+	// what a container is mounted on.
+	//
+	// Credentials are not part of it. Agents authenticate from environment
+	// variables resolved per invocation, so nothing worth stealing rests here.
+	PersistState bool
+	CreatedAt    time.Time
 }
 
 // Status is a container's liveness as the engine reports it.

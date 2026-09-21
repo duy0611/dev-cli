@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/duy0611/dev-cli/internal/dcgen"
 	"github.com/duy0611/dev-cli/internal/env"
 	"github.com/duy0611/dev-cli/internal/model"
 	"github.com/duy0611/dev-cli/internal/provider"
@@ -142,20 +143,48 @@ func (a *app) providerFor(ws model.Workspace) (provider.Provider, error) {
 	return provider.New(rec)
 }
 
-// containerEnv resolves the workspace's settings into environment variables.
+// containerEnv resolves the workspace's settings into environment variables,
+// with the variables pointing agents at the state volume underneath.
 //
 // Done per invocation rather than cached at create, so a rotated secret is
 // picked up by the next command with no rebuild and no restart.
-func (a *app) containerEnv(ctx context.Context, workspace string) ([]provider.EnvVar, error) {
+//
+// Takes the container rather than a flag so that no command can forget the
+// state variables: a generated document also carries them in containerEnv, but
+// a project-owned one has no document for dev to put them in, and they would
+// otherwise reach only half the containers.
+func (a *app) containerEnv(ctx context.Context, c model.Container) ([]provider.EnvVar, error) {
 	st, err := a.store()
 	if err != nil {
 		return nil, err
 	}
-	settings, err := st.ListSettings(workspace)
+	settings, err := st.ListSettings(c.WorkspaceName)
 	if err != nil {
 		return nil, err
 	}
-	return env.Assemble(ctx, secret.NewResolver(), settings)
+	environ, err := env.Assemble(ctx, secret.NewResolver(), settings)
+	if err != nil {
+		return nil, err
+	}
+	if !c.PersistState {
+		return environ, nil
+	}
+
+	// First, so an explicit workspace setting of the same name still wins: the
+	// same precedence env.Assemble gives the git identity, and for the same
+	// reason — this is a default the operator may have a better answer for.
+	out := make([]provider.EnvVar, 0, len(environ)+len(dcgen.StateEnv()))
+	defined := make(map[string]bool, len(environ))
+	for _, e := range environ {
+		defined[e.Key] = true
+	}
+	stateEnv := dcgen.StateEnv()
+	for _, k := range dcgen.StateEnvKeys() {
+		if !defined[k] {
+			out = append(out, provider.EnvVar{Key: k, Value: stateEnv[k]})
+		}
+	}
+	return append(out, environ...), nil
 }
 
 // requireRunning starts nothing; it reports the state in the terms the operator

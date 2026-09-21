@@ -512,7 +512,204 @@ func TestListShowsADashForAFolderlessContainer(t *testing.T) {
 	if line == "" {
 		t.Fatalf("scratch is not in the list:\n%s", out.String())
 	}
-	if !strings.HasSuffix(strings.TrimSpace(line), "-") {
+	// By column rather than by suffix: the row has gained a field since, and a
+	// suffix check would silently start asserting on whatever is last.
+	fields := strings.Fields(line)
+	const sourceCol = 3
+	if len(fields) <= sourceCol || fields[sourceCol] != "-" {
 		t.Errorf("SOURCE column is not a dash: %q", line)
+	}
+}
+
+// On by default, and the column is what every later command reads: the
+// document is re-rendered from it, the local provider mounts from it, and the
+// k8s manifest grows a subPath from it.
+func TestCreateStoresPersistState(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+
+	opts := createOpts{noFolder: true, noStart: true}
+	if err := runContainerCreate(t.Context(), a, "", "scratch", "", opts); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	st, err := a.store()
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	c, err := st.GetContainer("ws", "scratch")
+	if err != nil {
+		t.Fatalf("GetContainer: %v", err)
+	}
+	if !c.PersistState {
+		t.Error("create did not default to persisting state")
+	}
+	if !strings.Contains(c.GeneratedConfig, dcgen.StateDir) {
+		t.Errorf("the generated document has no state mount:\n%s", c.GeneratedConfig)
+	}
+}
+
+// The sharpest edge in the change. rewriteGeneratedTools re-renders the whole
+// document, so a state mount it does not put back is gone — and the next up
+// would start a container with no volume, quietly, leaving the old one behind
+// holding the plugins the operator is about to notice missing.
+func TestRebuildToolsKeepsTheStateMount(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+
+	opts := createOpts{noFolder: true, tools: []string{"yq"}, noStart: true}
+	if err := runContainerCreate(t.Context(), a, "", "scratch", "", opts); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := rewriteGeneratedTools(a, "", "scratch", []string{"+node"}); err != nil {
+		t.Fatalf("rewriteGeneratedTools: %v", err)
+	}
+
+	st, err := a.store()
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	c, err := st.GetContainer("ws", "scratch")
+	if err != nil {
+		t.Fatalf("GetContainer: %v", err)
+	}
+	for _, want := range []string{dcgen.StateDir, "CLAUDE_CONFIG_DIR", "dev-ws-scratch-state"} {
+		if !strings.Contains(c.GeneratedConfig, want) {
+			t.Errorf("rebuild --tools dropped %s:\n%s", want, c.GeneratedConfig)
+		}
+	}
+	if !strings.Contains(c.GeneratedConfig, "node") {
+		t.Errorf("rebuild --tools did not add node:\n%s", c.GeneratedConfig)
+	}
+}
+
+// A container that does not persist state must not acquire a mount from a
+// rebuild either: that would create a volume nobody asked for, and Remove only
+// deletes one when the column says there is one.
+func TestRebuildToolsAddsNoStateMountWhenOff(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+
+	opts := createOpts{noFolder: true, noPersistState: true, tools: []string{"yq"}, noStart: true}
+	if err := runContainerCreate(t.Context(), a, "", "scratch", "", opts); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := rewriteGeneratedTools(a, "", "scratch", []string{"+node"}); err != nil {
+		t.Fatalf("rewriteGeneratedTools: %v", err)
+	}
+
+	st, err := a.store()
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	c, err := st.GetContainer("ws", "scratch")
+	if err != nil {
+		t.Fatalf("GetContainer: %v", err)
+	}
+	if strings.Contains(c.GeneratedConfig, dcgen.StateDir) {
+		t.Errorf("rebuild --tools added a state mount to a container without one:\n%s",
+			c.GeneratedConfig)
+	}
+}
+
+// --no-persist-state is the way out, and it has to reach the row: a container
+// created with it must get no volume, no mount and no variables.
+func TestCreateHonoursNoPersistState(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+
+	opts := createOpts{noFolder: true, noPersistState: true, noStart: true}
+	if err := runContainerCreate(t.Context(), a, "", "scratch", "", opts); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	st, err := a.store()
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	c, err := st.GetContainer("ws", "scratch")
+	if err != nil {
+		t.Fatalf("GetContainer: %v", err)
+	}
+	if c.PersistState {
+		t.Error("create ignored --no-persist-state")
+	}
+	if strings.Contains(c.GeneratedConfig, dcgen.StateDir) {
+		t.Errorf("the generated document has a state mount:\n%s", c.GeneratedConfig)
+	}
+}
+
+// A project that ships its own devcontainer.json gets no "containerEnv" from
+// dev — dev does not write into a project folder — so the variables have to
+// come from here or that half of the containers would mount the volume and
+// leave every agent still writing to its default path inside the container.
+func TestContainerEnvCarriesTheStateVariables(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+
+	c := model.Container{Name: "api", WorkspaceName: "ws", PersistState: true}
+	environ, err := a.containerEnv(t.Context(), c)
+	if err != nil {
+		t.Fatalf("containerEnv: %v", err)
+	}
+
+	got := map[string]string{}
+	for _, e := range environ {
+		got[e.Key] = e.Value
+	}
+	for key, want := range dcgen.StateEnv() {
+		if got[key] != want {
+			t.Errorf("%s = %q, want %q", key, got[key], want)
+		}
+	}
+}
+
+// Without the column there is no volume, so pointing an agent at /var/dev-state
+// would send it writing into the container filesystem at a path nothing mounts
+// — losing the state on rebuild exactly as before, but less visibly.
+func TestContainerEnvOmitsStateVariablesWhenOff(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+
+	environ, err := a.containerEnv(t.Context(), model.Container{Name: "api", WorkspaceName: "ws"})
+	if err != nil {
+		t.Fatalf("containerEnv: %v", err)
+	}
+	for _, e := range environ {
+		if strings.Contains(e.Value, dcgen.StateDir) {
+			t.Errorf("%s points at the state volume for a container without one", e.Key)
+		}
+	}
+}
+
+// A workspace setting of the same name wins, the way the git identity does:
+// these are defaults the operator may have a better answer for.
+func TestWorkspaceSettingOverridesAStateVariable(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+
+	if err := runWorkspaceSet(a, "", "CLAUDE_CONFIG_DIR", "literal:/elsewhere"); err != nil {
+		t.Fatalf("workspace set: %v", err)
+	}
+
+	c := model.Container{Name: "api", WorkspaceName: "ws", PersistState: true}
+	environ, err := a.containerEnv(t.Context(), c)
+	if err != nil {
+		t.Fatalf("containerEnv: %v", err)
+	}
+
+	var seen int
+	for _, e := range environ {
+		if e.Key == "CLAUDE_CONFIG_DIR" {
+			seen++
+			if e.Value != "/elsewhere" {
+				t.Errorf("CLAUDE_CONFIG_DIR = %q, want the workspace's value", e.Value)
+			}
+		}
+	}
+	// Exactly one: both would arrive as --remote-env and the last would win,
+	// which is a coin toss rather than a precedence rule.
+	if seen != 1 {
+		t.Errorf("CLAUDE_CONFIG_DIR appears %d times, want exactly 1", seen)
 	}
 }

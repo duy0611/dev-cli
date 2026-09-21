@@ -82,15 +82,38 @@ func (s *stubs) installScript(t *testing.T, name, body string) {
 	}
 }
 
-// installKubectl writes a logging kubectl stub that drains stdin first.
+// installKubectl writes a logging kubectl stub that drains stdin first, into a
+// file named after the subcommand that received it.
 //
-// Draining matters because Sync streams a tar into `kubectl exec`: a stub that
-// exits without reading took none of the archive, which pipeInto reports rather
-// than ignores. Harmless for the calls that send nothing — os/exec gives those
-// /dev/null, which cat reaches the end of at once.
+// Draining matters because seedWorkspace streams a tar into `kubectl exec`: a
+// stub that exits without reading took none of the archive, which pipeInto
+// reports rather than ignores. Harmless for the calls that send nothing —
+// os/exec gives those /dev/null, which cat reaches the end of at once.
+//
+// Per subcommand, because one command runs several kubectl calls and a single
+// file would hold whichever spoke last. The leading flags are skipped in pairs:
+// args() only ever emits --context and --namespace, and both carry a value.
 func (s *stubs) installKubectl(t *testing.T, body string) {
 	t.Helper()
-	s.installScript(t, kubectlBin, "/bin/cat > /dev/null\n"+body)
+	capture := "sub=stdin\n" +
+		"for a in \"$@\"; do\n" +
+		"  case \"$a\" in\n" +
+		"    --context|--namespace) skip=1 ;;\n" +
+		"    *) if [ -z \"$skip\" ]; then sub=$a; break; fi; skip= ;;\n" +
+		"  esac\n" +
+		"done\n" +
+		"/bin/cat > '" + s.dir + "/" + kubectlBin + ".'\"$sub\"'.stdin'\n"
+	s.installScript(t, kubectlBin, capture+body)
+}
+
+// stdinOf returns what the logging stub was given on stdin for one subcommand.
+func (s *stubs) stdinOf(t *testing.T, name, subcommand string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(s.dir, name+"."+subcommand+".stdin"))
+	if err != nil {
+		t.Fatalf("stub %s got no stdin for %s: %v", name, subcommand, err)
+	}
+	return string(b)
 }
 
 // calls returns each invocation of a logging stub, joined into one string.

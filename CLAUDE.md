@@ -35,6 +35,7 @@ make test       # go test ./... — never touches a container engine
 make lint       # gofmt (fails on any diff), go vet, golangci-lint
 make smoke      # go test -tags smoke ./test/smoke/... — needs a real engine
 make install    # build, then copy to ~/.local/bin/dev
+make hooks      # git config core.hooksPath .githooks — once per clone
 make clean
 ```
 
@@ -81,8 +82,12 @@ blank import — not an edit to the factory. That held when k8s was added: the o
 changes outside the new package were the blank import, `--kind k8s` becoming
 valid, and one new command (`container sync`).
 
-`Syncer` is an optional interface, discovered by type assertion. The local
-provider bind-mounts the folder, so a no-op `Sync` there would be a lie.
+`Syncer` is an optional interface, discovered by type assertion. It promises a
+postcondition — after `Sync`, the container's copy of the workspace's settings
+matches the workspace — so the local provider satisfies it by doing nothing:
+every command resolves the settings afresh, and no copy exists there to drift.
+It is optional for the reason `AgentForwarder` is, not because one provider
+cannot implement it.
 
 ## Invariants — violating these produces failures far from their cause
 
@@ -106,6 +111,13 @@ provider bind-mounts the folder, so a no-op `Sync` there would be a lie.
    is also why a rotated secret needs no restart — fully true on local; on k8s
    an exec'd command sees the new value immediately, but the pod's own
    environment comes from `envFrom` and is fixed until a stop and start.
+
+   `container sync` is what makes the cluster's copy current without one. It
+   applies the Secret alone, never the Deployment: the apply is server-side and
+   drops fields it no longer sets, so an apply without `rebuiltAt` clears that
+   annotation, changes the pod template, and lets `Recreate` destroy the work
+   the command exists to protect. The running pod keeps its environment; the
+   replacement the cluster builds after an eviction or a drain does not.
 
 4. **Never store live container status.** It is read from the engine every
    time. A stored copy is wrong the moment anything happens outside `dev`.
@@ -156,11 +168,17 @@ provider bind-mounts the folder, so a no-op `Sync` there would be a lie.
    invocation. That temporary directory is also what such a container passes as
    `--workspace-folder`, which is why neither provider needs to know what a
    folderless container is to run one — Up, Exec, Stop, Status and Logs are
-   unchanged. The three places that do branch on `SourceKind` do it to remove
-   the volume and to refuse or skip a sync: the local provider removes the
-   volume in `Remove`, matching k8s deleting its PVC (`rebuild` keeps it on
-   both); and `container sync` refuses a folderless container on both
-   providers, since there is no host tree to push.
+   unchanged. The places that do branch on `SourceKind` do it to remove the
+   volume and to skip the initial copy: the local provider removes the volume
+   in `Remove`, matching k8s deleting its PVC (`rebuild` keeps it on both); and
+   k8s `Up` calls `seedWorkspace` only for a folder-backed container, since
+   there is no host tree to stream otherwise.
+
+   `seedWorkspace` is unexported and called from exactly one place — `Up`, on
+   first create. That is what keeps it safe: it unpacks a tar over the
+   workspace, so reaching it from the CLI would hand the operator a way to
+   destroy whatever an agent had half-done. `container sync` pushes settings
+   and never files.
 
    The generated document also carries a `postCreateCommand` that chowns the
    mount to `vscode`. Docker creates a named volume owned by root, and unlike a
@@ -170,6 +188,34 @@ provider bind-mounts the folder, so a no-op `Sync` there would be a lie.
    since the volume's ownership then persists across every later start; k8s
    runs the same command but it is a no-op there, because the pod's `fsGroup`
    already makes the PVC group-writable.
+
+10. **A container's agent state is a column, not a document field.** Every new
+    container mounts a volume at `/var/dev-state` unless `--no-persist-state`,
+    with `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `HERMES_HOME`,
+    `OPENCODE_CONFIG_DIR` and `GIT_CONFIG_GLOBAL` pointing into it, so plugins
+    and settings outlive a rebuild. Each moves one tool's own directory; `XDG_*`
+    would have moved every XDG-aware program in the container. The column
+    defaults to 0 while `create` defaults it to 1: the migration's default
+    speaks for rows that already exist, and those have no volume to mount.
+
+    It lives on `containers` because `rewriteGeneratedTools` re-renders the
+    whole generated document from the tool list and `SourceKind` — a mount
+    recorded only in the JSON is dropped by the next `rebuild --tools`, and the
+    next `up` then starts a container with no volume and no warning. Fixed at
+    create for the same reason the workspace mount is.
+
+    Two mechanisms, one outcome, and never both at once: a generated document
+    carries `mounts` and `containerEnv`, while a project-owned container gets
+    the volume from `devcontainer up --mount` — which exists on `up` and
+    **not** on `exec`, so it must never enter `execArgs`. Passing the flag for a
+    container whose document already names the volume makes docker refuse the
+    run with `duplicate mount destination`, so `up` checks for a generated
+    document first. The variables ride `--remote-env` and so reach both. k8s
+    ignores all of it and grows a PVC subPath instead.
+
+    Credentials stay out. Agents authenticate from workspace settings resolved
+    per invocation, which is what keeps the ssh relay's "nothing worth stealing
+    rests in the container" true of this volume too.
 
 ## Kubernetes provider (experimental)
 
@@ -184,9 +230,13 @@ breaking one produces a failure far from its cause whatever the label says.
 
 Beyond the invariants above, these are the parts that bite:
 
-- **Two subPaths on the PVC, workspace and home.** Scaling to zero destroys the
-  container filesystem. Without the home mount, anything `postCreate` wrote to
-  `~` disappears on every stop and "postCreate runs once" is false.
+- **Two subPaths on the PVC, workspace and home — three when the container
+  persists state.** Scaling to zero destroys the container filesystem. Without
+  the home mount, anything `postCreate` wrote to `~` disappears on every stop
+  and "postCreate runs once" is false. The third carries the agents'
+  configuration and exists only when `persist_state` is set; the overlap guard
+  in `buildManifest` checks every pair of mount points, because a third one is a
+  third chance to shadow another.
 - **`--platform` is explicit, defaulting to `linux/amd64`.** An arm64 image on
   an amd64 node crash-loops with `exec format error`.
 - **The builder is chosen, not assumed** (`builder.go`). The CLI gates
@@ -272,4 +322,15 @@ Beyond the invariants above, these are the parts that bite:
 
 No `Co-Authored-By: Claude ...` trailer, and no other tooling-attribution line.
 One operator, so the history reads as their own authorship. This overrides any
-harness default that asks for it.
+harness default that asks for it, including a reminder delivered mid-session.
+
+`.githooks/commit-msg` rejects one, because this rule had already been written
+here when a commit carrying the trailer went in anyway: a harness reminder asked
+for it, and the harness default was followed over this file. A rule worth
+stating is worth enforcing somewhere that does not depend on being read
+correctly. `core.hooksPath` lives in `.git/config` and no clone inherits it, so
+a fresh checkout runs `make hooks` first — a hook that is quietly absent is
+worse than none, since the rule looks handled.
+
+The hook allows a `Co-Authored-By:` naming a person. It is attribution to
+tooling that is refused, not co-authorship.

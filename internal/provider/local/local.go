@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/duy0611/dev-cli/internal/dcgen"
 	"github.com/duy0611/dev-cli/internal/model"
 	"github.com/duy0611/dev-cli/internal/provider"
 )
@@ -67,6 +68,19 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 	if noCache {
 		args = append(args, "--build-no-cache")
 	}
+	// Only for a project-owned container: a generated document already names
+	// this volume in its own "mounts", and docker rejects the whole run with
+	// "duplicate mount destination" if it arrives twice. The flag exists for
+	// the container dev has no document for, since dev must not write into a
+	// project's folder (invariant 9).
+	//
+	// On up and never on exec: the devcontainer CLI accepts --mount only here,
+	// and an unknown flag would be a usage error on every command run inside
+	// the container.
+	if c.PersistState && c.GeneratedConfig == "" {
+		args = append(args, "--mount", fmt.Sprintf("type=volume,source=%s,target=%s",
+			StateVolumeName(c.WorkspaceName, c.Name), dcgen.StateDir))
+	}
 	args = append(args, remoteEnvArgs(env)...)
 
 	cmd := exec.CommandContext(ctx, devcontainerBin, args...)
@@ -77,6 +91,42 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("starting container %s: %w", c.Name, err)
+	}
+	return p.claimStateDir(ctx, c)
+}
+
+// claimStateDir hands the state volume to the user the container runs as.
+//
+// Docker creates a named volume owned by root and, unlike a bind mount, it gets
+// no UID remapping from the devcontainer CLI — so the remote user's first write
+// there fails with permission denied. A generated configuration does this in its
+// postCreateCommand; a container whose project ships its own configuration has
+// no hook dev may write into (invariant 9), so it is done here instead.
+//
+// Only for a project-owned container. A generated one already chowns the
+// directory in the postCreateCommand dcgen renders, and doing it twice would be
+// a second answer to the same question.
+//
+// Guarded by a writability test rather than a marker file: it runs on every up,
+// and a recursive chown over a state directory holding an agent's history is
+// not something to repeat for nothing. The test is what makes it cheap; the
+// chown behind it is what makes a fresh volume usable.
+func (p *Provider) claimStateDir(ctx context.Context, c model.Container) error {
+	if !c.PersistState || c.GeneratedConfig != "" {
+		return nil
+	}
+
+	// Through sh -c because the ids are only known inside the container, and
+	// Exec hands argv straight to the CLI without a shell to expand them. The
+	// path is a constant, so there is nothing here to quote.
+	var errBuf bytes.Buffer
+	err := p.Exec(ctx, c,
+		[]string{"sh", "-c", "[ -w " + dcgen.StateDir + " ] || " +
+			"sudo chown -R $(id -u):$(id -g) " + dcgen.StateDir},
+		provider.ExecOpts{Stdout: io.Discard, Stderr: &errBuf})
+	if err != nil {
+		return fmt.Errorf("claiming %s in container %s: %w: %s",
+			dcgen.StateDir, c.Name, err, strings.TrimSpace(errBuf.String()))
 	}
 	return nil
 }
@@ -144,12 +194,23 @@ func (p *Provider) Remove(ctx context.Context, c model.Container) error {
 	// makes `container remove` mean the container is gone, and matches the k8s
 	// provider deleting its PVC. Last, because the volume cannot be removed
 	// while a container still references it.
+	var volumes []string
 	if c.SourceKind == model.SourceNone {
-		name := VolumeName(c.WorkspaceName, c.Name)
+		volumes = append(volumes, VolumeName(c.WorkspaceName, c.Name))
+	}
+	// Removed with the container, like the workspace volume: the operator asked
+	// for the container to be gone, and a volume nothing references is a disk
+	// nobody remembers filling.
+	if c.PersistState {
+		volumes = append(volumes, StateVolumeName(c.WorkspaceName, c.Name))
+	}
+	for _, name := range volumes {
 		fmt.Fprintf(os.Stderr, "dev: removing volume %s\n", name)
-		// --force: a folderless container that was never started has no
-		// volume, and "no such volume" is not a failure to report.
-		return runDocker(ctx, "volume", "rm", "--force", name)
+		// --force: a container that was never started has no volume, and "no
+		// such volume" is not a failure to report.
+		if err := runDocker(ctx, "volume", "rm", "--force", name); err != nil {
+			return err
+		}
 	}
 	return nil
 }

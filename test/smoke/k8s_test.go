@@ -4,6 +4,7 @@ package smoke
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"os"
 	"os/exec"
@@ -112,7 +113,24 @@ func TestK8sSmoke(t *testing.T) {
 
 	// The host folder was streamed into the volume on create.
 	if out := dev("container", "exec", k8sContainer, "--", "ls"); !strings.Contains(out, "hello.txt") {
-		t.Errorf("the synced file is missing from the workspace:\n%s", out)
+		t.Errorf("the seeded file is missing from the workspace:\n%s", out)
+	}
+
+	// sync makes the cluster's copy current. Read back from the Secret rather
+	// than through `exec printenv`, which injects the value per invocation and
+	// would answer correctly whether or not sync did anything at all — the
+	// cluster's copy is the whole subject.
+	podBefore := kubectl("get", "pods", "-l", "dev.container="+slugOf(k8sContainer), "-o", "name")
+	dev("workspace", "set", "GREETING", "literal:rotated")
+	dev("container", "sync", k8sContainer)
+	if got := secretValue(t, kubectl, "GREETING"); got != "rotated" {
+		t.Errorf("the Secret carries GREETING = %q after a sync, want %q", got, "rotated")
+	}
+	// The same pod, not a replacement. A sync that restarts the pod destroys
+	// whatever an agent had half-done in it, which is the thing this command is
+	// built to avoid. The name changes if the ReplicaSet made a new one.
+	if podAfter := kubectl("get", "pods", "-l", "dev.container="+slugOf(k8sContainer), "-o", "name"); podAfter != podBefore {
+		t.Errorf("sync replaced the pod: %q became %q", strings.TrimSpace(podBefore), strings.TrimSpace(podAfter))
 	}
 
 	// postCreate ran, and wrote into the home half of the volume.
@@ -148,11 +166,27 @@ func k8sFixtureProject(t *testing.T) string {
 		[]byte(k8sFixtureConfig), 0o600); err != nil {
 		t.Fatalf("writing the fixture config: %v", err)
 	}
-	// Something recognisable to look for on the other side of the sync.
+	// Something recognisable to look for on the other side of the seed.
 	if err := os.WriteFile(filepath.Join(dir, "hello.txt"), []byte("hi\n"), 0o600); err != nil {
 		t.Fatalf("writing the fixture file: %v", err)
 	}
 	return dir
+}
+
+// secretValue reads one key out of the container's Secret, decoded.
+//
+// jsonpath over `-o json` piped through a decoder: `kubectl get -o
+// go-template` would need the same base64 step anyway, and jsonpath keeps the
+// key name in one readable place.
+func secretValue(t *testing.T, kubectl func(...string) string, key string) string {
+	t.Helper()
+	out := kubectl("get", "secret", "-l", "dev.container="+slugOf(k8sContainer),
+		"-o", "jsonpath={.items[0].data."+key+"}")
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(out))
+	if err != nil {
+		t.Fatalf("the Secret's %s is not base64 (%q): %v", key, out, err)
+	}
+	return string(decoded)
 }
 
 // slugOf mirrors the provider's label value for a container name.
