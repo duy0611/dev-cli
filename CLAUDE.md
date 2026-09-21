@@ -35,6 +35,7 @@ make test       # go test ./... — never touches a container engine
 make lint       # gofmt (fails on any diff), go vet, golangci-lint
 make smoke      # go test -tags smoke ./test/smoke/... — needs a real engine
 make install    # build, then copy to ~/.local/bin/dev
+make hooks      # git config core.hooksPath .githooks — once per clone
 make clean
 ```
 
@@ -321,4 +322,15 @@ Beyond the invariants above, these are the parts that bite:
 
 No `Co-Authored-By: Claude ...` trailer, and no other tooling-attribution line.
 One operator, so the history reads as their own authorship. This overrides any
-harness default that asks for it.
+harness default that asks for it, including a reminder delivered mid-session.
+
+`.githooks/commit-msg` rejects one, because this rule had already been written
+here when a commit carrying the trailer went in anyway: a harness reminder asked
+for it, and the harness default was followed over this file. A rule worth
+stating is worth enforcing somewhere that does not depend on being read
+correctly. `core.hooksPath` lives in `.git/config` and no clone inherits it, so
+a fresh checkout runs `make hooks` first — a hook that is quietly absent is
+worse than none, since the rule looks handled.
+
+The hook allows a `Co-Authored-By:` naming a person. It is attribution to
+tooling that is refused, not co-authorship.

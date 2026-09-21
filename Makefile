@@ -6,6 +6,7 @@
 #   make lint       gofmt, go vet, golangci-lint
 #   make smoke      end-to-end test against a real container engine
 #   make install    build, then copy the binary into ~/.local/bin
+#   make hooks      enable the repository's git hooks (once per clone)
 #   make clean      remove build output
 
 SHELL := /bin/bash
@@ -21,10 +22,10 @@ GO      ?= go
 GOBUILD := CGO_ENABLED=0 $(GO) build -ldflags "-X main.version=$(VERSION)"
 
 .DEFAULT_GOAL := help
-.PHONY: help build relay test lint smoke install clean
+.PHONY: help build relay test lint smoke install hooks clean
 
 help:
-	@sed -n '3,10p' $(MAKEFILE_LIST) | sed 's/^# \{0,1\}//'
+	@sed -n '3,11p' $(MAKEFILE_LIST) | sed 's/^# \{0,1\}//'
 
 build: relay
 	@mkdir -p dist
@@ -95,6 +96,14 @@ install: build
 	@mkdir -p $(PREFIX)/bin
 	install -m 0755 $(BIN) $(PREFIX)/bin/dev
 	@echo "installed $(PREFIX)/bin/dev"
+
+# Point git at the hooks this repository tracks. core.hooksPath lives in
+# .git/config, which no clone inherits, so a fresh checkout has to run this or
+# the hooks are simply not there — and a hook that is quietly absent is worse
+# than none, since the rule it enforces looks handled.
+hooks:
+	git config core.hooksPath .githooks
+	@echo "git hooks enabled from .githooks"
 
 # The relay binaries go too — they are build output, and gitignored. The README
 # beside them stays: the embed names the directory, and one that matches nothing
