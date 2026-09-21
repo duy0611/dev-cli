@@ -144,6 +144,23 @@ CLI's path is where the operator and the agent will be sitting. A generated
 container has one path for both, which is the better arrangement and the reason
 `--generate` is worth reaching for here.
 
+### The mount is derived from the row, not the document
+
+`rewriteGeneratedTools` re-renders the whole document from the tool list, the
+source kind and the stored columns — so anything not derivable from those is
+destroyed by the next `rebuild --tools`. That is the trap invariant 10 records
+for the state volume, and the `.git` bind is a third instance of it.
+
+The worktree row is what saves it. `rewriteGeneratedTools` looks the row up and
+rebuilds the `.git` mount from `repo`, the same way it already rebuilds the
+state mount from `PersistState`. Nothing new has to be remembered because the
+row already holds the repository for the removal path.
+
+This is also why the repository is stored rather than re-derived from the
+checkout at rebuild time: a checkout the operator has already deleted by hand
+would answer nothing, and the rebuild would then quietly produce a container
+whose git does not work.
+
 ### dcgen renders a list
 
 `render.go` assigns `doc["mounts"]` outright for the state volume. A worktree
@@ -416,6 +433,9 @@ already does and for the reason recorded there.
   the checkout in `workspaceMount`; a container that is both worktree-backed and
   state-persisting carries both mounts and chowns only the state directory; the
   output stays byte-stable.
+- `internal/cli`, and the one that would otherwise be found months later:
+  `rebuild --tools` on a worktree container preserves the `.git` mount, and
+  invents none for a container that never had one.
 - `internal/provider/local`: `up` passes both `--mount` flags on a project-owned
   worktree container and neither on a generated one; `execArgs` never carries
   one; a worktree container that also persists state passes three, with no
