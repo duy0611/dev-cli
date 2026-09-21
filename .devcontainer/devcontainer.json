@@ -18,7 +18,7 @@
   },
   "image": "mcr.microsoft.com/devcontainers/base:1-ubuntu-24.04",
   "mounts": [
-    "source=dev-demo-ssh-dev-cli-state,target=/var/dev-state,type=volume"
+    "source=dev-cli-state,target=/var/dev-state,type=volume"
   ],
   "name": "dev-cli",
   "postCreateCommand": "sudo chown vscode:vscode /var/dev-state",
