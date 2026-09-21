@@ -168,8 +168,23 @@ func TestOverlayKeepsCommentMarkersInsideStrings(t *testing.T) {
 // dev parses a file it did not write, so it must report a file it cannot parse
 // rather than return a partial document.
 func TestOverlayRejectsAMalformedDocument(t *testing.T) {
-	if _, err := Overlay([]byte(`{"name":}`), State{Volume: "v"}); err == nil {
-		t.Error("Overlay accepted a malformed document")
+	for _, tc := range []struct {
+		name string
+		in   string
+	}{
+		{"malformed JSON", `{"name":}`},
+		{"null", `null`},
+		{"array", `[]`},
+		{"string", `"not an object"`},
+		{"number", `42`},
+		{"boolean", `true`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Overlay([]byte(tc.in), State{Volume: "v"})
+			if err == nil {
+				t.Errorf("Overlay accepted %s", tc.name)
+			}
+		})
 	}
 }
 

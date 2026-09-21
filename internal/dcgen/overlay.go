@@ -107,6 +107,12 @@ func parseConfig(projectConfig []byte) (map[string]json.RawMessage, error) {
 	if err := json.Unmarshal(std, &doc); err != nil {
 		return nil, fmt.Errorf("reading the project's devcontainer.json: %w", err)
 	}
+	// json.Unmarshal unmarshals null into a nil map with err == nil. A top-level
+	// null is not a valid devcontainer document; reject it before returning,
+	// since a nil map causes a panic in Overlay when it tries to assign to it.
+	if doc == nil {
+		return nil, fmt.Errorf("reading the project's devcontainer.json: expected an object, got null")
+	}
 	return doc, nil
 }
 
