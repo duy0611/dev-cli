@@ -1,7 +1,6 @@
 {
   "containerEnv": {
     "CLAUDE_CONFIG_DIR": "/var/dev-state/claude",
-    "CODEX_HOME": "/var/dev-state/codex",
     "GIT_CONFIG_GLOBAL": "/var/dev-state/gitconfig",
     "HERMES_HOME": "/var/dev-state/hermes",
     "OPENCODE_CONFIG_DIR": "/var/dev-state/opencode"
