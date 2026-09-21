@@ -13,6 +13,7 @@ command. For what `dev` *is* and how it fits together, read the
   - [Add a secret and rotate it](#add-a-secret-and-rotate-it)
   - [Push to git from inside a container](#push-to-git-from-inside-a-container)
   - [Keep an agent's plugins across a rebuild](#keep-an-agents-plugins-across-a-rebuild)
+  - [Commit a devcontainer.json that also works under dev](#commit-a-devcontainerjson-that-also-works-under-dev)
   - [Run a workspace in Kubernetes](#run-a-workspace-in-kubernetes)
   - [Clean up](#clean-up)
 - [Troubleshooting](#troubleshooting)
@@ -282,6 +283,27 @@ treating them differently.
 On k8s all of this already worked — the pod's home directory lives on the PVC —
 and a third subPath there carries the same paths, so the two providers behave
 identically.
+
+### Commit a devcontainer.json that also works under dev
+
+A project's own `.devcontainer/devcontainer.json` can name a mount at
+`/var/dev-state` — a plain `source=dev-cli-state` volume is enough — and stay
+correct for VS Code, which never sees anything else. While `dev` drives, it
+reads that file, replaces whatever is mounted at `/var/dev-state` with the
+per-container volume (`dev-<workspace>-<container>-state`), and passes the
+merged result on both `up` and `exec`; nothing about the replacement is
+stored, so editing the project file takes effect on the next command. A
+project mounting something of its own elsewhere is untouched — only
+`/var/dev-state` is ever replaced. (For a `dockerComposeFile` project, see
+`--no-persist-state` under [`create`](#container) — the mount does not
+reliably apply there.)
+
+Plainly: **a container opened directly in VS Code gets no workspace
+settings.** A workspace setting is stored as a spec — `keychain:NAME`,
+`op://…` — and resolved to a value fresh on every `dev` command; no field in
+a `devcontainer.json` can call that resolver. Opened outside `dev`, the
+container starts, the agents have their state volume, and the secrets are
+simply absent.
 
 ### Run a workspace in Kubernetes
 
