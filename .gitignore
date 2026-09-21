@@ -16,3 +16,7 @@
 # Go test artefacts.
 *.test
 *.out
+
+# Claude local files
+.claude/settings.local.json
+.claude/plans/
