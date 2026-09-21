@@ -713,3 +713,82 @@ func TestWorkspaceSettingOverridesAStateVariable(t *testing.T) {
 		t.Errorf("CLAUDE_CONFIG_DIR appears %d times, want exactly 1", seen)
 	}
 }
+
+// writeProjectConfigIn puts a .devcontainer/devcontainer.json in dir.
+func writeProjectConfigIn(t *testing.T, dir, body string) {
+	t.Helper()
+	nested := filepath.Join(dir, ".devcontainer")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "devcontainer.json"), []byte(body), 0o600); err != nil {
+		t.Fatalf("writing the project config: %v", err)
+	}
+}
+
+// A compose project cannot carry the state mount, and nothing reports an error
+// when it silently does not: the agents write to the container filesystem and
+// lose it at the next rebuild.
+func TestComposeWarningForAComposeProject(t *testing.T) {
+	dir := t.TempDir()
+	writeProjectConfigIn(t, dir, `{"dockerComposeFile":"docker-compose.yml","service":"app"}`)
+	path := filepath.Join(dir, ".devcontainer", "devcontainer.json")
+
+	got := composeWarning(path, true)
+	if got == "" {
+		t.Fatal("no warning for a compose project")
+	}
+	// The way out has to be in the message, in the house style of the
+	// kind-change error: an operator who is not told what to do has nothing to
+	// try.
+	for _, want := range []string{"docker compose", dcgen.StateDir, "--no-persist-state"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("warning %q does not mention %q", got, want)
+		}
+	}
+}
+
+func TestComposeWarningSilentForAnImageProject(t *testing.T) {
+	dir := t.TempDir()
+	writeProjectConfigIn(t, dir, `{"image":"ubuntu"}`)
+	path := filepath.Join(dir, ".devcontainer", "devcontainer.json")
+
+	if got := composeWarning(path, true); got != "" {
+		t.Errorf("warned about a non-compose project: %q", got)
+	}
+}
+
+// Nothing to lose, nothing to warn about.
+func TestComposeWarningSilentWithoutPersistState(t *testing.T) {
+	dir := t.TempDir()
+	writeProjectConfigIn(t, dir, `{"dockerComposeFile":"docker-compose.yml"}`)
+	path := filepath.Join(dir, ".devcontainer", "devcontainer.json")
+
+	if got := composeWarning(path, false); got != "" {
+		t.Errorf("warned for a container that persists no state: %q", got)
+	}
+}
+
+// A generated container has no project config, and an unreadable one is the
+// business of the commands that need it.
+func TestComposeWarningSilentWithoutAConfig(t *testing.T) {
+	if got := composeWarning("", true); got != "" {
+		t.Errorf("warned with no config path: %q", got)
+	}
+	if got := composeWarning("/nonexistent/devcontainer.json", true); got != "" {
+		t.Errorf("warned for an unreadable config: %q", got)
+	}
+}
+
+// Still created: the warning is advisory, not a refusal.
+func TestCreateSucceedsForAComposeProject(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	folder := t.TempDir()
+	writeProjectConfigIn(t, folder, `{"dockerComposeFile":"docker-compose.yml","service":"app"}`)
+
+	if err := runContainerCreate(t.Context(), a, "", "demo", folder,
+		createOpts{noStart: true}); err != nil {
+		t.Fatalf("create refused a compose project: %v", err)
+	}
+}

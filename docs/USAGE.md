@@ -536,6 +536,14 @@ Containers created before this existed keep their old behaviour. The volume they
 never had is not conjured up by an upgrade; `dev container list` shows them as
 `off`.
 
+A project whose `devcontainer.json` names `dockerComposeFile` does not
+reliably get the state volume: the devcontainer CLI treats `mounts` under
+compose as the compose file's business, and implementations differ on whether
+they apply it anyway. `create` still creates the container — everything else
+works — but warns on stderr so a silently missing `/var/dev-state` is not a
+surprise at the next rebuild. Add the volume to your compose file yourself, or
+pass `--no-persist-state`.
+
 **`list`** reads live status from the engine every time; a stored copy would be
 wrong the moment anything happened outside `dev`. A `?` means the engine could
 not be reached. The SOURCE column is `-` for a folderless container, and STATE
