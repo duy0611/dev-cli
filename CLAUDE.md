@@ -186,11 +186,14 @@ provider bind-mounts the folder, so a no-op `Sync` there would be a lie.
     next `up` then starts a container with no volume and no warning. Fixed at
     create for the same reason the workspace mount is.
 
-    Two mechanisms, one outcome: a generated document carries `mounts` and
-    `containerEnv`, while a project-owned container gets the volume from
-    `devcontainer up --mount` — which exists on `up` and **not** on `exec`, so it
-    must never enter `execArgs`. The variables ride `--remote-env` and so reach
-    both. k8s ignores all of it and grows a PVC subPath instead.
+    Two mechanisms, one outcome, and never both at once: a generated document
+    carries `mounts` and `containerEnv`, while a project-owned container gets
+    the volume from `devcontainer up --mount` — which exists on `up` and
+    **not** on `exec`, so it must never enter `execArgs`. Passing the flag for a
+    container whose document already names the volume makes docker refuse the
+    run with `duplicate mount destination`, so `up` checks for a generated
+    document first. The variables ride `--remote-env` and so reach both. k8s
+    ignores all of it and grows a PVC subPath instead.
 
     Credentials stay out. Agents authenticate from workspace settings resolved
     per invocation, which is what keeps the ssh relay's "nothing worth stealing

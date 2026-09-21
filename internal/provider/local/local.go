@@ -68,12 +68,16 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 	if noCache {
 		args = append(args, "--build-no-cache")
 	}
+	// Only for a project-owned container: a generated document already names
+	// this volume in its own "mounts", and docker rejects the whole run with
+	// "duplicate mount destination" if it arrives twice. The flag exists for
+	// the container dev has no document for, since dev must not write into a
+	// project's folder (invariant 9).
+	//
 	// On up and never on exec: the devcontainer CLI accepts --mount only here,
-	// and an unknown flag is a usage error that would break every command run
-	// inside the container. A generated document names this same volume in its
-	// own "mounts" instead; this covers a container whose project ships its own
-	// configuration, which dev must not write into (invariant 9).
-	if c.PersistState {
+	// and an unknown flag would be a usage error on every command run inside
+	// the container.
+	if c.PersistState && c.GeneratedConfig == "" {
 		args = append(args, "--mount", fmt.Sprintf("type=volume,source=%s,target=%s",
 			StateVolumeName(c.WorkspaceName, c.Name), dcgen.StateDir))
 	}

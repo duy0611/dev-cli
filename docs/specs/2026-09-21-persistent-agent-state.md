@@ -156,6 +156,14 @@ must never enter `execArgs`, where it would be a flag error on every command.
 The variables ride `--remote-env`, which both paths already carry, so only the
 mount needs two routes.
 
+**Exactly one route per container, never both.** Docker refuses the whole run
+with `duplicate mount destination` when the same target arrives twice, so `up`
+passes `--mount` only when there is no generated document to have named the
+volume already. The first version of this passed it unconditionally and every
+generated container failed to start; the unit tests missed it because they
+covered the project-owned case, where the flag belongs. `make smoke` found it
+against a real engine, which is the one thing it exists to do.
+
 The volume is named `dev-<workspace>-<container>-state`, built beside
 `VolumeName` in `internal/provider/local/label.go` and for the reason recorded
 there: the name is written at create, read at up and passed to `docker volume

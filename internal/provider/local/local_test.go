@@ -447,7 +447,7 @@ func stateContainer() model.Container {
 // The mount goes on up, where the CLI accepts it. A project that ships its own
 // devcontainer.json cannot be given a "mounts" entry — dev does not write into
 // a project folder — so this is the only way such a container gets the volume.
-func TestUpMountsTheStateVolume(t *testing.T) {
+func TestUpMountsTheStateVolumeForAProjectOwnedContainer(t *testing.T) {
 	f := newFakePath(t)
 	f.install(t, devcontainerBin, "", 0)
 
@@ -457,6 +457,26 @@ func TestUpMountsTheStateVolume(t *testing.T) {
 	want := []string{"--mount", "type=volume,source=dev-ws-demo-state,target=/var/dev-state"}
 	if !contains(f.argv(t, devcontainerBin), want) {
 		t.Errorf("argv %v is missing %v", f.argv(t, devcontainerBin), want)
+	}
+}
+
+// A generated document already names the volume in its own "mounts", so adding
+// the flag as well makes docker reject the entire run with "duplicate mount
+// destination" — the container never starts. The unit tests missed this at
+// first because they only covered the project-owned container, where the flag
+// is right; the smoke test caught it against a real engine.
+func TestUpDoesNotMountStateForAGeneratedContainer(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, devcontainerBin, "", 0)
+
+	c := stateContainer()
+	c.GeneratedConfig = `{"name":"demo","mounts":["source=dev-ws-demo-state,target=/var/dev-state,type=volume"]}`
+	if err := (&Provider{}).Up(context.Background(), c, nil); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if contains(f.argv(t, devcontainerBin), []string{"--mount"}) {
+		t.Errorf("up passed --mount for a container whose document already mounts the volume: %v",
+			f.argv(t, devcontainerBin))
 	}
 }
 
