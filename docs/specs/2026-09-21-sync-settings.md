@@ -176,8 +176,12 @@ follows:
 
 ```
 ❯ dev container sync api
-synced 4 settings to api: ANTHROPIC_API_KEY, API_URL, GH_TOKEN, GIT_CONFIG_GLOBAL
+4 settings current in api: ANTHROPIC_API_KEY, API_URL, GH_TOKEN, GIT_CONFIG_GLOBAL
 ```
+
+A postcondition rather than a report of work done, matching what the interface
+promises. "Synced 4 settings" would contradict the local provider's own line a
+moment earlier saying it had nothing to push.
 
 ## Testing
 

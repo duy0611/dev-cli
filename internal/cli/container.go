@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/duy0611/dev-cli/internal/dcconfig"
@@ -534,11 +535,16 @@ func newContainerSyncCmd(a *app) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "sync NAME",
-		Short: "Copy the host folder into a remote container",
-		Long: "Copy the host folder into a remote container.\n\n" +
-			"One direction, and only when asked: once an agent is working in the\n" +
-			"container, its copy is the live one, and overwriting that on a timer\n" +
-			"would destroy work nobody asked to discard.",
+		Short: "Push the workspace's settings into a container",
+		Long: "Push the workspace's settings into a container.\n\n" +
+			"Your files are never touched. A container an agent has been working in\n" +
+			"holds the only copy of what it has done, and no command should overwrite\n" +
+			"that.\n\n" +
+			"Nothing to do on the local provider, which resolves the settings on every\n" +
+			"command. On k8s it refreshes the Secret the pod is built from, so a pod\n" +
+			"the cluster replaces on its own — an eviction, a drain — comes back with\n" +
+			"current values rather than the ones it was created with. The running pod\n" +
+			"keeps the environment it started with either way.",
 		Args: exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runContainerSync(cmd.Context(), a, workspace, args[0])
@@ -555,24 +561,35 @@ func runContainerSync(ctx context.Context, a *app, workspace, name string) error
 	}
 	defer t.release()
 
-	if t.container.SourceKind == model.SourceNone {
-		return usageErrorf("container %s has no folder to sync from", name)
-	}
 	syncer, ok := t.provider.(provider.Syncer)
 	if !ok {
-		// The local provider bind-mounts the folder: the container is already
-		// looking at the same files.
-		return usageErrorf("provider %s mounts the folder directly; there is nothing to sync",
-			t.workspace.ProviderName)
+		return usageErrorf("provider %s cannot sync settings", t.workspace.ProviderName)
 	}
 	if err := a.requireRunning(ctx, t); err != nil {
 		return err
 	}
-
-	if err := syncer.Sync(ctx, t.container); err != nil {
+	// The same environment `up` would build, state variables included, so the
+	// two cannot disagree about what the container's environment is.
+	environ, err := a.containerEnv(ctx, t.container)
+	if err != nil {
 		return err
 	}
-	a.printf("synced %s into %s\n", xpath.Shorten(t.container.Source), name)
+
+	if err := syncer.Sync(ctx, t.container, environ); err != nil {
+		return err
+	}
+	// Keys, never values — the rule `workspace show` follows. Sorted, because
+	// the environment is assembled in a fixed order that is not this one, and a
+	// list that reshuffles between runs reads as though something changed.
+	keys := make([]string, 0, len(environ))
+	for _, e := range environ {
+		keys = append(keys, e.Key)
+	}
+	slices.Sort(keys)
+	// What is true afterwards, rather than what was done — the same postcondition
+	// Syncer promises. "Synced N settings" would contradict the local provider's
+	// own line a moment earlier saying it had nothing to push.
+	a.printf("%d settings current in %s: %s\n", len(keys), name, strings.Join(keys, ", "))
 	return nil
 }
 

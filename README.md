@@ -119,13 +119,13 @@ PersistentVolumeClaim and a Secret, all labelled `dev.workspace` and
 
 | `dev` | Kubernetes |
 |---|---|
-| `create` | build, push, apply, wait, sync, run the create-time lifecycle commands |
+| `create` | build, push, apply, wait, stream the folder in, run the create-time lifecycle commands |
 | `start` | scale to 1, run `postStartCommand` |
 | `stop` | scale to 0 — the volume, and everything on it, survives |
 | `remove` | delete all three objects, volume included |
 | `rebuild` | build and push again, recreate the pod, re-run the create-time commands |
 | `shell` / `exec` / `agent` | `kubectl exec` |
-| `sync` | stream the host folder in as a tar |
+| `sync` | re-apply the Secret holding the workspace's settings, leaving the pod running |
 
 ### Before the first create
 
@@ -146,9 +146,10 @@ sits in `ImagePullBackOff` and `create` fails waiting for it.
 ### Things worth knowing
 
 **Your files are a copy, not a mount.** `create` streams the folder into the
-volume; after that, `dev container sync NAME` is the only thing that sends more.
-Nothing comes back down. Once an agent is working in the container, its copy is
-the live one — which is why nothing overwrites it on a timer.
+volume once, and nothing sends more after that. Once an agent is working in the
+container its copy is the live one, and no command overwrites it — get changes
+across the way you would between any two machines, by pushing and pulling.
+`dev container sync NAME` sends the workspace's *settings*, not files.
 
 **Lifecycle commands are run by `dev`.** The CLI would normally run them at
 `up`, which never happens here. `onCreateCommand`, `updateContentCommand` and

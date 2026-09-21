@@ -90,8 +90,8 @@ dev container create scratch --no-folder
 In a script, no `--tools` means a bare Ubuntu image — a scripted run never
 blocks on a question nobody is there to answer.
 
-Nothing on your host is mounted, so there is no host directory to sync from:
-`dev container sync` on a folderless container exits 2.
+Nothing on your host is mounted, and nothing needs to be: `dev` never copies
+your files into a container, folderless or not.
 
 ### A project that ships no devcontainer config
 
@@ -157,6 +157,21 @@ the Keychain needs no rebuild and no restart — the next command picks it up. O
 the k8s provider that holds for anything you `exec`, but the pod's own
 environment comes from a Secret read at pod start, so a process already running
 there keeps the old value until `dev container stop` and `start`.
+
+After rotating, run `sync` on your k8s containers:
+
+```sh
+dev container sync api
+```
+
+That refreshes the Secret in the cluster without touching the running pod. It
+matters for the restart you did not ask for — an eviction, an OOM kill, a node
+drain — where the ReplicaSet builds a replacement pod from the Secret as it
+currently stands. Without a `sync`, that pod comes back holding the token you
+rotated away, and the agent that was working starts getting 401s.
+
+On the local provider `sync` has nothing to do and says so: every command
+resolves the settings afresh, so there is no copy anywhere that could be stale.
 
 `dev workspace show` prints the specs and never the resolved values:
 
@@ -286,15 +301,20 @@ Two things to do before the first create: log the builder in to your registry
 (`docker login ghcr.io`), and, if the image will be private, create a pull
 secret in the namespace and name it with `--image-pull-secret`.
 
-Your files are a **copy**, not a mount. `create` streams the folder in; after
-that, nothing goes up unless you ask:
+Your files are a **copy**, not a mount. `create` streams the folder in once, and
+that is the only time `dev` writes to the container's workspace. From then on
+the container's copy is the live one — an agent has been working in it, and
+nothing you run from the host will overwrite that in either direction.
+
+Getting later changes across is yours to arrange, the way it would be between
+any two machines: commit and push from one, pull on the other.
 
 ```sh
-dev container sync api
+dev container exec api -- git pull
 ```
 
-Nothing ever comes back down. Once an agent is working in the container, its
-copy is the live one.
+`dev container sync api` pushes your workspace *settings*, not your files. See
+[Add a secret and rotate it](#add-a-secret-and-rotate-it).
 
 ### Clean up
 
@@ -323,12 +343,9 @@ sandbox, which you notice only when the agent cannot find your code.
 **`no devcontainer config in …`** — the folder ships none. Add `--generate`, or
 run it at a terminal and accept the offer.
 
-**`provider … mounts the folder directly; there is nothing to sync`** — `sync`
-is for providers whose container holds a *copy* of your files. A local container
-is looking at the same files you are.
-
-**`container … has no folder to sync from`** — a folderless container has no
-host tree. Nothing to push.
+**`a local container takes its settings on every command; nothing to push`** —
+`sync` on the local provider. Not an error: it exits 0, and the settings are
+already current in every process `dev` starts.
 
 **A rebuild did not pick up my new image (k8s)** — it should: `rebuild` bumps an
 annotation on the pod template, because the tag never changes and nothing else
@@ -547,10 +564,11 @@ not to `dev`.
 **`start-agent`** defaults to `--agent claude`. The agent must already be
 installed in the image.
 
-**`sync`** exists only for providers whose container holds a copy of your files,
-so it is k8s-only in practice. On a local container it exits 2 saying the folder
-is already mounted; on a folderless container it exits 2 saying there is no
-folder to sync from.
+**`sync`** pushes the workspace's settings into a container and never touches
+your files. On k8s it refreshes the Secret the pod is built from, leaving the
+running pod alone; on local it exits 0 having done nothing, because every
+command already resolves the settings afresh. The container has to be running
+either way.
 
 **`tools`** lists the catalog, marking each entry official or community.
 **`config show`** prints the configuration `dev` generated for a container, and

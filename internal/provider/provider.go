@@ -58,14 +58,22 @@ type Provider interface {
 	Logs(ctx context.Context, c model.Container, follow bool, out io.Writer) error
 }
 
-// Syncer is implemented by providers whose containers hold a copy of the
-// project rather than the project itself.
+// Syncer reconciles a container's copy of the workspace's settings.
 //
-// Deliberately not part of Provider: the local provider bind-mounts the folder,
-// so there is nothing to copy and a no-op Sync would be a lie. Callers type
-// assert, and tell the operator plainly when the provider does not have it.
+// A postcondition rather than an action: after Sync returns, whatever copy the
+// provider keeps outside the process dev launches matches the workspace. A
+// provider that keeps no such copy satisfies that by doing nothing — the local
+// one injects the settings per invocation, so there is nothing that can drift.
+//
+// Deliberately not part of Provider, for the reason AgentForwarder is not
+// either: a provider added later should be able to run a container before it
+// owes this. Callers type assert.
+//
+// Resolved variables are passed in rather than read here, as Up and Rebuild
+// take them: turning a spec into a value needs the secret backend, which is a
+// host concern.
 type Syncer interface {
-	Sync(ctx context.Context, c model.Container) error
+	Sync(ctx context.Context, c model.Container, env []EnvVar) error
 }
 
 // AgentForwarder is implemented by providers that can carry the host's SSH

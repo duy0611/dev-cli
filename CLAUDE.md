@@ -81,8 +81,12 @@ blank import — not an edit to the factory. That held when k8s was added: the o
 changes outside the new package were the blank import, `--kind k8s` becoming
 valid, and one new command (`container sync`).
 
-`Syncer` is an optional interface, discovered by type assertion. The local
-provider bind-mounts the folder, so a no-op `Sync` there would be a lie.
+`Syncer` is an optional interface, discovered by type assertion. It promises a
+postcondition — after `Sync`, the container's copy of the workspace's settings
+matches the workspace — so the local provider satisfies it by doing nothing:
+every command resolves the settings afresh, and no copy exists there to drift.
+It is optional for the reason `AgentForwarder` is, not because one provider
+cannot implement it.
 
 ## Invariants — violating these produces failures far from their cause
 
@@ -106,6 +110,13 @@ provider bind-mounts the folder, so a no-op `Sync` there would be a lie.
    is also why a rotated secret needs no restart — fully true on local; on k8s
    an exec'd command sees the new value immediately, but the pod's own
    environment comes from `envFrom` and is fixed until a stop and start.
+
+   `container sync` is what makes the cluster's copy current without one. It
+   applies the Secret alone, never the Deployment: the apply is server-side and
+   drops fields it no longer sets, so an apply without `rebuiltAt` clears that
+   annotation, changes the pod template, and lets `Recreate` destroy the work
+   the command exists to protect. The running pod keeps its environment; the
+   replacement the cluster builds after an eviction or a drain does not.
 
 4. **Never store live container status.** It is read from the engine every
    time. A stored copy is wrong the moment anything happens outside `dev`.
@@ -156,11 +167,17 @@ provider bind-mounts the folder, so a no-op `Sync` there would be a lie.
    invocation. That temporary directory is also what such a container passes as
    `--workspace-folder`, which is why neither provider needs to know what a
    folderless container is to run one — Up, Exec, Stop, Status and Logs are
-   unchanged. The three places that do branch on `SourceKind` do it to remove
-   the volume and to refuse or skip a sync: the local provider removes the
-   volume in `Remove`, matching k8s deleting its PVC (`rebuild` keeps it on
-   both); and `container sync` refuses a folderless container on both
-   providers, since there is no host tree to push.
+   unchanged. The places that do branch on `SourceKind` do it to remove the
+   volume and to skip the initial copy: the local provider removes the volume
+   in `Remove`, matching k8s deleting its PVC (`rebuild` keeps it on both); and
+   k8s `Up` calls `seedWorkspace` only for a folder-backed container, since
+   there is no host tree to stream otherwise.
+
+   `seedWorkspace` is unexported and called from exactly one place — `Up`, on
+   first create. That is what keeps it safe: it unpacks a tar over the
+   workspace, so reaching it from the CLI would hand the operator a way to
+   destroy whatever an agent had half-done. `container sync` pushes settings
+   and never files.
 
    The generated document also carries a `postCreateCommand` that chowns the
    mount to `vscode`. Docker creates a named volume owned by root, and unlike a

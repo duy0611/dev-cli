@@ -3,6 +3,7 @@ package k8s
 import (
 	"archive/tar"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -10,24 +11,63 @@ import (
 	"strings"
 
 	"github.com/duy0611/dev-cli/internal/model"
+	"github.com/duy0611/dev-cli/internal/provider"
 )
 
-// Sync copies the host folder into the container's workspace.
+// Sync makes the cluster's copy of the workspace's settings current.
+//
+// The pod reads them through envFrom at start, so this changes nothing for a
+// process already running there — Sync says so on stderr rather than leaving
+// the operator to wonder. What it buys is the pod nobody drives: an eviction,
+// an OOM kill or a node drain gets a replacement from the ReplicaSet, and that
+// pod reads the Secret as it stands in the cluster. Without this, a token
+// rotated since the last up comes back stale.
+//
+// The Secret alone, never the Deployment. The apply is server-side and drops
+// fields the applier no longer sets, so an apply built here — with no rebuiltAt
+// — would clear that annotation, change the pod template, and let the Recreate
+// strategy tear down the very work this command exists to leave alone.
+//
+// Dropping absent fields is also what carries an unset setting away: the
+// object's stringData is replaced, not merged.
+func (p *Provider) Sync(ctx context.Context, c model.Container, env []provider.EnvVar) error {
+	dev, _, err := readConfiguration(ctx, c.Source, c.ConfigPath)
+	if err != nil {
+		return err
+	}
+
+	manifest, err := json.Marshal(buildSecret(manifestInput{Container: c, Dev: dev, Env: env}))
+	if err != nil {
+		return fmt.Errorf("rendering the secret for container %s: %w", c.Name, err)
+	}
+	if err := p.kube.apply(ctx, manifest); err != nil {
+		return err
+	}
+
+	fmt.Fprint(os.Stderr,
+		"dev: the pod keeps the environment it started with; anything already running\n"+
+			"dev: there sees the new values only after stop and start\n")
+	return nil
+}
+
+// seedWorkspace copies the host folder into a freshly created container.
 //
 // A tar streamed over `kubectl exec`, which is what `kubectl cp` does too — but
 // built here so the archive is produced in Go rather than by the host's tar,
 // whose flags differ between BSD and GNU, and so the contents are this code's
 // decision rather than a shell glob's.
 //
-// One direction, on demand. The container's copy is the working one once an
-// agent is running in it; overwriting that automatically would destroy work
-// nobody asked to discard.
-func (p *Provider) Sync(ctx context.Context, c model.Container) error {
+// Reachable only from Up, and only on first create. That is what makes it safe:
+// it unpacks over the workspace, so running it against a container an agent has
+// been working in would destroy whatever is half-done there. An empty volume is
+// the only thing it may ever land on.
+func (p *Provider) seedWorkspace(ctx context.Context, c model.Container) error {
 	if c.SourceKind != model.SourceFolder {
-		// Checked before reading the configuration: a refusal that needs a
-		// cluster to produce it is a refusal that fails for the wrong reason
-		// when the cluster is unreachable.
-		return fmt.Errorf("container %s has no folder to sync from", c.Name)
+		// An assertion about the caller now rather than a refusal the operator
+		// can trigger. Checked before reading the configuration all the same: a
+		// complaint that needs a cluster to produce it is one that fails for
+		// the wrong reason when the cluster is unreachable.
+		return fmt.Errorf("container %s has no folder to seed from", c.Name)
 	}
 	dev, _, err := readConfiguration(ctx, c.Source, c.ConfigPath)
 	if err != nil {
