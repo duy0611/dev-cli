@@ -68,19 +68,20 @@ operator running an interactive login inside a container, and that would write a
 token onto the volume, where it would then persist. The design puts no secret
 there. A login still can.
 
-## One volume, four variables
+## One volume, five variables
 
-The volume mounts at `/var/dev-state`, and four documented environment variables
+The volume mounts at `/var/dev-state`, and five documented environment variables
 point tools into it:
 
-| variable | target |
-|---|---|
-| `CLAUDE_CONFIG_DIR` | `/var/dev-state/claude` |
-| `CODEX_HOME` | `/var/dev-state/codex` |
-| `HERMES_HOME` | `/var/dev-state/hermes` |
-| `GIT_CONFIG_GLOBAL` | `/var/dev-state/gitconfig` |
+| variable | target | moves |
+|---|---|---|
+| `CLAUDE_CONFIG_DIR` | `/var/dev-state/claude` | everything, `.claude.json` included |
+| `CODEX_HOME` | `/var/dev-state/codex` | everything |
+| `HERMES_HOME` | `/var/dev-state/hermes` | everything |
+| `OPENCODE_CONFIG_DIR` | `/var/dev-state/opencode` | config only; `auth.json` stays put |
+| `GIT_CONFIG_GLOBAL` | `/var/dev-state/gitconfig` | the global config file |
 
-All four are set whenever the flag is on, whatever the container installs. An
+All five are set whenever the flag is on, whatever the container installs. An
 agent that is not present never reads its variable, so nothing has to know which
 agent a container has, and agents stay ordinary catalog tools. Adding one later
 is a row in that table.
@@ -103,20 +104,25 @@ directory that already exists does not replace it — it creates the link *insid
 it, silently, so `~/.claude` becomes `~/.claude/state` and the agent goes on
 using the unlinked parent. It needs `-T`, and it needs to run after every feature
 that might create those directories first, which the `claude-code` feature does.
-Three of the four agents have a documented variable that cannot fail this way.
+Every agent here has a documented variable that cannot fail this way.
 
-### Why opencode is not covered
+### What opencode does and does not carry
 
-opencode splits its state across four XDG directories — `~/.config/opencode`,
-`~/.local/share/opencode`, `~/.local/state/opencode` and `~/.cache/opencode`.
-Its consolidating variable, `OPENCODE_CONFIG_DIR`, appears in a GitHub issue and
-not in the documentation, and this repository does not build on a flag it has not
-checked against the real tool. Setting `XDG_CONFIG_HOME` and friends globally
-would relocate every XDG-aware program in the container, not just opencode.
+opencode is the one entry that moves config without moving everything.
+`OPENCODE_CONFIG_DIR` relocates the directory it searches for agents, commands,
+modes, plugins, skills and themes — which is what a rebuild loses, and what
+this feature is for. Its `auth.json` lives outside that directory, under
+`~/.local/share/opencode`, and is not carried.
 
-So `--persist-state` does nothing for opencode, and the documentation says so.
-Closing the gap later means verifying the variable against a real opencode and
-adding one row to the table above — not revisiting this design.
+That is the right outcome rather than a shortfall: a credential is exactly what
+this volume is not for. It does mean an opencode login does not survive a
+rebuild, where a Claude Code one would — the asymmetry is in the tools, not in
+this design.
+
+Setting `XDG_CONFIG_HOME` and friends instead would have caught all four of
+opencode's directories in one go, and was rejected: it relocates every
+XDG-aware program in the container, which is a far larger promise than a
+per-agent variable makes.
 
 ## A column, not just a document
 

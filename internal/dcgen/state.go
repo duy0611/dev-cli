@@ -24,15 +24,19 @@ const StateDir = "/var/dev-state"
 // keeps agents ordinary catalog tools rather than something the container has
 // to declare.
 //
-// opencode is missing on purpose: it splits state across four XDG directories
-// and its consolidating variable is documented in an issue rather than in its
-// documentation. Setting XDG_* globally would relocate every XDG-aware program
-// in the container, not just opencode.
+// Each variable moves one tool's own directory. Setting XDG_* instead would
+// relocate every XDG-aware program in the container, which is a much larger
+// promise than this makes.
 var stateEnv = map[string]string{
 	// Moves .claude.json as well as the directory, so one mount covers it.
 	"CLAUDE_CONFIG_DIR": StateDir + "/claude",
 	"CODEX_HOME":        StateDir + "/codex",
 	"HERMES_HOME":       StateDir + "/hermes",
+	// Config only, unlike the three above: this moves the directory opencode
+	// searches for agents, commands, modes, plugins, skills and themes, and
+	// opencode keeps its auth.json elsewhere. That suits the volume, which is
+	// not meant to hold a credential anyway.
+	"OPENCODE_CONFIG_DIR": StateDir + "/opencode",
 	// Not an agent, but the same problem: a `git config --global` run inside
 	// the container is lost with the container filesystem otherwise. Only the
 	// file moves; the host's identity still arrives as DEVCONTAINER_GIT_*.

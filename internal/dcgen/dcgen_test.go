@@ -279,7 +279,8 @@ func TestRenderWithStateNamesMountAndEnv(t *testing.T) {
     "CLAUDE_CONFIG_DIR": "/var/dev-state/claude",
     "CODEX_HOME": "/var/dev-state/codex",
     "GIT_CONFIG_GLOBAL": "/var/dev-state/gitconfig",
-    "HERMES_HOME": "/var/dev-state/hermes"
+    "HERMES_HOME": "/var/dev-state/hermes",
+    "OPENCODE_CONFIG_DIR": "/var/dev-state/opencode"
   },
   "image": "mcr.microsoft.com/devcontainers/base:1-ubuntu-24.04",
   "mounts": [

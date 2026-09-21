@@ -234,10 +234,11 @@ dev container create api --folder ~/code/api
 `--no-persist-state` opts out, and containers created before this existed stay
 as they were — `dev container list` shows which is which under STATE.
 
-It covers Claude Code, Codex and Hermes, each pointed at its own directory on
-the volume by the variable it documents for the purpose — `CLAUDE_CONFIG_DIR`,
-`CODEX_HOME`, `HERMES_HOME` — plus a global gitconfig at
-`GIT_CONFIG_GLOBAL`. Set any of those as a workspace setting and yours wins.
+It covers Claude Code, Codex, Hermes and opencode, each pointed at its own
+directory on the volume by the variable it documents for the purpose —
+`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `HERMES_HOME`, `OPENCODE_CONFIG_DIR` — plus
+a global gitconfig at `GIT_CONFIG_GLOBAL`. Set any of those as a workspace
+setting and yours wins.
 
 **Credentials do not go on the volume.** Agents read those from the workspace's
 settings, resolved on every command:
@@ -257,9 +258,11 @@ container is mounted on. To change it, `remove` and `create` again. The volume
 is removed with the container and survives everything else, including
 `rebuild`.
 
-Not covered: **opencode**, which splits its state across four XDG directories
-and has no documented variable to consolidate them. Its configuration is still
-lost on a rebuild.
+One asymmetry worth knowing: for **opencode**, `OPENCODE_CONFIG_DIR` carries its
+agents, commands, modes, plugins, skills and themes, but its `auth.json` lives
+elsewhere and is not on the volume — so an opencode login does not survive a
+rebuild, where a Claude Code one would. That is the tools differing, not `dev`
+treating them differently.
 
 On k8s all of this already worked — the pod's home directory lives on the PVC —
 and a third subPath there carries the same paths, so the two providers behave
@@ -349,9 +352,13 @@ persist its state, which means it predates the volume becoming the default, or
 it was created with `--no-persist-state`. `dev container list` says which under
 STATE. It is fixed at create, so turning it on means `remove` and `create`
 again; that destroys the container's work, so move anything you need off it
-first. For
-opencode the answer is different: it is not covered at all, and the reason is in
-[the walkthrough](#keep-an-agents-plugins-across-a-rebuild).
+first.
+
+**My opencode login is gone after a rebuild, but my plugins are not** —
+expected. `OPENCODE_CONFIG_DIR` moves opencode's configuration onto the volume;
+its
+`auth.json` sits outside that directory and stays in the container filesystem.
+Credentials are meant to come from workspace settings, not from the volume.
 
 **`no SSH agent on this host: SSH_AUTH_SOCK is not set`** — the workspace
 forwards the agent and there is nothing to forward. Start one and add a key:

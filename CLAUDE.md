@@ -173,11 +173,12 @@ provider bind-mounts the folder, so a no-op `Sync` there would be a lie.
 
 10. **A container's agent state is a column, not a document field.** Every new
     container mounts a volume at `/var/dev-state` unless `--no-persist-state`,
-    with `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `HERMES_HOME` and
-    `GIT_CONFIG_GLOBAL` pointing into it, so plugins and settings outlive a
-    rebuild. The column defaults to 0 while `create` defaults it to 1: the
-    migration's default speaks for rows that already exist, and those have no
-    volume to mount.
+    with `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `HERMES_HOME`,
+    `OPENCODE_CONFIG_DIR` and `GIT_CONFIG_GLOBAL` pointing into it, so plugins
+    and settings outlive a rebuild. Each moves one tool's own directory; `XDG_*`
+    would have moved every XDG-aware program in the container. The column
+    defaults to 0 while `create` defaults it to 1: the migration's default
+    speaks for rows that already exist, and those have no volume to mount.
 
     It lives on `containers` because `rewriteGeneratedTools` re-renders the
     whole generated document from the tool list and `SourceKind` — a mount
