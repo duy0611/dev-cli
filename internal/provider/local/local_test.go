@@ -558,3 +558,12 @@ func TestUpDoesNotClaimTheStateDirForAGeneratedContainer(t *testing.T) {
 		t.Errorf("devcontainer was called %d times, want only up: %v", len(calls), calls)
 	}
 }
+
+// The overlay is local-only. k8s builds its own pod spec and ignores a
+// document's mounts, so it must not be handed a merged document — and a
+// project file that does not parse must not block a k8s command.
+func TestLocalProviderOverridesConfig(t *testing.T) {
+	if _, ok := any(&Provider{}).(provider.ConfigOverrider); !ok {
+		t.Error("local provider does not implement provider.ConfigOverrider")
+	}
+}

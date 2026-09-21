@@ -36,6 +36,10 @@ func init() {
 	})
 }
 
+// OverridesConfig marks this provider as one that takes a merged
+// devcontainer.json. See provider.ConfigOverrider.
+func (p *Provider) OverridesConfig() {}
+
 // Up creates or starts the container. The devcontainer CLI treats this as one
 // operation, so there is no separate create.
 func (p *Provider) Up(ctx context.Context, c model.Container, env []provider.EnvVar) error {
