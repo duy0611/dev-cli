@@ -68,8 +68,9 @@ func VolumeName(workspace, container string) string {
 // configuration on.
 //
 // Here for the same reason as VolumeName: the name is written into the
-// generated document at create, passed as --mount at up, and handed to `docker
-// volume rm` at remove.
+// generated document at create, into the merged override materialise builds
+// for a project-owned container at up, and handed to `docker volume rm` at
+// remove.
 //
 // The workspace is part of the name because container names are unique only
 // within a workspace, so dev-<container>-state would be one volume shared by

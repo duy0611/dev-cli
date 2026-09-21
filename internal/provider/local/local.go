@@ -66,24 +66,24 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 	if c.ConfigPath != "" {
 		args = append(args, "--config", c.ConfigPath)
 	}
+	// The project's own document with dev's state mount merged into it, built
+	// per invocation by materialise. --override-config *replaces* the document
+	// rather than deep-merging it, which is why the merge happens in dev rather
+	// than being left to the CLI.
+	//
+	// Passed here and in execArgs both: unlike --mount, which existed only on
+	// up, this flag exists on both commands — so the two paths finally describe
+	// the same container rather than one of them quietly omitting the volume.
+	// --config stays alongside; both are accepted, and it is what keeps a
+	// relative "dockerfile" anchored to the project.
+	if c.OverrideConfigPath != "" {
+		args = append(args, "--override-config", c.OverrideConfigPath)
+	}
 	if recreate {
 		args = append(args, "--remove-existing-container")
 	}
 	if noCache {
 		args = append(args, "--build-no-cache")
-	}
-	// Only for a project-owned container: a generated document already names
-	// this volume in its own "mounts", and docker rejects the whole run with
-	// "duplicate mount destination" if it arrives twice. The flag exists for
-	// the container dev has no document for, since dev must not write into a
-	// project's folder (invariant 9).
-	//
-	// On up and never on exec: the devcontainer CLI accepts --mount only here,
-	// and an unknown flag would be a usage error on every command run inside
-	// the container.
-	if c.PersistState && c.GeneratedConfig == "" {
-		args = append(args, "--mount", fmt.Sprintf("type=volume,source=%s,target=%s",
-			StateVolumeName(c.WorkspaceName, c.Name), dcgen.StateDir))
 	}
 	args = append(args, remoteEnvArgs(env)...)
 
@@ -103,7 +103,9 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 //
 // Docker creates a named volume owned by root and, unlike a bind mount, it gets
 // no UID remapping from the devcontainer CLI — so the remote user's first write
-// there fails with permission denied. A generated configuration does this in its
+// there fails with permission denied, whether the volume arrived through a
+// generated document or through the merged override materialise built for a
+// project-owned one. A generated configuration does this in its own
 // postCreateCommand; a container whose project ships its own configuration has
 // no hook dev may write into (invariant 9), so it is done here instead.
 //
@@ -166,6 +168,12 @@ func (p *Provider) execArgs(c model.Container, command []string, env ...provider
 	// project-owned one this is the path dcconfig already resolved.
 	if c.ConfigPath != "" {
 		args = append(args, "--config", c.ConfigPath)
+	}
+	// The same merged document up was given. A container started with the state
+	// volume and exec'd without it would see an empty /var/dev-state, with
+	// nothing reporting an error.
+	if c.OverrideConfigPath != "" {
+		args = append(args, "--override-config", c.OverrideConfigPath)
 	}
 	args = append(args, remoteEnvArgs(env)...)
 	return append(args, command...)

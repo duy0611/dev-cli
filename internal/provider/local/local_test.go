@@ -444,28 +444,80 @@ func stateContainer() model.Container {
 	return c
 }
 
-// The mount goes on up, where the CLI accepts it. A project that ships its own
-// devcontainer.json cannot be given a "mounts" entry — dev does not write into
-// a project folder — so this is the only way such a container gets the volume.
-func TestUpMountsTheStateVolumeForAProjectOwnedContainer(t *testing.T) {
+// overrideContainer is a project-owned, state-persisting container whose merged
+// configuration materialise has already written.
+func overrideContainer() model.Container {
+	c := stateContainer()
+	c.ConfigPath = "/project/.devcontainer/devcontainer.json"
+	c.OverrideConfigPath = "/tmp/dev-override-x/devcontainer.json"
+	return c
+}
+
+// The merged document reaches the CLI, and --config still names the project's
+// own file: both are accepted together, and --config is what keeps a relative
+// "dockerfile" anchored to the project rather than to the temporary directory.
+func TestUpPassesTheOverrideConfig(t *testing.T) {
 	f := newFakePath(t)
 	f.install(t, devcontainerBin, "", 0)
 
-	if err := (&Provider{}).Up(context.Background(), stateContainer(), nil); err != nil {
+	c := overrideContainer()
+	if err := (&Provider{}).Up(context.Background(), c, nil); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
-	want := []string{"--mount", "type=volume,source=dev-ws-demo-state,target=/var/dev-state"}
-	if !contains(f.argv(t, devcontainerBin), want) {
-		t.Errorf("argv %v is missing %v", f.argv(t, devcontainerBin), want)
+
+	argv := f.argv(t, devcontainerBin)
+	if !contains(argv, []string{"--override-config", c.OverrideConfigPath}) {
+		t.Errorf("argv %v is missing the override config", argv)
+	}
+	if !contains(argv, []string{"--config", c.ConfigPath}) {
+		t.Errorf("argv %v dropped the project's own --config", argv)
 	}
 }
 
-// A generated document already names the volume in its own "mounts", so adding
-// the flag as well makes docker reject the entire run with "duplicate mount
-// destination" — the container never starts. The unit tests missed this at
-// first because they only covered the project-owned container, where the flag
-// is right; the smoke test caught it against a real engine.
-func TestUpDoesNotMountStateForAGeneratedContainer(t *testing.T) {
+// up and exec must carry the *same* merged document. This is the same shape of
+// mistake as the id labels: two commands that disagree reach two different
+// containers, or one reaches a container with no state volume, and nothing
+// reports an error. --override-config exists on both, unlike --mount, which is
+// what lets the two paths finally agree.
+func TestUpAndExecAgreeOnTheOverrideConfig(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, devcontainerBin, "", 0)
+
+	c := overrideContainer()
+	if err := (&Provider{}).Up(context.Background(), c, nil); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	upArgs := f.argv(t, devcontainerBin)
+	execArgs := (&Provider{}).execArgs(c, []string{"true"})
+
+	want := []string{"--override-config", c.OverrideConfigPath}
+	if !contains(upArgs, want) {
+		t.Errorf("up argv %v is missing %v", upArgs, want)
+	}
+	if !contains(execArgs, want) {
+		t.Errorf("exec argv %v is missing %v", execArgs, want)
+	}
+}
+
+// --mount is gone. It existed on up and not on exec, which is the asymmetry the
+// override removes; leaving it would also make docker refuse the run with
+// "duplicate mount destination" now that the merged document names the volume.
+func TestUpNeverPassesMount(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, devcontainerBin, "", 0)
+
+	if err := (&Provider{}).Up(context.Background(), overrideContainer(), nil); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if contains(f.argv(t, devcontainerBin), []string{"--mount"}) {
+		t.Errorf("up still passes --mount: %v", f.argv(t, devcontainerBin))
+	}
+}
+
+// A generated document already names the volume in its own mounts, so
+// materialise builds no override for it and neither flag appears.
+func TestUpPassesNoOverrideForAGeneratedContainer(t *testing.T) {
 	f := newFakePath(t)
 	f.install(t, devcontainerBin, "", 0)
 
@@ -474,31 +526,31 @@ func TestUpDoesNotMountStateForAGeneratedContainer(t *testing.T) {
 	if err := (&Provider{}).Up(context.Background(), c, nil); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
-	if contains(f.argv(t, devcontainerBin), []string{"--mount"}) {
-		t.Errorf("up passed --mount for a container whose document already mounts the volume: %v",
-			f.argv(t, devcontainerBin))
+
+	argv := f.argv(t, devcontainerBin)
+	for _, flag := range []string{"--override-config", "--mount"} {
+		if contains(argv, []string{flag}) {
+			t.Errorf("up passed %s for a generated container: %v", flag, argv)
+		}
 	}
 }
 
-func TestUpDoesNotMountStateWhenOff(t *testing.T) {
+// Nothing to merge, nothing to pass.
+func TestUpPassesNoOverrideWhenStateIsOff(t *testing.T) {
 	f := newFakePath(t)
 	f.install(t, devcontainerBin, "", 0)
 
 	if err := (&Provider{}).Up(context.Background(), testContainer(), nil); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
-	if contains(f.argv(t, devcontainerBin), []string{"--mount"}) {
-		t.Errorf("Up mounted a state volume for a container that does not persist one: %v",
+	if contains(f.argv(t, devcontainerBin), []string{"--override-config"}) {
+		t.Errorf("Up passed an override for a container that persists no state: %v",
 			f.argv(t, devcontainerBin))
 	}
 }
 
-// The devcontainer CLI accepts --mount on up and not on exec, so carrying it
-// into execArgs would turn every command run inside the container into a flag
-// error. This is the same shape of mistake as the id-labels, and as invisible
-// until something breaks.
 func TestExecNeverPassesMount(t *testing.T) {
-	argv := (&Provider{}).execArgs(stateContainer(), []string{"true"})
+	argv := (&Provider{}).execArgs(overrideContainer(), []string{"true"})
 	if contains(argv, []string{"--mount"}) {
 		t.Errorf("exec argv carries --mount: %v", argv)
 	}
