@@ -223,7 +223,7 @@ func TestConfigShowOnAProjectOwnedContainer(t *testing.T) {
 func TestMaterialiseWritesAndCleansUp(t *testing.T) {
 	c := model.Container{Name: "demo", GeneratedConfig: "{\"name\":\"demo\"}\n"}
 
-	got, cleanup, err := materialise(c)
+	got, cleanup, err := materialise(c, true)
 	if err != nil {
 		t.Fatalf("materialise: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestMaterialiseWritesAndCleansUp(t *testing.T) {
 func TestMaterialiseLeavesAProjectOwnedContainerAlone(t *testing.T) {
 	c := model.Container{Name: "demo", ConfigPath: "/proj/.devcontainer/devcontainer.json"}
 
-	got, cleanup, err := materialise(c)
+	got, cleanup, err := materialise(c, true)
 	if err != nil {
 		t.Fatalf("materialise: %v", err)
 	}

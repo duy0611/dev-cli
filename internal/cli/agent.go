@@ -55,6 +55,9 @@ func runContainerStartAgent(ctx context.Context, a *app, workspace, name, agentI
 		return err
 	}
 	defer t.release()
+	if err := t.requireOverride(); err != nil {
+		return err
+	}
 
 	environ, err := a.containerEnv(ctx, t.container)
 	if err != nil {

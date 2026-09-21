@@ -376,8 +376,11 @@ func (a *app) start(ctx context.Context, workspace string, c model.Container) er
 	}
 
 	// The create path builds its own container value and never goes through
-	// resolve, so a generated configuration has to become a file here too.
-	c, cleanup, err := materialise(c)
+	// resolve, so a generated configuration has to become a file here too — and
+	// the merged one has to be built here too. Fatal rather than deferred: this
+	// function exists to start the container, and starting it without the
+	// merged document would leave the state volume silently unmounted.
+	c, cleanup, err := materialise(c, overridesConfig(p))
 	if err != nil {
 		return err
 	}
@@ -488,6 +491,9 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 				return err
 			}
 			defer t.release()
+			if err := t.requireOverride(); err != nil {
+				return err
+			}
 			environ, err := a.containerEnv(cmd.Context(), t.container)
 			if err != nil {
 				return err
@@ -616,6 +622,9 @@ func runContainerShell(ctx context.Context, a *app, workspace, name string) erro
 		return err
 	}
 	defer t.release()
+	if err := t.requireOverride(); err != nil {
+		return err
+	}
 	if err := a.requireRunning(ctx, t); err != nil {
 		return err
 	}
@@ -694,6 +703,9 @@ func runContainerExec(ctx context.Context, a *app, workspace, name string, comma
 		return err
 	}
 	defer t.release()
+	if err := t.requireOverride(); err != nil {
+		return err
+	}
 	if err := a.requireRunning(ctx, t); err != nil {
 		return err
 	}
