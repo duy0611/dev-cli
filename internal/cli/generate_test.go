@@ -792,3 +792,33 @@ func TestCreateSucceedsForAComposeProject(t *testing.T) {
 		t.Fatalf("create refused a compose project: %v", err)
 	}
 }
+
+// The guarantee the deferred parse error exists for: a project file dev cannot
+// parse must not strand its container in the engine.
+//
+// materialise runs for every container command, but stop, remove, logs and
+// status find their container through docker label filters and never read a
+// config at all. Failing those too would leave a syntax error in a project's
+// devcontainer.json holding the container hostage, with dev refusing to clean
+// up after itself and the operator sent to docker directly.
+//
+// The mechanism is asserted in resolve_test.go; this asserts the outcome, and
+// it is what fails loudly if a future command forgets which side of the
+// deferred/fatal line it belongs on.
+func TestRemoveSucceedsWithAnUnparseableProjectFile(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	folder := t.TempDir()
+	writeProjectConfigIn(t, folder, `{"name":}`)
+
+	if err := runContainerCreate(t.Context(), a, "", "c1", folder,
+		createOpts{noStart: true}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// --force, because make test runs with no engine on PATH: what is being
+	// asserted is that the deferred parse error never reaches this command,
+	// not what docker would have said.
+	if err := runContainerRemove(t.Context(), a, "", "c1", true); err != nil {
+		t.Fatalf("a broken project file stranded the container: %v", err)
+	}
+}
