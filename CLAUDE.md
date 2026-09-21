@@ -205,12 +205,12 @@ cannot implement it.
     create for the same reason the workspace mount is.
 
     Two mechanisms, one outcome, and never both at once: a generated document
-    carries `mounts` and `containerEnv`, as before. A project-owned container
-    gets the volume from a merged document instead: `dev` reads the project's
+    carries `mounts` and `containerEnv`. A project-owned container gets the
+    volume from a merged document instead: `dev` reads the project's
     `devcontainer.json`, replaces any `mounts` entry targeting `/var/dev-state`
     with its own, writes the result to a temporary file and passes
-    `--override-config` on both `up` and `exec` — the up/exec asymmetry that
-    used to live here is gone, because the flag exists on both commands.
+    `--override-config` on both `up` and `exec`. One flag on both commands, so
+    there is no asymmetry for a later `exec` to fall through.
     `--override-config` replaces rather than deep-merges, which is why `dev`
     does the merge itself and why every field it does not touch has to
     round-trip untouched. The merge is per invocation and never stored, for
