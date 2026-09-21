@@ -20,6 +20,8 @@ func newProviderCmd(a *app) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "provider",
 		Short: "Configure where devcontainers run",
+		Args:  noArgs(),
+		RunE:  groupRunE,
 	}
 	cmd.AddCommand(newProviderConfigureCmd(a), newProviderListCmd(a), newProviderRemoveCmd(a))
 	return cmd

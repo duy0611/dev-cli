@@ -257,3 +257,28 @@ func TestForwardAgentUnsupportedProvider(t *testing.T) {
 		}
 	}
 }
+
+// GIT_CONFIG_GLOBAL is set by every container that persists its state, and it
+// shares the GIT_CONFIG_ prefix with the numbered keys that drive git's
+// environment-based configuration.
+//
+// Matching that prefix would read it as "the operator configures git
+// themselves" and skip signing for all of them, warning about a variable they
+// never set. The two compose: GIT_CONFIG_GLOBAL names the file, the numbered
+// keys override what is in it.
+func TestStateGitConfigDoesNotSuppressSigning(t *testing.T) {
+	environ := []provider.EnvVar{{Key: "GIT_CONFIG_GLOBAL", Value: "/var/dev-state/gitconfig"}}
+	if hasGitConfigEnv(environ) {
+		t.Error("GIT_CONFIG_GLOBAL was read as the operator configuring git themselves")
+	}
+}
+
+// The keys that do mean it. Both would arrive as --remote-env and the last
+// would win, so adding ours would silently drop theirs.
+func TestOperatorGitConfigSuppressesSigning(t *testing.T) {
+	for _, key := range []string{"GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"} {
+		if !hasGitConfigEnv([]provider.EnvVar{{Key: key, Value: "x"}}) {
+			t.Errorf("%s was not read as the operator configuring git themselves", key)
+		}
+	}
+}

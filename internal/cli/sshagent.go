@@ -83,9 +83,17 @@ func (a *app) forwardAgent(ctx context.Context, t *target, environ []provider.En
 
 // hasGitConfigEnv reports whether the environment already drives git's
 // environment-based configuration.
+//
+// The three numbered keys specifically, not the GIT_CONFIG_ prefix:
+// GIT_CONFIG_GLOBAL shares that prefix and is set by every container that
+// persists its state, so matching the prefix would turn commit signing off for
+// all of them and blame a variable the operator never set. The two compose —
+// GIT_CONFIG_GLOBAL names the file, the numbered keys override what is in it.
 func hasGitConfigEnv(environ []provider.EnvVar) bool {
 	for _, e := range environ {
-		if strings.HasPrefix(e.Key, "GIT_CONFIG_") {
+		if e.Key == "GIT_CONFIG_COUNT" ||
+			strings.HasPrefix(e.Key, "GIT_CONFIG_KEY_") ||
+			strings.HasPrefix(e.Key, "GIT_CONFIG_VALUE_") {
 			return true
 		}
 	}

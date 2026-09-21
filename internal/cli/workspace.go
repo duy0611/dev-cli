@@ -16,6 +16,8 @@ func newWorkspaceCmd(a *app) *cobra.Command {
 		Use:     "workspace",
 		Aliases: []string{"ws"},
 		Short:   "Group containers and the settings they launch with",
+		Args:    noArgs(),
+		RunE:    groupRunE,
 	}
 	cmd.AddCommand(
 		newWorkspaceInitCmd(a),

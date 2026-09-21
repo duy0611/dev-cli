@@ -299,3 +299,76 @@ func TestSmokeFolderless(t *testing.T) {
 		t.Errorf("remove left the volume behind: %v", out)
 	}
 }
+
+// The whole point of the feature: an agent's configuration outlives a rebuild.
+//
+// A rebuild is what makes this worth testing rather than a stop and start.
+// `up --remove-existing-container` throws the container filesystem away, which
+// is exactly where ~/.claude used to live, so a mount that is not reapplied on
+// every up looks fine until the first rebuild.
+func TestSmokePersistState(t *testing.T) {
+	requireBinaries(t, "devcontainer", "docker")
+
+	state := t.TempDir()
+	t.Setenv("DEV_STATE", state)
+
+	bin := buildBinary(t)
+	dev := func(args ...string) string {
+		t.Helper()
+		return run(t, bin, args...)
+	}
+
+	const (
+		name = "dev-smoke-state"
+		ws   = "dev-smoke-state-ws"
+	)
+	stateVolume := "dev-" + ws + "-" + name + "-state"
+	t.Cleanup(func() {
+		_ = exec.Command(bin, "container", "remove", name, "--force").Run()
+		_ = exec.Command("docker", "volume", "rm", "--force", "dev-"+ws+"-"+name).Run()
+		_ = exec.Command("docker", "volume", "rm", "--force", stateVolume).Run()
+	})
+
+	dev("provider", "configure", "dev-smoke-state-local", "--kind", "local")
+	dev("workspace", "init", ws, "--provider", "dev-smoke-state-local")
+
+	t.Log("creating a container; persisting the agents' state is the default")
+	dev("container", "create", name, "--no-folder")
+
+	// Written through the variable rather than to a hardcoded path: if
+	// CLAUDE_CONFIG_DIR did not arrive, this writes somewhere else and the read
+	// after the rebuild fails, which is the failure worth catching.
+	dev("container", "exec", name, "--", "sh", "-c",
+		`mkdir -p "$CLAUDE_CONFIG_DIR" && echo plugin > "$CLAUDE_CONFIG_DIR/marker"`)
+	dev("container", "exec", name, "--", "git", "config", "--global", "alias.st", "status")
+
+	t.Log("rebuilding; this is what used to lose the configuration")
+	dev("container", "rebuild", name)
+
+	got := strings.TrimSpace(dev("container", "exec", name, "--", "sh", "-c",
+		`cat "$CLAUDE_CONFIG_DIR/marker"`))
+	if got != "plugin" {
+		t.Errorf("the agent's configuration did not survive a rebuild: marker = %q, want %q",
+			got, "plugin")
+	}
+
+	alias := strings.TrimSpace(dev("container", "exec", name, "--",
+		"git", "config", "--global", "alias.st"))
+	if alias != "status" {
+		t.Errorf("the global gitconfig did not survive a rebuild: alias.st = %q, want %q",
+			alias, "status")
+	}
+
+	// Writable by the remote user, not root: a volume arrives root-owned and
+	// nothing remaps it, so without the chown the very first write above fails.
+	owner := strings.TrimSpace(dev("container", "exec", name, "--", "sh", "-c",
+		`[ -w "$CLAUDE_CONFIG_DIR" ] && echo writable`))
+	if owner != "writable" {
+		t.Errorf("the state directory is not writable by the remote user: %q", owner)
+	}
+
+	dev("container", "remove", name)
+	if out := dockerVolumes(t, stateVolume); len(out) != 0 {
+		t.Errorf("remove left the state volume behind: %v", out)
+	}
+}

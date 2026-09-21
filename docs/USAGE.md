@@ -11,6 +11,8 @@ command. For what `dev` *is* and how it fits together, read the
   - [A project that ships no devcontainer config](#a-project-that-ships-no-devcontainer-config)
   - [Change what a generated container installs](#change-what-a-generated-container-installs)
   - [Add a secret and rotate it](#add-a-secret-and-rotate-it)
+  - [Push to git from inside a container](#push-to-git-from-inside-a-container)
+  - [Keep an agent's plugins across a rebuild](#keep-an-agents-plugins-across-a-rebuild)
   - [Run a workspace in Kubernetes](#run-a-workspace-in-kubernetes)
   - [Clean up](#clean-up)
 - [Troubleshooting](#troubleshooting)
@@ -42,13 +44,13 @@ The common case: a repository that already has a `.devcontainer/` directory.
 
 ```sh
 dev container create api --folder ~/code/api
-dev container agent api --agent claude
+dev container start-agent api --agent claude
 ```
 
 `create` reads the project's own configuration and never edits it. The first
 run builds the image, which can take minutes; later starts are seconds.
 
-`agent` starts the container if it is stopped, then checks the agent is
+`start-agent` starts the container if it is stopped, then checks the agent is
 installed in the image. If it is not, `dev` says so and points at the project's
 `devcontainer.json` — installing an agent means adding it there, which this tool
 will not do to someone else's repository.
@@ -56,7 +58,7 @@ will not do to someone else's repository.
 Anything after `--` goes to the agent:
 
 ```sh
-dev container agent api --agent claude -- --help
+dev container start-agent api --agent claude -- --help
 ```
 
 To get a shell instead:
@@ -211,6 +213,58 @@ Four things to know:
 Both providers support this. On k8s the relay rides `kubectl exec` rather than a
 local socket, so it works the same way from a pod.
 
+### Keep an agent's plugins across a rebuild
+
+A rebuild replaces the container filesystem, and on the local provider that is
+where an agent keeps its configuration. Plugins, marketplaces, MCP servers and
+anything you set with `git config --global` go with it:
+
+```
+❯ dev container exec api -- claude plugin marketplace list
+No marketplaces configured.
+```
+
+New containers put that configuration on a volume instead, so there is nothing
+to turn on:
+
+```sh
+dev container create api --folder ~/code/api
+```
+
+`--no-persist-state` opts out, and containers created before this existed stay
+as they were — `dev container list` shows which is which under STATE.
+
+It covers Claude Code, Codex and Hermes, each pointed at its own directory on
+the volume by the variable it documents for the purpose — `CLAUDE_CONFIG_DIR`,
+`CODEX_HOME`, `HERMES_HOME` — plus a global gitconfig at
+`GIT_CONFIG_GLOBAL`. Set any of those as a workspace setting and yours wins.
+
+**Credentials do not go on the volume.** Agents read those from the workspace's
+settings, resolved on every command:
+
+```sh
+dev workspace set ANTHROPIC_API_KEY keychain:anthropic
+```
+
+That is deliberate: a container runs programs that execute code on their own, so
+nothing worth stealing should rest in one. The volume holds configuration. If
+you log in interactively inside the container instead, the token that login
+writes *will* persist there — that is your call to make, not something `dev`
+does for you.
+
+It is fixed at create, because a rebuild must not be able to change what a
+container is mounted on. To change it, `remove` and `create` again. The volume
+is removed with the container and survives everything else, including
+`rebuild`.
+
+Not covered: **opencode**, which splits its state across four XDG directories
+and has no documented variable to consolidate them. Its configuration is still
+lost on a rebuild.
+
+On k8s all of this already worked — the pod's home directory lives on the PVC —
+and a third subPath there carries the same paths, so the two providers behave
+identically.
+
 ### Run a workspace in Kubernetes
 
 > The k8s provider is **experimental**. It works, but its configuration and
@@ -289,6 +343,15 @@ in the namespace and name it with `--image-pull-secret`.
 not happen: the generated configuration chowns the volume to the remote user
 once, at create. If you see it, the `postCreateCommand` did not run — check
 `dev container logs NAME`.
+
+**My agent's plugins are gone after a rebuild** — the container does not
+persist its state, which means it predates the volume becoming the default, or
+it was created with `--no-persist-state`. `dev container list` says which under
+STATE. It is fixed at create, so turning it on means `remove` and `create`
+again; that destroys the container's work, so move anything you need off it
+first. For
+opencode the answer is different: it is not covered at all, and the reason is in
+[the walkthrough](#keep-an-agents-plugins-across-a-rebuild).
 
 **`no SSH agent on this host: SSH_AUTH_SOCK is not set`** — the workspace
 forwards the agent and there is nothing to forward. Start one and add a key:
@@ -406,8 +469,8 @@ Removing the active workspace leaves none active rather than a dangling pointer.
 ### container
 
 ```
-dev container create NAME --folder PATH [--generate] [--tools LIST] [--no-start]
-dev container create NAME --no-folder [--tools LIST] [--no-start]
+dev container create NAME --folder PATH [--generate] [--tools LIST] [--no-persist-state] [--no-start]
+dev container create NAME --no-folder [--tools LIST] [--no-persist-state] [--no-start]
 dev container list [--all]
 dev container start NAME
 dev container stop NAME
@@ -416,7 +479,7 @@ dev container rebuild NAME [--no-cache] [--tools LIST]
 dev container logs NAME [-f]
 dev container shell NAME
 dev container exec NAME -- CMD [ARGS...]
-dev container agent NAME [--agent claude|codex|hermes|opencode] [-- ARGS...]
+dev container start-agent NAME [--agent claude|codex|hermes|opencode] [-- ARGS...]
 dev container sync NAME
 dev container tools
 dev container config show NAME
@@ -431,6 +494,7 @@ neither.
 | `--no-folder` | no host directory at all; work lives in a volume `dev` owns |
 | `--generate` | render a base Ubuntu configuration when the folder ships none |
 | `--tools` | comma-separated catalog tools for a generated container |
+| `--no-persist-state` | do not give the container a volume for its agents' configuration |
 | `--no-start` | record the container without starting it |
 
 The folder is resolved to a physical path before it is stored or mounted. On
@@ -438,9 +502,20 @@ macOS the engine runs in a VM and resolves paths inside it, where `/tmp` is a
 real directory rather than a symlink to `/private/tmp` — an unresolved path
 mounts an empty directory, silently.
 
+A container keeps its agents' configuration on a volume unless
+`--no-persist-state` says otherwise. Either way it is fixed at create: a rebuild
+must not be able to change what a container is mounted on, so changing your mind
+is `remove` then `create` — which is explicit about destroying what was on the
+volume.
+
+Containers created before this existed keep their old behaviour. The volume they
+never had is not conjured up by an upgrade; `dev container list` shows them as
+`off`.
+
 **`list`** reads live status from the engine every time; a stored copy would be
 wrong the moment anything happened outside `dev`. A `?` means the engine could
-not be reached. The SOURCE column is `-` for a folderless container.
+not be reached. The SOURCE column is `-` for a folderless container, and STATE
+says whether its agents' configuration is on a volume.
 
 **`start`** creates the container if the engine has none, which is what makes
 `create --no-start` followed by `start` work.
@@ -462,8 +537,8 @@ A rebuild keeps the volume on both providers. To start from an empty workspace,
 **`exec`** needs the `--`; everything after it belongs to the command being run,
 not to `dev`.
 
-**`agent`** defaults to `claude`. The agent must already be installed in the
-image.
+**`start-agent`** defaults to `--agent claude`. The agent must already be
+installed in the image.
 
 **`sync`** exists only for providers whose container holds a copy of your files,
 so it is k8s-only in practice. On a local container it exits 2 saying the folder

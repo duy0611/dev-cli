@@ -66,6 +66,10 @@ var catalog = []Tool{
 		Feature: "ghcr.io/devcontainers/features/aws-cli:1"},
 	{ID: "claude-code", Summary: "Claude Code", Official: true,
 		Feature: "ghcr.io/anthropics/devcontainer-features/claude-code:1"},
+	// No official feature exists for Codex, so this is a community one; it takes
+	// no options and pins nothing, installing whatever is current.
+	{ID: "codex", Summary: "Codex CLI",
+		Feature: "ghcr.io/jsburckhardt/devcontainer-features/codex:1"},
 	{ID: "gcloud", Summary: "Google Cloud CLI",
 		Feature: "ghcr.io/dhoeric/features/google-cloud-cli:1"},
 	{ID: "gh", Summary: "GitHub CLI", Official: true,

@@ -63,3 +63,17 @@ func dockerFilterArgs(c model.Container) []string {
 func VolumeName(workspace, container string) string {
 	return fmt.Sprintf("dev-%s-%s", workspace, container)
 }
+
+// StateVolumeName is the docker volume a container keeps its agents'
+// configuration on.
+//
+// Here for the same reason as VolumeName: the name is written into the
+// generated document at create, passed as --mount at up, and handed to `docker
+// volume rm` at remove.
+//
+// The workspace is part of the name because container names are unique only
+// within a workspace, so dev-<container>-state would be one volume shared by
+// every workspace that happened to use the name.
+func StateVolumeName(workspace, container string) string {
+	return fmt.Sprintf("dev-%s-%s-state", workspace, container)
+}

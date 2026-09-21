@@ -6,6 +6,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/duy0611/dev-cli/internal/dcgen"
 	"github.com/duy0611/dev-cli/internal/model"
 	"github.com/duy0611/dev-cli/internal/provider"
 )
@@ -27,10 +28,16 @@ const (
 // Home has to persist or "postCreate runs once" is a lie: scaling to 0 and back
 // gives a fresh container filesystem, so a postCreate that installed something
 // into ~/.local or wrote ~/.gitconfig would be silently undone by every stop.
+//
+// A third subPath carries the agents' configuration when the container asks for
+// it. On the same claim rather than a claim of its own: it is deleted with the
+// container either way, and a second ReadWriteOnce claim would be a second thing
+// to schedule around for no gain.
 const (
 	volumeName        = "workspace"
 	subPathWorkspace  = "workspace"
 	subPathHome       = "home"
+	subPathState      = "state"
 	containerNameMain = "dev"
 )
 
@@ -49,6 +56,25 @@ func (d DevConfig) HomeDir() string {
 	default:
 		return "/home/" + d.RemoteUser
 	}
+}
+
+// mounts is what the pod mounts off the claim.
+//
+// Only whether the container persists state is read here, never the volume name
+// the generated document carries: that names a docker volume, which means
+// nothing to a cluster. The same asymmetry as workspaceMount, which this
+// provider also ignores.
+func mounts(in manifestInput) []volumeMount {
+	out := []volumeMount{
+		{Name: volumeName, MountPath: in.Dev.WorkspaceFolder, SubPath: subPathWorkspace},
+		{Name: volumeName, MountPath: in.Dev.HomeDir(), SubPath: subPathHome},
+	}
+	if in.Container.PersistState {
+		out = append(out, volumeMount{
+			Name: volumeName, MountPath: dcgen.StateDir, SubPath: subPathState,
+		})
+	}
+	return out
 }
 
 // manifestInput is everything the objects are built from.
@@ -280,12 +306,9 @@ func buildDeployment(in manifestInput) deployment {
 						// would not be interrupted.
 						Command: []string{"sh", "-c",
 							"trap 'exit 0' TERM INT; while :; do sleep 3600 & wait $!; done"},
-						WorkingDir: in.Dev.WorkspaceFolder,
-						EnvFrom:    []envFromSrc{{SecretRef: localObjectRef{Name: secretName(in.Container)}}},
-						VolumeMounts: []volumeMount{
-							{Name: volumeName, MountPath: in.Dev.WorkspaceFolder, SubPath: subPathWorkspace},
-							{Name: volumeName, MountPath: in.Dev.HomeDir(), SubPath: subPathHome},
-						},
+						WorkingDir:   in.Dev.WorkspaceFolder,
+						EnvFrom:      []envFromSrc{{SecretRef: localObjectRef{Name: secretName(in.Container)}}},
+						VolumeMounts: mounts(in),
 					}},
 					Volumes: []volume{{
 						Name:                  volumeName,
@@ -313,11 +336,17 @@ func buildManifest(in manifestInput) ([]byte, error) {
 	if in.Dev.WorkspaceFolder == "" {
 		return nil, fmt.Errorf("no workspaceFolder for container %s", in.Container.Name)
 	}
-	// A home directory nested inside the workspace would mount one subPath over
-	// the other, and which one wins is not something to leave to chance.
-	if within(in.Dev.HomeDir(), in.Dev.WorkspaceFolder) || within(in.Dev.WorkspaceFolder, in.Dev.HomeDir()) {
-		return nil, fmt.Errorf("workspaceFolder %s and home %s overlap",
-			in.Dev.WorkspaceFolder, in.Dev.HomeDir())
+	// One mount point nested inside another would mount one subPath over the
+	// other, and which one wins is not something to leave to chance. Checked
+	// over every pair rather than the one that used to exist, so the state
+	// mount cannot shadow the workspace or the home directory either.
+	paths := mounts(in)
+	for i, a := range paths {
+		for _, b := range paths[i+1:] {
+			if within(a.MountPath, b.MountPath) || within(b.MountPath, a.MountPath) {
+				return nil, fmt.Errorf("mount paths %s and %s overlap", a.MountPath, b.MountPath)
+			}
+		}
 	}
 
 	list := struct {

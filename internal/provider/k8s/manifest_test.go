@@ -327,3 +327,86 @@ func containerField(t *testing.T, objs map[string]map[string]any, field string) 
 	containers := podSpecOf(t, objs)["containers"].([]any)
 	return containers[0].(map[string]any)[field]
 }
+
+// mountPaths returns the deployment's mount points, in order.
+func mountPaths(t *testing.T, in manifestInput) []string {
+	t.Helper()
+
+	objs := decode(t, in)
+	raw, err := json.Marshal(objs["Deployment"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var d struct {
+		Spec struct {
+			Template struct {
+				Spec struct {
+					Containers []struct {
+						VolumeMounts []struct {
+							MountPath string `json:"mountPath"`
+							SubPath   string `json:"subPath"`
+						} `json:"volumeMounts"`
+					} `json:"containers"`
+				} `json:"spec"`
+			} `json:"template"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(raw, &d); err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, m := range d.Spec.Template.Spec.Containers[0].VolumeMounts {
+		out = append(out, m.MountPath+"@"+m.SubPath)
+	}
+	return out
+}
+
+// A third subPath on the same claim, so the agents' configuration survives a
+// scale to zero exactly as the home directory does.
+func TestStateGetsItsOwnSubPath(t *testing.T) {
+	in := testInput()
+	in.Container.PersistState = true
+
+	want := "/var/dev-state@state"
+	got := mountPaths(t, in)
+	var found bool
+	for _, m := range got {
+		if m == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("mounts = %v, want one at %s", got, want)
+	}
+	if len(got) != 3 {
+		t.Errorf("mounts = %v, want three", got)
+	}
+}
+
+// Without the column there is no third mount: an unused subPath would be a
+// directory on the claim that nothing writes to and nothing cleans up.
+func TestNoStateMountWhenOff(t *testing.T) {
+	got := mountPaths(t, testInput())
+	if len(got) != 2 {
+		t.Errorf("mounts = %v, want two", got)
+	}
+	for _, m := range got {
+		if strings.Contains(m, "state") {
+			t.Errorf("mounts = %v, want no state mount", got)
+		}
+	}
+}
+
+// The guard covers every pair, not just workspace against home: a state mount
+// nested in either would shadow it, and which subPath wins is not something to
+// leave to chance.
+func TestStateMountNestedInTheWorkspaceIsRefused(t *testing.T) {
+	in := testInput()
+	in.Container.PersistState = true
+	// The workspace moved to a parent of the state directory.
+	in.Dev.WorkspaceFolder = "/var"
+
+	if _, err := buildManifest(in); err == nil {
+		t.Error("buildManifest accepted a state mount inside the workspace")
+	}
+}

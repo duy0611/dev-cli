@@ -171,6 +171,30 @@ provider bind-mounts the folder, so a no-op `Sync` there would be a lie.
    runs the same command but it is a no-op there, because the pod's `fsGroup`
    already makes the PVC group-writable.
 
+10. **A container's agent state is a column, not a document field.** Every new
+    container mounts a volume at `/var/dev-state` unless `--no-persist-state`,
+    with `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `HERMES_HOME` and
+    `GIT_CONFIG_GLOBAL` pointing into it, so plugins and settings outlive a
+    rebuild. The column defaults to 0 while `create` defaults it to 1: the
+    migration's default speaks for rows that already exist, and those have no
+    volume to mount.
+
+    It lives on `containers` because `rewriteGeneratedTools` re-renders the
+    whole generated document from the tool list and `SourceKind` — a mount
+    recorded only in the JSON is dropped by the next `rebuild --tools`, and the
+    next `up` then starts a container with no volume and no warning. Fixed at
+    create for the same reason the workspace mount is.
+
+    Two mechanisms, one outcome: a generated document carries `mounts` and
+    `containerEnv`, while a project-owned container gets the volume from
+    `devcontainer up --mount` — which exists on `up` and **not** on `exec`, so it
+    must never enter `execArgs`. The variables ride `--remote-env` and so reach
+    both. k8s ignores all of it and grows a PVC subPath instead.
+
+    Credentials stay out. Agents authenticate from workspace settings resolved
+    per invocation, which is what keeps the ssh relay's "nothing worth stealing
+    rests in the container" true of this volume too.
+
 ## Kubernetes provider (experimental)
 
 The devcontainer CLI speaks Docker only. It is used for reading the merged
@@ -184,9 +208,13 @@ breaking one produces a failure far from its cause whatever the label says.
 
 Beyond the invariants above, these are the parts that bite:
 
-- **Two subPaths on the PVC, workspace and home.** Scaling to zero destroys the
-  container filesystem. Without the home mount, anything `postCreate` wrote to
-  `~` disappears on every stop and "postCreate runs once" is false.
+- **Two subPaths on the PVC, workspace and home — three when the container
+  persists state.** Scaling to zero destroys the container filesystem. Without
+  the home mount, anything `postCreate` wrote to `~` disappears on every stop
+  and "postCreate runs once" is false. The third carries the agents'
+  configuration and exists only when `persist_state` is set; the overlap guard
+  in `buildManifest` checks every pair of mount points, because a third one is a
+  third chance to shadow another.
 - **`--platform` is explicit, defaulting to `linux/amd64`.** An arm64 image on
   an amd64 node crash-loops with `exec format error`.
 - **The builder is chosen, not assumed** (`builder.go`). The CLI gates

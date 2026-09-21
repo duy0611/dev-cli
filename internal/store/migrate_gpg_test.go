@@ -63,6 +63,19 @@ CREATE TABLE workspaces (
 );
 INSERT INTO workspaces (name, provider_name, ssh_forward, gpg_forward, created_at)
 VALUES ('legacy', 'local', 1, 1, '2026-09-01T00:00:00Z');
+
+-- Carried at its 0002 shape because a database of that vintage had one, and a
+-- later migration that touches it has to run against this seed too.
+CREATE TABLE containers (
+  name             TEXT NOT NULL,
+  workspace_name   TEXT NOT NULL,
+  source_kind      TEXT NOT NULL,
+  source           TEXT NOT NULL,
+  config_path      TEXT NOT NULL,
+  generated_config TEXT NOT NULL DEFAULT '',
+  created_at       TEXT NOT NULL,
+  PRIMARY KEY (workspace_name, name)
+);
 `
 	seedRaw(t, path, pre, "0001_init.sql", "0002_generated_config.sql")
 
@@ -98,5 +111,63 @@ VALUES ('legacy', 'local', 1, 1, '2026-09-01T00:00:00Z');
 		Name: "fresh", ProviderName: "local", SSHForward: true,
 	}); err != nil {
 		t.Fatalf("creating a workspace after the migration: %v", err)
+	}
+}
+
+// TestMigrationAddsPersistState covers upgrading a database created before
+// containers could persist their agents' state.
+//
+// The column is NOT NULL with a default, so an INSERT that does not name it
+// still works and a broken migration would not fail loudly — it would fail on
+// the SELECT, on the next command the operator ran.
+func TestMigrationAddsPersistState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dev.db")
+
+	// The schema as it stood after 0003, before this column existed.
+	pre := `
+CREATE TABLE workspaces (
+  name          TEXT PRIMARY KEY,
+  provider_name TEXT NOT NULL,
+  ssh_forward   INTEGER NOT NULL DEFAULT 0,
+  created_at    TEXT NOT NULL
+);
+INSERT INTO workspaces (name, provider_name, ssh_forward, created_at)
+VALUES ('ws', 'local', 0, '2026-09-01T00:00:00Z');
+
+CREATE TABLE containers (
+  name             TEXT NOT NULL,
+  workspace_name   TEXT NOT NULL,
+  source_kind      TEXT NOT NULL,
+  source           TEXT NOT NULL,
+  config_path      TEXT NOT NULL,
+  generated_config TEXT NOT NULL DEFAULT '',
+  created_at       TEXT NOT NULL,
+  PRIMARY KEY (workspace_name, name)
+);
+INSERT INTO containers
+  (name, workspace_name, source_kind, source, config_path, generated_config, created_at)
+VALUES ('legacy', 'ws', 'folder', '/projects/legacy', '', '{}', '2026-09-01T00:00:00Z');
+`
+	seedRaw(t, path, pre,
+		"0001_init.sql", "0002_generated_config.sql", "0003_drop_gpg_forward.sql")
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("opening a pre-0004 database: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+
+	// Off, not on: a container that predates the feature has no volume, and
+	// reading it as persisting state would mount one that was never created
+	// and remove it on the next `container remove`.
+	c, err := s.GetContainer("ws", "legacy")
+	if err != nil {
+		t.Fatalf("reading a migrated container: %v", err)
+	}
+	if c.PersistState {
+		t.Error("a container created before the column defaulted to persisting state")
+	}
+	if c.GeneratedConfig != "{}" {
+		t.Errorf("generated_config = %q, want the value the row already had", c.GeneratedConfig)
 	}
 }

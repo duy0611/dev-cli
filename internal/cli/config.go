@@ -39,6 +39,8 @@ func newContainerConfigCmd(a *app) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
 		Short: "Inspect a generated container's configuration",
+		Args:  noArgs(),
+		RunE:  groupRunE,
 	}
 
 	var workspace string

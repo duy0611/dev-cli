@@ -12,7 +12,7 @@ dev provider configure local --kind local
 dev workspace init personal --provider local
 dev workspace set GH_TOKEN op://Private/github/token
 dev container create api --folder ~/code/api
-dev container agent api --agent claude
+dev container start-agent api --agent claude
 ```
 
 Task walkthroughs and the full command reference are in
@@ -157,8 +157,10 @@ the live one — which is why nothing overwrites it on a timer.
 file on the volume, so a stop and start does not reinstall everything, and a
 rebuild does.
 
-**Both the workspace and the home directory live on the volume.** Without that,
-scaling to zero would throw away anything `postCreate` wrote to `~`.
+**Both the workspace and the home directory live on the volume**, and the
+agents' configuration too when the container was created with
+`--persist-state`. Without that, scaling to zero would throw away anything
+`postCreate` wrote to `~`.
 
 **The build targets `linux/amd64` by default.** Your Mac is arm64 and your nodes
 probably are not; an arm64 image on an amd64 node crash-loops with `exec format

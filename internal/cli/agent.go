@@ -15,14 +15,14 @@ import (
 	"golang.org/x/term"
 )
 
-func newContainerAgentCmd(a *app) *cobra.Command {
+func newContainerStartAgentCmd(a *app) *cobra.Command {
 	var (
 		workspace string
 		agentID   string
 	)
 
 	cmd := &cobra.Command{
-		Use:   "agent NAME [-- ARGS...]",
+		Use:   "start-agent NAME [-- ARGS...]",
 		Short: "Run a coding agent inside a container",
 		Long: "Run a coding agent inside a container, starting it first if needed.\n\n" +
 			"The agent has to be installed in the image already. This tool does not\n" +
@@ -35,7 +35,7 @@ func newContainerAgentCmd(a *app) *cobra.Command {
 			if dash := cmd.ArgsLenAtDash(); dash >= 0 {
 				extra = args[dash:]
 			}
-			return runContainerAgent(cmd.Context(), a, workspace, args[0], agentID, extra)
+			return runContainerStartAgent(cmd.Context(), a, workspace, args[0], agentID, extra)
 		},
 	}
 	addWorkspaceFlag(cmd, &workspace)
@@ -44,7 +44,7 @@ func newContainerAgentCmd(a *app) *cobra.Command {
 	return cmd
 }
 
-func runContainerAgent(ctx context.Context, a *app, workspace, name, agentID string, extra []string) error {
+func runContainerStartAgent(ctx context.Context, a *app, workspace, name, agentID string, extra []string) error {
 	ag, err := agent.Lookup(agentID)
 	if err != nil {
 		return usageError(err)
@@ -56,7 +56,7 @@ func runContainerAgent(ctx context.Context, a *app, workspace, name, agentID str
 	}
 	defer t.release()
 
-	environ, err := a.containerEnv(ctx, t.workspace.Name)
+	environ, err := a.containerEnv(ctx, t.container)
 	if err != nil {
 		return err
 	}
@@ -165,7 +165,7 @@ func confirm(in *os.File, out io.Writer, question string) bool {
 // isTerminal reports whether f is an interactive terminal.
 //
 // Not a ModeCharDevice check: /dev/null is a character device too, so
-// `dev container agent ... < /dev/null` would read as interactive and print a
+// `dev container start-agent ... < /dev/null` would read as interactive and print a
 // prompt into a run that can never answer it.
 func isTerminal(f *os.File) bool {
 	return term.IsTerminal(int(f.Fd()))
