@@ -64,8 +64,15 @@ each at the identical path it has on the host.
 
 | host path | container path | why |
 |---|---|---|
-| `<repo>/.git` | the same | resolves the checkout's `gitdir:` line; shares the object store |
+| the git common directory | the same | resolves the checkout's `gitdir:` line; shares the object store |
 | `<worktree>` | the same | satisfies the admin backlink, so `prune` leaves it alone |
+
+The common directory, not `<repo>/.git`. They are the same thing for an ordinary
+repository and they are not for a bare one, where `git rev-parse
+--git-common-dir` answers `/srv/app.git` and there is no `.git` beneath
+anything. Bare repositories support worktrees and a worktree-first layout is a
+normal way to use them, so the mount is defined as the directory git names —
+which is by construction the directory the `gitdir:` line points into.
 
 The checkout is mounted once, not twice: for a generated document
 `workspaceFolder` and `workspaceMount` name the host path directly, so the
@@ -104,6 +111,10 @@ A container `dev` generated gets both mounts in its document:
 "workspaceMount": "source=/home/u/wt/fix-header,target=/home/u/wt/fix-header,type=bind",
 "mounts": ["source=/home/u/src/app/.git,target=/home/u/src/app/.git,type=bind"]
 ```
+
+That source is the common directory git reported, printed here for an ordinary
+repository. For a bare one it is `/srv/app.git` and nothing else about the
+document changes.
 
 A project that ships its own `.devcontainer` cannot, because `dev` never writes
 into a project folder — invariant 9. That container gets the `.git` bind from
@@ -165,12 +176,45 @@ not choose. Requiring it costs one flag and means nothing ever appears
 somewhere surprising. If a default is wanted later, `DEV_STATE/worktrees/` is
 the place for it, since that is already a directory `dev` owns.
 
-`--repo` defaults to the repository containing the working directory, found with
-`git rev-parse --show-toplevel`. From inside a worktree that returns the
-worktree, so the repository is taken from `--path-format=absolute
---git-common-dir` and its parent: creating a worktree from inside another
-worktree of the same repository then works, which is the case that would
-otherwise fail confusingly.
+`--repo` defaults to the repository containing the working directory. Not from
+`--show-toplevel`, which from inside a worktree returns that worktree: the
+repository is `git rev-parse --path-format=absolute --git-common-dir`, so
+creating a worktree from inside another worktree of the same repository works,
+and a bare repository resolves to itself. That directory is also the `.git`
+mount source, so one lookup answers both questions and they cannot disagree.
+
+### Not a repository
+
+The command fails when the resolved repository is not one. Exit 2 — a malformed
+request, not a missing named thing:
+
+```
+$ dev worktree create fix-header --branch fix-header --path ~/wt/fix-header
+not a git repository: /home/u/scratch (run dev worktree create from a repository, or pass --repo)
+```
+
+The check is `git rev-parse --path-format=absolute --git-common-dir` exiting
+non-zero, which is the same call that resolves the repository — so there is one
+code path and no window where the two could disagree. Git's own message
+(`fatal: not a git repository (or any of the parent directories): .git`) names
+`.git` rather than the directory the operator was standing in, which is why this
+one is written rather than surfaced.
+
+What is checked is the **resolved** repository, not the working directory as
+such. `--repo` given explicitly means cwd is never consulted, so running from
+`/tmp` with `--repo ~/src/app` is correct and must keep working; and a
+subdirectory of a repository resolves upward the way every other git command
+does, so `dev worktree create` from `src/internal/` is fine.
+
+This runs before anything else — before the store is opened, before the path is
+checked, before Herdr is probed. It is the most common way the command will be
+typed wrong, and every later step's error message would be more confusing than
+this one.
+
+A repository with no commits is **not** an error. `git worktree add -b` on an
+empty repository infers `--orphan` and succeeds, which is the right outcome for
+a repository the operator has just initialised, and nothing here needs to
+second-guess it.
 
 `--base` names the start point when the branch does not exist yet. An existing
 local branch is checked out as it is, and `--base` with an existing branch is a
@@ -181,9 +225,9 @@ The pass-through flags mean on `worktree create` exactly what they mean on
 
 ### What create does
 
-1. Resolve `--repo` and `--path`. The repository must exist and be a repository;
-   the path must *not* exist, since `git worktree add` refuses an existing
-   directory (`fatal: '../wt' already exists`).
+1. Resolve the repository, failing as above when there is none. Check `--path`
+   does *not* exist, since `git worktree add` refuses an existing directory
+   (`fatal: '../wt' already exists`).
 2. `git worktree add [-b BRANCH [BASE] | BRANCH] PATH`. Failures surface
    verbatim — `'feat' is already used by worktree at …` says more than anything
    this could write.
@@ -318,10 +362,14 @@ no repository parsing.
 
 | function | wraps |
 |---|---|
-| `Root(dir)` | `rev-parse --path-format=absolute --git-common-dir`, then its parent |
+| `CommonDir(dir)` | `rev-parse --path-format=absolute --git-common-dir`; `ErrNotRepo` when it exits non-zero |
 | `Add(repo, path, branch, base)` | `worktree add` |
 | `Remove(repo, path, force)` | `worktree remove` |
 | `List(repo)` | `worktree list --porcelain` |
+
+`CommonDir` answers both questions the command has — is this a repository, and
+what do I mount — because they have the same answer. A separate `IsRepo` would
+be a second call that could disagree with the first.
 
 `List` exists for `dev worktree list`, which reports whether the checkout git
 knows about still matches the row — the one place a stored path can go stale,
@@ -357,10 +405,13 @@ Everything runs under `make test` against the stub-executable harness, with
 temporary `PATH`, replacing it rather than preceding it, as the k8s harness
 already does and for the reason recorded there.
 
-- `internal/gitwt`: `Root` returns the repository from inside a worktree, not
-  the worktree; `Add` passes `-b` only for a new branch; a dirty `Remove`
-  surfaces git's own message. These use real `git` via `requireRealCLI` — git is
-  cheap, hermetic and needs no network, so stubbing it would only test the stub.
+- `internal/gitwt`: `CommonDir` returns the repository from inside a worktree
+  rather than the worktree, resolves upward from a subdirectory, answers a bare
+  repository with itself, and returns `ErrNotRepo` outside one; `Add` passes
+  `-b` only for a new branch, and succeeds on a repository with no commits; a
+  dirty `Remove` surfaces git's own message. These use real `git` via
+  `requireRealCLI` — git is cheap, hermetic and needs no network, so stubbing it
+  would only test the stub.
 - `internal/dcgen`: a worktree render carries the `.git` bind in `mounts` and
   the checkout in `workspaceMount`; a container that is both worktree-backed and
   state-persisting carries both mounts and chowns only the state directory; the
@@ -369,7 +420,9 @@ already does and for the reason recorded there.
   worktree container and neither on a generated one; `execArgs` never carries
   one; a worktree container that also persists state passes three, with no
   target repeated.
-- `internal/cli`: `worktree create` writes both rows; a k8s workspace exits 2;
+- `internal/cli`: `worktree create` writes both rows; a non-repository working
+  directory exits 2 and touches no store; `--repo` pointing at a repository
+  works from a non-repository working directory; a k8s workspace exits 2;
   `worktree remove` keeps the row when git refuses; `container remove` warns and
   proceeds; Herdr absent is not an error, and `--no-herdr` makes no call at all.
 - `internal/store`: migration test in the shape of `migrate_gpg_test.go` — seed
