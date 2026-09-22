@@ -88,7 +88,15 @@ type Container struct {
 	// stood at create. That is invariant 4's reasoning applied to a file on the
 	// other side of the fence. Set by materialise, read by the local provider.
 	OverrideConfigPath string
-	CreatedAt          time.Time
+	// WorktreeRepo is git's common directory for a worktree-backed container,
+	// empty otherwise. Not persisted: it is looked up from the worktrees table
+	// and set on this value per invocation, by whatever resolves the container,
+	// so that materialise can merge the two bind mounts invariant 11 requires
+	// into a project's own devcontainer.json the same way it merges the state
+	// mount. A generated document needs no such field — its two mounts are
+	// baked in at render time from the stored row instead.
+	WorktreeRepo string
+	CreatedAt    time.Time
 }
 
 // Status is a container's liveness as the engine reports it.

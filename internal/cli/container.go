@@ -415,10 +415,13 @@ func (a *app) start(ctx context.Context, workspace string, c model.Container) er
 	}
 
 	// The create path builds its own container value and never goes through
-	// resolve, so a generated configuration has to become a file here too — and
-	// the merged one has to be built here too. Fatal rather than deferred: this
-	// function exists to start the container, and starting it without the
-	// merged document would leave the state volume silently unmounted.
+	// resolve, so it needs the same lookup resolve does before a worktree
+	// container's mounts can be merged in, and a generated configuration has
+	// to become a file here too — the merged one has to be built here too.
+	// Fatal rather than deferred: this function exists to start the
+	// container, and starting it without the merged document would leave the
+	// state volume silently unmounted.
+	c.WorktreeRepo = a.worktreeRepo(workspace, c.Name)
 	c, cleanup, err := materialise(c, overridesConfig(p))
 	if err != nil {
 		return err

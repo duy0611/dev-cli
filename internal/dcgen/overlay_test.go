@@ -188,6 +188,97 @@ func TestOverlayRejectsAMalformedDocument(t *testing.T) {
 	}
 }
 
+// A project-owned worktree container needs both of a worktree's bind mounts,
+// merged the same way the state mount is: dev never writes into a project's
+// own devcontainer.json (invariant 9), so a generated document is not an
+// option here.
+func TestOverlayWorktreeAddsBothMounts(t *testing.T) {
+	in := []byte(`{"name": "demo", "image": "ubuntu"}`)
+
+	out, err := OverlayWorktree(in, "/home/u/src/app/.git", "/home/u/wt/feat")
+	if err != nil {
+		t.Fatalf("OverlayWorktree: %v", err)
+	}
+
+	got := mountsOfJSON(t, out)
+	want := []string{
+		"source=/home/u/src/app/.git,target=/home/u/src/app/.git,type=bind",
+		"source=/home/u/wt/feat,target=/home/u/wt/feat,type=bind",
+	}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("mounts = %v, want %v", got, want)
+	}
+
+	var parsed map[string]json.RawMessage
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, key := range []string{"name", "image"} {
+		if _, ok := parsed[key]; !ok {
+			t.Errorf("OverlayWorktree dropped %q: %s", key, out)
+		}
+	}
+}
+
+// The project's own mounts at other targets survive, appended after.
+func TestOverlayWorktreePreservesOtherMounts(t *testing.T) {
+	in := []byte(`{"mounts": ["source=cache,target=/cache,type=volume"]}`)
+
+	out, err := OverlayWorktree(in, "/repo/.git", "/wt/feat")
+	if err != nil {
+		t.Fatalf("OverlayWorktree: %v", err)
+	}
+	got := mountsOfJSON(t, out)
+	if len(got) != 3 {
+		t.Fatalf("mounts = %v, want 3 entries", got)
+	}
+	if got[0] != "source=cache,target=/cache,type=volume" {
+		t.Errorf("project mount not preserved first: %v", got)
+	}
+}
+
+// The replace rule, same as the state mount: a project that already names a
+// mount at one of the two paths gets it replaced, not duplicated — docker
+// refuses "duplicate mount destination" otherwise.
+func TestOverlayWorktreeReplacesACollidingMount(t *testing.T) {
+	in := []byte(`{"mounts": ["source=x,target=/repo/.git,type=bind"]}`)
+
+	out, err := OverlayWorktree(in, "/repo/.git", "/wt/feat")
+	if err != nil {
+		t.Fatalf("OverlayWorktree: %v", err)
+	}
+	got := mountsOfJSON(t, out)
+	if len(got) != 2 {
+		t.Fatalf("mounts = %v, want exactly 2 entries", got)
+	}
+	for _, m := range got {
+		if strings.Contains(m, "source=x,") {
+			t.Errorf("project's colliding mount survived: %v", got)
+		}
+	}
+}
+
+// A worktree container that also persists state needs both merges applied:
+// dev's overlay runs once per invocation, and the state mount must not be
+// dropped by the worktree merge or vice versa.
+func TestOverlayWorktreeThenStateKeepsBothMounts(t *testing.T) {
+	in := []byte(`{"name": "demo"}`)
+
+	mid, err := OverlayWorktree(in, "/repo/.git", "/wt/feat")
+	if err != nil {
+		t.Fatalf("OverlayWorktree: %v", err)
+	}
+	out, err := Overlay(mid, State{Volume: "dev-ws-feat-state"})
+	if err != nil {
+		t.Fatalf("Overlay: %v", err)
+	}
+
+	got := mountsOfJSON(t, out)
+	if len(got) != 3 {
+		t.Fatalf("mounts = %v, want 3 entries", got)
+	}
+}
+
 // A compose project cannot carry the mount, so create warns. Detection is free
 // here because the document is already parsed.
 func TestUsesCompose(t *testing.T) {
