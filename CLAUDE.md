@@ -229,6 +229,37 @@ cannot implement it.
     per invocation, which is what keeps the ssh relay's "nothing worth stealing
     rests in the container" true of this volume too.
 
+11. **A worktree container mounts two host paths, each at its own path.** A
+    worktree's `.git` is a file holding `gitdir: <common>/worktrees/<name>`, and
+    the repository holds a backlink to the checkout — both absolute host paths.
+    The common directory is bind-mounted so the first resolves; the checkout is
+    bind-mounted *at its own path* so the second does. The second is the one
+    that looks optional and is not: `git gc --auto` runs `git worktree prune`,
+    which deletes a registration whose backlink does not resolve, so a container
+    with only the first mount lets an agent prune its own worktree away from the
+    inside, silently.
+
+    The mount source is git's **common directory**, never `<repo>/.git`. They
+    differ for a bare repository, which takes worktrees like any other.
+
+    Two routes as ever, and never both: a generated document names both mounts
+    directly in `mounts`. A project-owned container gets them the same way it
+    gets the state mount — `dcgen.OverlayWorktree` merges both bind entries into
+    a copy of the project's `devcontainer.json`, and the result reaches the
+    container through `--override-config`, on `up` and `exec` alike (see
+    invariant 10; there is no separate `--mount` route to keep off `execArgs`,
+    because none of this uses `--mount`). `model.Container.WorktreeRepo` carries
+    the common directory into that merge for the length of one invocation; it is
+    set by `a.resolve` and `a.start` from the `worktrees` table, not persisted,
+    and empty for any container that is not worktree-backed. Both mounts are
+    rebuilt from the `worktrees` row in `rewriteGeneratedTools`, because that
+    function re-renders the whole generated document and drops anything it
+    cannot derive, exactly as in invariant 10.
+
+    k8s refuses worktrees outright: a pod has no host bind mounts, and a
+    streamed copy of the object store would drift from the host with nothing to
+    push it back.
+
 ## Kubernetes provider (experimental)
 
 The devcontainer CLI speaks Docker only. It is used for reading the merged
