@@ -101,3 +101,26 @@ const (
 	// normal state between `container create --no-start` and the first start.
 	StatusAbsent Status = "absent"
 )
+
+// Worktree is a git worktree checkout that a container was created on.
+//
+// One per container at most, and it is deleted with the container: the pair is
+// created together by `dev worktree create` and the whole point of recording
+// the link is that neither can be left behind without the other.
+type Worktree struct {
+	WorkspaceName string
+	ContainerName string
+	// Repo is git's common directory — the directory holding the object store
+	// and the worktree administration. Not the repository root: the two differ
+	// for a bare repository, and this is the path the checkout's .git file
+	// points into, so it is what gets bind-mounted into the container.
+	Repo   string
+	Branch string
+	// Path is the checkout, resolved. Equal to the container's Source today,
+	// and kept separately because the two answer different questions.
+	Path string
+	// HerdrWorkspace is the id Herdr gave this checkout, empty when Herdr was
+	// not running or declined. Only used to close that workspace on removal.
+	HerdrWorkspace string
+	CreatedAt      time.Time
+}
