@@ -11,6 +11,7 @@ import (
 	"github.com/duy0611/dev-cli/internal/env"
 	"github.com/duy0611/dev-cli/internal/model"
 	"github.com/duy0611/dev-cli/internal/provider"
+	"github.com/duy0611/dev-cli/internal/provider/local"
 	"github.com/duy0611/dev-cli/internal/secret"
 	"github.com/duy0611/dev-cli/internal/store"
 )
@@ -25,6 +26,11 @@ type target struct {
 	// container, which is the generated configuration and nothing else. Every
 	// caller defers release; see materialise.
 	cleanup func()
+	// overrideErr is a failure to build the merged devcontainer.json, held
+	// rather than returned. The commands that drive up or exec surface it
+	// through requireOverride; the ones that do not need it carry on, so a
+	// project file that does not parse never strands a container in the engine.
+	overrideErr error
 }
 
 // release removes anything resolve wrote for this container. Safe on a nil
@@ -33,6 +39,21 @@ func (t *target) release() {
 	if t != nil && t.cleanup != nil {
 		t.cleanup()
 	}
+}
+
+// requireOverride reports a deferred overlay failure.
+//
+// Called by every path that drives up or exec, and by no other: those are the
+// commands that need the merged document, and starting a container without it
+// would silently leave the agents' state volume unmounted.
+func (t *target) requireOverride() error {
+	return t.overrideErr
+}
+
+// overridesConfig reports whether this provider consumes a merged config.
+func overridesConfig(p provider.Provider) bool {
+	_, ok := p.(provider.ConfigOverrider)
+	return ok
 }
 
 // resolve looks up a container by name in the given workspace (or the active
@@ -67,9 +88,14 @@ func (a *app) resolve(workspace, name string) (*target, error) {
 	// Done here rather than in each command: every provider call needs a
 	// container whose ConfigPath a child process can open, and a command that
 	// forgot would fail only for generated containers.
-	c, cleanup, err := materialise(c)
+	c, cleanup, err := materialise(c, overridesConfig(p))
 	if err != nil {
-		return nil, err
+		if !isOverlayError(err) {
+			return nil, err
+		}
+		// Deferred, not fatal. See target.overrideErr.
+		return &target{container: c, workspace: ws, provider: p, cleanup: cleanup,
+			overrideErr: err}, nil
 	}
 	return &target{container: c, workspace: ws, provider: p, cleanup: cleanup}, nil
 }
@@ -88,9 +114,12 @@ func (a *app) resolve(workspace, name string) (*target, error) {
 //
 // The returned cleanup is always safe to call, including for a project-owned
 // container where nothing was written.
-func materialise(c model.Container) (model.Container, func(), error) {
+//
+// overrides says whether this container's provider consumes a merged
+// devcontainer.json. False for Kubernetes, which builds its own pod spec.
+func materialise(c model.Container, overrides bool) (model.Container, func(), error) {
 	if c.GeneratedConfig == "" {
-		return c, func() {}, nil
+		return overlayProjectConfig(c, overrides)
 	}
 
 	dir, err := os.MkdirTemp("", "dev-config-")
@@ -123,6 +152,55 @@ func materialise(c model.Container) (model.Container, func(), error) {
 	}
 
 	c.ConfigPath = path
+	return c, cleanup, nil
+}
+
+// overlayProjectConfig merges dev's state mount into a project's own
+// devcontainer.json for the length of one invocation.
+//
+// Per invocation rather than stored: a project-owned container picks up edits
+// to its own devcontainer.json today because the CLI reads the live file, and a
+// merge cached at create would freeze a snapshot — add a feature, rebuild, and
+// get the document as it stood weeks ago with no error to explain it.
+// GeneratedConfig is the wrong home for a second reason: rewriteGeneratedTools
+// re-renders it from the tool list and would destroy a project-derived copy.
+//
+// Nothing is written for a container that does not persist state, has no config
+// of its own, or runs on a provider that ignores a document's mounts.
+func overlayProjectConfig(c model.Container, overrides bool) (model.Container, func(), error) {
+	if !overrides || !c.PersistState || c.ConfigPath == "" {
+		return c, func() {}, nil
+	}
+
+	raw, err := os.ReadFile(c.ConfigPath)
+	if err != nil {
+		return c, func() {}, &overlayError{fmt.Errorf("reading %s: %w", c.ConfigPath, err)}
+	}
+	// The same helper the generated document uses, so the volume has one
+	// spelling across create, up and remove.
+	merged, err := dcgen.Overlay(raw, dcgen.State{
+		Volume: local.StateVolumeName(c.WorkspaceName, c.Name),
+	})
+	if err != nil {
+		return c, func() {}, &overlayError{fmt.Errorf("merging %s: %w", c.ConfigPath, err)}
+	}
+
+	dir, err := os.MkdirTemp("", "dev-override-")
+	if err != nil {
+		return c, func() {}, fmt.Errorf("preparing the merged config: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(dir) }
+
+	// Flat rather than inside a .devcontainer directory: --override-config takes
+	// a document, while --config is what names the project's own file and keeps
+	// its path anchoring. 0600 for the reason the generated config uses it.
+	path := filepath.Join(dir, "devcontainer.json")
+	if err := os.WriteFile(path, merged, 0o600); err != nil {
+		cleanup()
+		return c, func() {}, fmt.Errorf("writing the merged config: %w", err)
+	}
+
+	c.OverrideConfigPath = path
 	return c, cleanup, nil
 }
 

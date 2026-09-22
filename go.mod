@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/spf13/cobra v1.10.2
+	github.com/tailscale/hujson v0.0.0-20260727124030-b80ff77dac4f
 	golang.org/x/sys v0.48.0
 	golang.org/x/term v0.46.0
 	modernc.org/sqlite v1.58.0

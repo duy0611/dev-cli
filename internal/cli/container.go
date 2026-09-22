@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"slices"
@@ -160,6 +161,12 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 		}
 	}
 
+	// Advisory, and nothing is stored: the project can gain or lose a compose
+	// file later, so every invocation re-derives this.
+	if msg := composeWarning(configPath, !opts.noPersistState); msg != "" {
+		warnf(a, "%s", msg)
+	}
+
 	st, err := a.store()
 	if err != nil {
 		return err
@@ -244,6 +251,38 @@ func folderSource(wsName, name, folder string, opts createOpts, a *app) (source,
 		configPath = ""
 	}
 	return source, configPath, generated, nil
+}
+
+// composeWarning says why a compose project will not get its state volume, or
+// returns "" when there is nothing to say.
+//
+// `mounts` is documented as a cross-orchestrator property, but mounts under
+// compose belong in the compose file and implementations differ on whether they
+// inject it (devcontainers/spec#106). The container still runs; its state
+// volume is simply absent, and nothing anywhere reports an error — which is the
+// only reason this is worth a line of output.
+//
+// Returns the message rather than printing it so the decision can be tested:
+// warnf writes to stderr, which no test here captures.
+//
+// A config it cannot read or parse is silent. That is reported by the commands
+// that actually need the document, and refusing here would be a second, earlier
+// answer to the same question.
+func composeWarning(configPath string, persistState bool) string {
+	if configPath == "" || !persistState {
+		return ""
+	}
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		return ""
+	}
+	compose, err := dcgen.UsesCompose(raw)
+	if err != nil || !compose {
+		return ""
+	}
+	return fmt.Sprintf("this project uses docker compose; the devcontainer CLI will not "+
+		"apply dev's %s mount. Agent state will not survive a rebuild. Add the volume "+
+		"to your compose file, or pass --no-persist-state.", dcgen.StateDir)
 }
 
 // --- list ---------------------------------------------------------------------
@@ -376,8 +415,11 @@ func (a *app) start(ctx context.Context, workspace string, c model.Container) er
 	}
 
 	// The create path builds its own container value and never goes through
-	// resolve, so a generated configuration has to become a file here too.
-	c, cleanup, err := materialise(c)
+	// resolve, so a generated configuration has to become a file here too — and
+	// the merged one has to be built here too. Fatal rather than deferred: this
+	// function exists to start the container, and starting it without the
+	// merged document would leave the state volume silently unmounted.
+	c, cleanup, err := materialise(c, overridesConfig(p))
 	if err != nil {
 		return err
 	}
@@ -488,6 +530,9 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 				return err
 			}
 			defer t.release()
+			if err := t.requireOverride(); err != nil {
+				return err
+			}
 			environ, err := a.containerEnv(cmd.Context(), t.container)
 			if err != nil {
 				return err
@@ -616,6 +661,9 @@ func runContainerShell(ctx context.Context, a *app, workspace, name string) erro
 		return err
 	}
 	defer t.release()
+	if err := t.requireOverride(); err != nil {
+		return err
+	}
 	if err := a.requireRunning(ctx, t); err != nil {
 		return err
 	}
@@ -694,6 +742,9 @@ func runContainerExec(ctx context.Context, a *app, workspace, name string, comma
 		return err
 	}
 	defer t.release()
+	if err := t.requireOverride(); err != nil {
+		return err
+	}
 	if err := a.requireRunning(ctx, t); err != nil {
 		return err
 	}

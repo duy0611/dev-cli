@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -197,23 +198,97 @@ func TestConfigShowPrintsTheStoredConfig(t *testing.T) {
 	}
 }
 
-// A project-owned container has no stored configuration, and printing "" would
-// look like an empty one rather than a different kind of container.
-func TestConfigShowOnAProjectOwnedContainer(t *testing.T) {
-	a, _ := newTestApp(t)
+// A project-owned container is built from the merged document, not from the
+// file on disk, and that document lives only for one invocation — so this is
+// the only way to see what the container was actually created from.
+func TestConfigShowPrintsTheMergedConfig(t *testing.T) {
+	a, out := newTestApp(t)
 	seedWorkspace(t, a)
 
 	folder := projectWithConfig(t)
 	if err := runContainerCreate(t.Context(), a, "", "owned", folder, createOpts{noStart: true}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
+	out.Reset()
 
-	err := runContainerConfigShow(a, "", "owned")
-	if err == nil {
-		t.Fatal("config show invented a configuration for a project-owned container")
+	if err := runContainerConfigShow(a, "", "owned"); err != nil {
+		t.Fatalf("config show: %v", err)
 	}
-	if !strings.Contains(err.Error(), ".devcontainer") {
-		t.Errorf("error %q does not point at the project's own config", err)
+	// The mount dev added is the whole point: it is the one thing that is in
+	// the running container and not in the file the operator committed.
+	if !strings.Contains(out.String(), "dev-ws-owned-state") {
+		t.Errorf("config show did not print the merged document:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), dcgen.StateDir) {
+		t.Errorf("merged document names no state mount:\n%s", out.String())
+	}
+}
+
+// Without state there is no merge, so what the CLI receives really is the
+// project's own file. Printing it anyway keeps the command one shape.
+func TestConfigShowPrintsTheProjectFileWhenStateIsOff(t *testing.T) {
+	a, out := newTestApp(t)
+	seedWorkspace(t, a)
+
+	folder := projectWithConfig(t)
+	opts := createOpts{noStart: true, noPersistState: true}
+	if err := runContainerCreate(t.Context(), a, "", "plain", folder, opts); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	out.Reset()
+
+	if err := runContainerConfigShow(a, "", "plain"); err != nil {
+		t.Fatalf("config show: %v", err)
+	}
+	if strings.Contains(out.String(), dcgen.StateDir) {
+		t.Errorf("config show invented a state mount for a container without one:\n%s",
+			out.String())
+	}
+	if out.String() == "" {
+		t.Error("config show printed no document at all")
+	}
+}
+
+// Stdout carries the document and nothing else, so `config show | jq` works.
+// The path that says where it came from goes to stderr.
+func TestConfigShowPrintsOnlyJSONToStdout(t *testing.T) {
+	a, out := newTestApp(t)
+	seedWorkspace(t, a)
+
+	folder := projectWithConfig(t)
+	if err := runContainerCreate(t.Context(), a, "", "owned", folder, createOpts{noStart: true}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	out.Reset()
+
+	if err := runContainerConfigShow(a, "", "owned"); err != nil {
+		t.Fatalf("config show: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("stdout is not valid JSON (%v):\n%s", err, out.String())
+	}
+}
+
+// Fatal here, unlike on stop or remove: this command exists to say what the
+// container was built from, and a file dev cannot parse has no honest answer
+// other than the error.
+func TestConfigShowReportsAnUnparseableProjectFile(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+
+	folder := t.TempDir()
+	writeProjectConfigIn(t, folder, `{"name":}`)
+	if err := runContainerCreate(t.Context(), a, "", "broken", folder, createOpts{noStart: true}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	err := runContainerConfigShow(a, "", "broken")
+	if err == nil {
+		t.Fatal("config show printed a document for a file that does not parse")
+	}
+	if !strings.Contains(err.Error(), "devcontainer.json") {
+		t.Errorf("error %q does not name the file", err)
 	}
 }
 
@@ -223,7 +298,7 @@ func TestConfigShowOnAProjectOwnedContainer(t *testing.T) {
 func TestMaterialiseWritesAndCleansUp(t *testing.T) {
 	c := model.Container{Name: "demo", GeneratedConfig: "{\"name\":\"demo\"}\n"}
 
-	got, cleanup, err := materialise(c)
+	got, cleanup, err := materialise(c, true)
 	if err != nil {
 		t.Fatalf("materialise: %v", err)
 	}
@@ -253,7 +328,7 @@ func TestMaterialiseWritesAndCleansUp(t *testing.T) {
 func TestMaterialiseLeavesAProjectOwnedContainerAlone(t *testing.T) {
 	c := model.Container{Name: "demo", ConfigPath: "/proj/.devcontainer/devcontainer.json"}
 
-	got, cleanup, err := materialise(c)
+	got, cleanup, err := materialise(c, true)
 	if err != nil {
 		t.Fatalf("materialise: %v", err)
 	}
@@ -711,5 +786,114 @@ func TestWorkspaceSettingOverridesAStateVariable(t *testing.T) {
 	// which is a coin toss rather than a precedence rule.
 	if seen != 1 {
 		t.Errorf("CLAUDE_CONFIG_DIR appears %d times, want exactly 1", seen)
+	}
+}
+
+// writeProjectConfigIn puts a .devcontainer/devcontainer.json in dir.
+func writeProjectConfigIn(t *testing.T, dir, body string) {
+	t.Helper()
+	nested := filepath.Join(dir, ".devcontainer")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "devcontainer.json"), []byte(body), 0o600); err != nil {
+		t.Fatalf("writing the project config: %v", err)
+	}
+}
+
+// A compose project cannot carry the state mount, and nothing reports an error
+// when it silently does not: the agents write to the container filesystem and
+// lose it at the next rebuild.
+func TestComposeWarningForAComposeProject(t *testing.T) {
+	dir := t.TempDir()
+	writeProjectConfigIn(t, dir, `{"dockerComposeFile":"docker-compose.yml","service":"app"}`)
+	path := filepath.Join(dir, ".devcontainer", "devcontainer.json")
+
+	got := composeWarning(path, true)
+	if got == "" {
+		t.Fatal("no warning for a compose project")
+	}
+	// The way out has to be in the message, in the house style of the
+	// kind-change error: an operator who is not told what to do has nothing to
+	// try.
+	for _, want := range []string{"docker compose", dcgen.StateDir, "--no-persist-state"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("warning %q does not mention %q", got, want)
+		}
+	}
+}
+
+func TestComposeWarningSilentForAnImageProject(t *testing.T) {
+	dir := t.TempDir()
+	writeProjectConfigIn(t, dir, `{"image":"ubuntu"}`)
+	path := filepath.Join(dir, ".devcontainer", "devcontainer.json")
+
+	if got := composeWarning(path, true); got != "" {
+		t.Errorf("warned about a non-compose project: %q", got)
+	}
+}
+
+// Nothing to lose, nothing to warn about.
+func TestComposeWarningSilentWithoutPersistState(t *testing.T) {
+	dir := t.TempDir()
+	writeProjectConfigIn(t, dir, `{"dockerComposeFile":"docker-compose.yml"}`)
+	path := filepath.Join(dir, ".devcontainer", "devcontainer.json")
+
+	if got := composeWarning(path, false); got != "" {
+		t.Errorf("warned for a container that persists no state: %q", got)
+	}
+}
+
+// A generated container has no project config, and an unreadable one is the
+// business of the commands that need it.
+func TestComposeWarningSilentWithoutAConfig(t *testing.T) {
+	if got := composeWarning("", true); got != "" {
+		t.Errorf("warned with no config path: %q", got)
+	}
+	if got := composeWarning("/nonexistent/devcontainer.json", true); got != "" {
+		t.Errorf("warned for an unreadable config: %q", got)
+	}
+}
+
+// Still created: the warning is advisory, not a refusal.
+func TestCreateSucceedsForAComposeProject(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	folder := t.TempDir()
+	writeProjectConfigIn(t, folder, `{"dockerComposeFile":"docker-compose.yml","service":"app"}`)
+
+	if err := runContainerCreate(t.Context(), a, "", "demo", folder,
+		createOpts{noStart: true}); err != nil {
+		t.Fatalf("create refused a compose project: %v", err)
+	}
+}
+
+// The guarantee the deferred parse error exists for: a project file dev cannot
+// parse must not strand its container in the engine.
+//
+// materialise runs for every container command, but stop, remove, logs and
+// status find their container through docker label filters and never read a
+// config at all. Failing those too would leave a syntax error in a project's
+// devcontainer.json holding the container hostage, with dev refusing to clean
+// up after itself and the operator sent to docker directly.
+//
+// The mechanism is asserted in resolve_test.go; this asserts the outcome, and
+// it is what fails loudly if a future command forgets which side of the
+// deferred/fatal line it belongs on.
+func TestRemoveSucceedsWithAnUnparseableProjectFile(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	folder := t.TempDir()
+	writeProjectConfigIn(t, folder, `{"name":}`)
+
+	if err := runContainerCreate(t.Context(), a, "", "c1", folder,
+		createOpts{noStart: true}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// --force, because make test runs with no engine on PATH: what is being
+	// asserted is that the deferred parse error never reaches this command,
+	// not what docker would have said.
+	if err := runContainerRemove(t.Context(), a, "", "c1", true); err != nil {
+		t.Fatalf("a broken project file stranded the container: %v", err)
 	}
 }

@@ -79,7 +79,16 @@ type Container struct {
 	// Credentials are not part of it. Agents authenticate from environment
 	// variables resolved per invocation, so nothing worth stealing rests here.
 	PersistState bool
-	CreatedAt    time.Time
+	// OverrideConfigPath is a merged devcontainer.json built for the length of
+	// one invocation: the project's own document with dev's state mount in it.
+	//
+	// Not persisted, and so needing no migration. A stored merge would freeze a
+	// snapshot of a file dev does not own — add a feature to the project's
+	// devcontainer.json and a rebuild would silently use the document as it
+	// stood at create. That is invariant 4's reasoning applied to a file on the
+	// other side of the fence. Set by materialise, read by the local provider.
+	OverrideConfigPath string
+	CreatedAt          time.Time
 }
 
 // Status is a container's liveness as the engine reports it.

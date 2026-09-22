@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"fmt"
 	"io"
+	"os"
 
 	"github.com/spf13/cobra"
 
@@ -38,7 +40,7 @@ func runContainerTools(a *app) error {
 func newContainerConfigCmd(a *app) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
-		Short: "Inspect a generated container's configuration",
+		Short: "Inspect the configuration a container is built from",
 		Args:  noArgs(),
 		RunE:  groupRunE,
 	}
@@ -46,7 +48,7 @@ func newContainerConfigCmd(a *app) *cobra.Command {
 	var workspace string
 	show := &cobra.Command{
 		Use:   "show NAME",
-		Short: "Print the devcontainer config dev generated for a container",
+		Short: "Print the devcontainer config a container is built from",
 		Args:  exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runContainerConfigShow(a, workspace, args[0])
@@ -64,12 +66,51 @@ func runContainerConfigShow(a *app, workspace, name string) error {
 		return err
 	}
 	defer t.release()
-	if t.container.GeneratedConfig == "" {
-		// Not an empty configuration: a different kind of container, whose
-		// configuration is a file the operator can already open.
-		return usageErrorf("container %s uses the project's own config: %s",
-			name, t.container.ConfigPath)
+
+	if t.container.GeneratedConfig != "" {
+		a.printf("%s", t.container.GeneratedConfig)
+		return nil
 	}
-	a.printf("%s", t.container.GeneratedConfig)
+
+	// A project-owned container. The file on disk is not the whole answer:
+	// dev merges its state mount into it per invocation and hands the result
+	// to the devcontainer CLI, so the document the container is actually built
+	// from exists only for the length of one command. Printing the path alone
+	// would name a file that is not quite what ran.
+	//
+	// A parse failure is deliberately fatal here, unlike on stop or remove:
+	// this command exists to answer "what was this built from", and the honest
+	// answer when the project's file will not parse is the error, not the file
+	// that dev could not use.
+	if err := t.requireOverride(); err != nil {
+		return err
+	}
+
+	source := t.container.ConfigPath
+	merged := t.container.OverrideConfigPath
+	if merged == "" {
+		// No merge to show: a container that persists no state gets its
+		// document through --config untouched, so the project's file is
+		// literally what the CLI receives. Said out loud, because an operator
+		// comparing two containers should not have to infer why one has a
+		// mounts entry dev added and the other does not.
+		warnf(a, "%s (no merge: state off)", source)
+		return printFile(a, source)
+	}
+
+	warnf(a, "merged from %s", source)
+	return printFile(a, merged)
+}
+
+// printFile copies a configuration document to the command's output.
+//
+// The document goes to stdout while the path above it goes to stderr, so
+// `config show | jq` still receives valid JSON and nothing else.
+func printFile(a *app, path string) error {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", path, err)
+	}
+	a.printf("%s", body)
 	return nil
 }

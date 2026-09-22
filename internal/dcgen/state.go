@@ -7,8 +7,9 @@ import "sort"
 // Outside $HOME deliberately. A project-owned configuration can name any
 // remoteUser it likes, and the local provider would have to run
 // read-configuration to learn which home directory to use. A fixed path needs
-// no lookup and is spelled the same in the generated document, in the
-// devcontainer CLI's --mount argument and in the Kubernetes volumeMount.
+// no lookup and is spelled the same in the generated document, in the merged
+// override materialise builds for a project-owned one and in the Kubernetes
+// volumeMount.
 const StateDir = "/var/dev-state"
 
 // stateEnv points each tool at its own directory on the state volume.

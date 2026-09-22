@@ -13,6 +13,7 @@ command. For what `dev` *is* and how it fits together, read the
   - [Add a secret and rotate it](#add-a-secret-and-rotate-it)
   - [Push to git from inside a container](#push-to-git-from-inside-a-container)
   - [Keep an agent's plugins across a rebuild](#keep-an-agents-plugins-across-a-rebuild)
+  - [Commit a devcontainer.json that also works under dev](#commit-a-devcontainerjson-that-also-works-under-dev)
   - [Run a workspace in Kubernetes](#run-a-workspace-in-kubernetes)
   - [Clean up](#clean-up)
 - [Troubleshooting](#troubleshooting)
@@ -123,6 +124,28 @@ To see what was generated:
 ```sh
 dev container config show tmp
 ```
+
+`config show` answers the same question for a container whose project ships its
+own `devcontainer.json`, and there the answer is not the file on disk: `dev`
+merges its state mount in on every invocation, so the document the container is
+built from exists only for the length of one command. The path it came from goes
+to stderr and the document to stdout, so `config show NAME | jq` still receives
+JSON and nothing else.
+
+```
+❯ dev container config show api
+dev: merged from ~/code/api/.devcontainer/devcontainer.json
+{
+  "image": "mcr.microsoft.com/devcontainers/base:1-ubuntu-24.04",
+  "mounts": [
+    "source=dev-<workspace>-api-state,target=/var/dev-state,type=volume"
+  ],
+  ...
+}
+```
+
+A container created with `--no-persist-state` has no merge to show, and says so:
+what the CLI receives really is the project's file, unchanged.
 
 ### Change what a generated container installs
 
@@ -282,6 +305,27 @@ treating them differently.
 On k8s all of this already worked — the pod's home directory lives on the PVC —
 and a third subPath there carries the same paths, so the two providers behave
 identically.
+
+### Commit a devcontainer.json that also works under dev
+
+A project's own `.devcontainer/devcontainer.json` can name a mount at
+`/var/dev-state` — a plain `source=dev-cli-state` volume is enough — and stay
+correct for VS Code, which never sees anything else. While `dev` drives, it
+reads that file, replaces whatever is mounted at `/var/dev-state` with the
+per-container volume (`dev-<workspace>-<container>-state`), and passes the
+merged result on both `up` and `exec`; nothing about the replacement is
+stored, so editing the project file takes effect on the next command. A
+project mounting something of its own elsewhere is untouched — only
+`/var/dev-state` is ever replaced. (For a `dockerComposeFile` project, see
+`--no-persist-state` under [`create`](#container) — the mount does not
+reliably apply there.)
+
+Plainly: **a container opened directly in VS Code gets no workspace
+settings.** A workspace setting is stored as a spec — `keychain:NAME`,
+`op://…` — and resolved to a value fresh on every `dev` command; no field in
+a `devcontainer.json` can call that resolver. Opened outside `dev`, the
+container starts, the agents have their state volume, and the secrets are
+simply absent.
 
 ### Run a workspace in Kubernetes
 
@@ -536,6 +580,14 @@ Containers created before this existed keep their old behaviour. The volume they
 never had is not conjured up by an upgrade; `dev container list` shows them as
 `off`.
 
+A project whose `devcontainer.json` names `dockerComposeFile` does not
+reliably get the state volume: the devcontainer CLI treats `mounts` under
+compose as the compose file's business, and implementations differ on whether
+they apply it anyway. `create` still creates the container — everything else
+works — but warns on stderr so a silently missing `/var/dev-state` is not a
+surprise at the next rebuild. Add the volume to your compose file yourself, or
+pass `--no-persist-state`.
+
 **`list`** reads live status from the engine every time; a stored copy would be
 wrong the moment anything happened outside `dev`. A `?` means the engine could
 not be reached. The SOURCE column is `-` for a folderless container, and STATE
@@ -571,8 +623,9 @@ command already resolves the settings afresh. The container has to be running
 either way.
 
 **`tools`** lists the catalog, marking each entry official or community.
-**`config show`** prints the configuration `dev` generated for a container, and
-errors on one that uses the project's own.
+**`config show`** prints the configuration a container is built from: the
+generated document, or for a project-owned container the merged one, with the
+path it came from on stderr.
 
 ### Environment
 

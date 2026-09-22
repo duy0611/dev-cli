@@ -92,6 +92,20 @@ type AgentForwarder interface {
 	ForwardAgent(ctx context.Context, c model.Container, agentSocket string) (AgentSession, error)
 }
 
+// ConfigOverrider is a provider that consumes a merged devcontainer.json,
+// through model.Container's OverrideConfigPath.
+//
+// Optional and discovered by type assertion, for the reason Syncer is: the
+// Kubernetes provider builds its own pod spec and ignores a document's mounts
+// entirely, so merging one would be work with no effect — and worse, a project
+// file that does not parse would fail a k8s command over a document k8s never
+// reads.
+//
+// The method reports nothing; its presence is the answer.
+type ConfigOverrider interface {
+	OverridesConfig()
+}
+
 // AgentSession is a live agent relay.
 type AgentSession interface {
 	// Socket is the path inside the container to put in SSH_AUTH_SOCK.

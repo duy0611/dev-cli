@@ -205,13 +205,25 @@ cannot implement it.
     create for the same reason the workspace mount is.
 
     Two mechanisms, one outcome, and never both at once: a generated document
-    carries `mounts` and `containerEnv`, while a project-owned container gets
-    the volume from `devcontainer up --mount` — which exists on `up` and
-    **not** on `exec`, so it must never enter `execArgs`. Passing the flag for a
-    container whose document already names the volume makes docker refuse the
-    run with `duplicate mount destination`, so `up` checks for a generated
-    document first. The variables ride `--remote-env` and so reach both. k8s
-    ignores all of it and grows a PVC subPath instead.
+    carries `mounts` and `containerEnv`. A project-owned container gets the
+    volume from a merged document instead: `dev` reads the project's
+    `devcontainer.json`, replaces any `mounts` entry targeting `/var/dev-state`
+    with its own, writes the result to a temporary file and passes
+    `--override-config` on both `up` and `exec`. One flag on both commands, so
+    there is no asymmetry for a later `exec` to fall through.
+    `--override-config` replaces rather than deep-merges, which is why `dev`
+    does the merge itself and why every field it does not touch has to
+    round-trip untouched. The merge is per invocation and never stored, for
+    invariant 4's reason applied to a file `dev` does not own. `dev` owns
+    `/var/dev-state` while it drives: an existing mount there is replaced, not
+    stood down next to, so `Remove` stays unconditionally correct instead of
+    orphaning a volume it can no longer name. That replacement is also what
+    still prevents `duplicate mount destination` — the collision is real, `dev`
+    now resolves it instead of risking it. A project whose `devcontainer.json`
+    names `dockerComposeFile` does not reliably get the mount applied at all;
+    `create` warns rather than silently losing state at the next rebuild. The
+    variables ride `--remote-env` and so reach both commands. k8s ignores all
+    of it and grows a PVC subPath instead.
 
     Credentials stay out. Agents authenticate from workspace settings resolved
     per invocation, which is what keeps the ssh relay's "nothing worth stealing
@@ -334,7 +346,3 @@ worse than none, since the rule looks handled.
 
 The hook allows a `Co-Authored-By:` naming a person. It is attribution to
 tooling that is refused, not co-authorship.
-
-## Claude Plan
-
-Keep the plan file at `.claude/plans/` so that other agent session can also see this file.

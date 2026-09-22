@@ -48,3 +48,24 @@ func exitCodeOf(err error) int {
 	}
 	return exitError
 }
+
+// overlayError is a failure to build the merged devcontainer.json.
+//
+// Distinguishable from any other failure because it is deferrable: materialise
+// runs for every container command, but stop, remove, logs and status find
+// their container through docker label filters and never read a config at all.
+// Failing those too would leave a syntax error in a project's file holding a
+// container hostage in the engine, with dev refusing to clean up after itself.
+//
+// Exit 1, like any other runtime failure: the request was well-formed and the
+// container exists.
+type overlayError struct{ err error }
+
+func (e *overlayError) Error() string { return e.err.Error() }
+func (e *overlayError) Unwrap() error { return e.err }
+
+// isOverlayError reports whether err is a deferrable overlay failure.
+func isOverlayError(err error) bool {
+	var oe *overlayError
+	return errors.As(err, &oe)
+}
