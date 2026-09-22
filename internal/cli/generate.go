@@ -37,6 +37,16 @@ func folderlessMount(workspace, container string) dcgen.Mount {
 	}
 }
 
+// worktreeMount describes how a worktree container is mounted.
+//
+// Two bind mounts, each at the identical host path. The checkout's .git file
+// holds `gitdir: <repo>/worktrees/<name>` and the repository holds a backlink
+// to the checkout — both absolute host paths, and `git gc --auto` prunes the
+// registration when the backlink does not resolve.
+func worktreeMount(repo, path string) dcgen.Mount {
+	return dcgen.Mount{Host: path, Bind: repo}
+}
+
 // stateFor describes where a container keeps its agents' configuration.
 //
 // The zero value when the container does not persist state, which renders a

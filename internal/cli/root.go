@@ -41,6 +41,7 @@ func Execute(version string) int {
 		newProviderCmd(a),
 		newWorkspaceCmd(a),
 		newContainerCmd(a),
+		newWorktreeCmd(a),
 	)
 
 	// Cobra prints usage after any error by default, which buries a one-line

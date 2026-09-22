@@ -58,7 +58,7 @@ func CommonDir(ctx context.Context, dir string) (string, error) {
 // rejects that combination before getting here.
 func Add(ctx context.Context, repo, path, branch, base string) error {
 	args := []string{"worktree", "add", "--quiet"}
-	if branchExists(ctx, repo, branch) {
+	if BranchExists(ctx, repo, branch) {
 		args = append(args, path, branch)
 	} else {
 		args = append(args, path, "-b", branch)
@@ -126,11 +126,11 @@ func List(ctx context.Context, repo string) ([]Entry, error) {
 	return entries, nil
 }
 
-// branchExists reports whether the repository already has this local branch.
+// BranchExists reports whether the repository already has this local branch.
 //
 // --verify on the full ref, not `git branch --list`: the latter prints nothing
 // and exits 0 for a branch that does not exist, so its exit code says nothing.
-func branchExists(ctx context.Context, repo, branch string) bool {
+func BranchExists(ctx context.Context, repo, branch string) bool {
 	cmd := exec.CommandContext(ctx, gitBin,
 		"rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
 	cmd.Dir = repo
