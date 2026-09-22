@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/duy0611/dev-cli/internal/xpath"
 )
 
 // TestSmokeWorktree is the only test that can prove the point of this
@@ -55,10 +57,22 @@ func TestSmokeWorktree(t *testing.T) {
 		"--repo", repo, "--branch", "feat", "--path", path,
 		"--generate", "--tools", "yq", "--no-herdr")
 
+	// dev bind-mounts the checkout at its *resolved* path (invariant 2 and the
+	// gitdir invariant both turn on this): xpath.Resolve runs after the add and
+	// stores the real directory, given a symlinked one. On macOS /var is a
+	// symlink to /private/var and t.TempDir() answers under /var, so asserting
+	// against the path as typed would cd into a directory that exists only via
+	// a symlink the container does not have — this is the same class of bug
+	// invariant 2 exists to catch, here in the test rather than in dev.
+	resolved, err := xpath.Resolve(path)
+	if err != nil {
+		t.Fatalf("resolving the checkout path: %v", err)
+	}
+
 	// The claim: git works inside. A commit made in the container is a commit
 	// the host repository can see, because the object store is one bind mount.
 	dev("container", "exec", name, "--workspace", ws, "--",
-		"sh", "-c", "cd "+path+" && echo inside > made-inside && "+
+		"sh", "-c", "cd "+resolved+" && echo inside > made-inside && "+
 			"git add made-inside && "+
 			"git -c user.email=c@example.com -c user.name=container commit -qm 'from the container'")
 
@@ -70,8 +84,12 @@ func TestSmokeWorktree(t *testing.T) {
 	// And the registration survived. `git gc --auto` runs `worktree prune`,
 	// which deletes a worktree whose backlink does not resolve — so a container
 	// missing the second bind mount would destroy this from the inside.
+	//
+	// Checked against the resolved path: git's own listing reports what it
+	// wrote to the backlink, which is the resolved directory, not the string
+	// --path was given.
 	list := gitOut(t, repo, "worktree", "list")
-	if !strings.Contains(list, path) {
+	if !strings.Contains(list, resolved) {
 		t.Errorf("the worktree registration was pruned away:\n%s", list)
 	}
 
@@ -81,7 +99,7 @@ func TestSmokeWorktree(t *testing.T) {
 		t.Errorf("worktree remove left the checkout at %s behind", path)
 	}
 	list = gitOut(t, repo, "worktree", "list")
-	if strings.Contains(list, path) {
+	if strings.Contains(list, resolved) {
 		t.Errorf("worktree remove did not deregister the checkout:\n%s", list)
 	}
 	// The branch stays: it is the work, not the scaffolding.
