@@ -477,6 +477,76 @@ func TestWorktreeRemoveUnknown(t *testing.T) {
 	}
 }
 
+// rewriteGeneratedTools re-renders the whole document from the tool list and
+// the stored row, so anything not derivable from those is destroyed by the
+// next `rebuild --tools`. That is the trap invariant 10 records for the state
+// volume, and the .git bind is a third instance of it: dropped here, the next
+// up starts a container whose git does not work, with no warning.
+func TestRebuildToolsKeepsTheWorktreeMount(t *testing.T) {
+	requireGit(t)
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	repo := initRepo(t)
+
+	if err := runWorktreeCreate(t.Context(), a, "", "feat",
+		baseOpts(repo, filepath.Join(t.TempDir(), "wt"))); err != nil {
+		t.Fatal(err)
+	}
+	if err := rewriteGeneratedTools(a, "", "feat", []string{"+node"}); err != nil {
+		t.Fatalf("rebuild --tools: %v", err)
+	}
+
+	st, err := a.store()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := st.GetContainer("ws", "feat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := st.GetWorktree("ws", "feat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(c.GeneratedConfig, w.Repo) {
+		t.Errorf("rebuild --tools dropped the repository bind:\n%s", c.GeneratedConfig)
+	}
+	if !strings.Contains(c.GeneratedConfig, `"workspaceFolder": "`+w.Path+`"`) {
+		t.Errorf("rebuild --tools dropped the checkout's host path:\n%s", c.GeneratedConfig)
+	}
+	// And the tool change actually happened, or the test proves nothing.
+	if !strings.Contains(c.GeneratedConfig, "node") {
+		t.Errorf("rebuild --tools did not add node:\n%s", c.GeneratedConfig)
+	}
+}
+
+// And none is invented for a container that never had one.
+func TestRebuildToolsInventsNoWorktreeMount(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+
+	folder := t.TempDir()
+	if err := runContainerCreate(t.Context(), a, "", "plain", folder,
+		createOpts{generate: true, noStart: true, tools: []string{"yq"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rewriteGeneratedTools(a, "", "plain", []string{"+node"}); err != nil {
+		t.Fatalf("rebuild --tools: %v", err)
+	}
+
+	st, err := a.store()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := st.GetContainer("ws", "plain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(c.GeneratedConfig, "workspaceMount") {
+		t.Errorf("a plain container grew a workspaceMount:\n%s", c.GeneratedConfig)
+	}
+}
+
 // A container that is not worktree-backed is not a worktree to remove.
 func TestWorktreeRemoveRefusesAPlainContainer(t *testing.T) {
 	requireGit(t)

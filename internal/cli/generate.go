@@ -181,12 +181,29 @@ func rewriteGeneratedTools(a *app, workspace, name string, spec []string) error 
 		return err
 	}
 
-	// Derived from the stored row, not from a flag: a rebuild must not be able
-	// to change what a container is mounted on. A folder container renders the
-	// zero Mount, which is the CLI's own bind mount.
+	// Derived from the stored rows, not from a flag: a rebuild must not be able
+	// to change what a container is mounted on. This re-renders the whole
+	// document, so any mount not rebuilt here is destroyed — the failure
+	// invariant 10 records for the state volume, and the same one for a
+	// worktree's binds.
 	var mount dcgen.Mount
-	if t.container.SourceKind == model.SourceNone {
+	switch t.container.SourceKind {
+	case model.SourceNone:
 		mount = folderlessMount(t.workspace.Name, name)
+	default:
+		// A folder container renders the zero Mount unless it is
+		// worktree-backed, which is the CLI's own bind mount either way.
+		//
+		// Not re-derived from the checkout on disk: one the operator has
+		// already deleted by hand would answer nothing, and the rebuild would
+		// then quietly produce a container whose git does not work.
+		st0, err := a.store()
+		if err != nil {
+			return err
+		}
+		if w, err := st0.GetWorktree(t.workspace.Name, name); err == nil {
+			mount = worktreeMount(w.Repo, w.Path)
+		}
 	}
 	// Derived from the stored column for the same reason, and load-bearing: this
 	// re-renders the whole document, so a state mount that lived only in the
