@@ -125,6 +125,28 @@ To see what was generated:
 dev container config show tmp
 ```
 
+`config show` answers the same question for a container whose project ships its
+own `devcontainer.json`, and there the answer is not the file on disk: `dev`
+merges its state mount in on every invocation, so the document the container is
+built from exists only for the length of one command. The path it came from goes
+to stderr and the document to stdout, so `config show NAME | jq` still receives
+JSON and nothing else.
+
+```
+❯ dev container config show api
+dev: merged from ~/code/api/.devcontainer/devcontainer.json
+{
+  "image": "mcr.microsoft.com/devcontainers/base:1-ubuntu-24.04",
+  "mounts": [
+    "source=dev-<workspace>-api-state,target=/var/dev-state,type=volume"
+  ],
+  ...
+}
+```
+
+A container created with `--no-persist-state` has no merge to show, and says so:
+what the CLI receives really is the project's file, unchanged.
+
 ### Change what a generated container installs
 
 `rebuild --tools` takes either a replacement list or `+`/`-` changes, never a
@@ -601,8 +623,9 @@ command already resolves the settings afresh. The container has to be running
 either way.
 
 **`tools`** lists the catalog, marking each entry official or community.
-**`config show`** prints the configuration `dev` generated for a container, and
-errors on one that uses the project's own.
+**`config show`** prints the configuration a container is built from: the
+generated document, or for a project-owned container the merged one, with the
+path it came from on stderr.
 
 ### Environment
 

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -197,23 +198,97 @@ func TestConfigShowPrintsTheStoredConfig(t *testing.T) {
 	}
 }
 
-// A project-owned container has no stored configuration, and printing "" would
-// look like an empty one rather than a different kind of container.
-func TestConfigShowOnAProjectOwnedContainer(t *testing.T) {
-	a, _ := newTestApp(t)
+// A project-owned container is built from the merged document, not from the
+// file on disk, and that document lives only for one invocation — so this is
+// the only way to see what the container was actually created from.
+func TestConfigShowPrintsTheMergedConfig(t *testing.T) {
+	a, out := newTestApp(t)
 	seedWorkspace(t, a)
 
 	folder := projectWithConfig(t)
 	if err := runContainerCreate(t.Context(), a, "", "owned", folder, createOpts{noStart: true}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
+	out.Reset()
 
-	err := runContainerConfigShow(a, "", "owned")
-	if err == nil {
-		t.Fatal("config show invented a configuration for a project-owned container")
+	if err := runContainerConfigShow(a, "", "owned"); err != nil {
+		t.Fatalf("config show: %v", err)
 	}
-	if !strings.Contains(err.Error(), ".devcontainer") {
-		t.Errorf("error %q does not point at the project's own config", err)
+	// The mount dev added is the whole point: it is the one thing that is in
+	// the running container and not in the file the operator committed.
+	if !strings.Contains(out.String(), "dev-ws-owned-state") {
+		t.Errorf("config show did not print the merged document:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), dcgen.StateDir) {
+		t.Errorf("merged document names no state mount:\n%s", out.String())
+	}
+}
+
+// Without state there is no merge, so what the CLI receives really is the
+// project's own file. Printing it anyway keeps the command one shape.
+func TestConfigShowPrintsTheProjectFileWhenStateIsOff(t *testing.T) {
+	a, out := newTestApp(t)
+	seedWorkspace(t, a)
+
+	folder := projectWithConfig(t)
+	opts := createOpts{noStart: true, noPersistState: true}
+	if err := runContainerCreate(t.Context(), a, "", "plain", folder, opts); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	out.Reset()
+
+	if err := runContainerConfigShow(a, "", "plain"); err != nil {
+		t.Fatalf("config show: %v", err)
+	}
+	if strings.Contains(out.String(), dcgen.StateDir) {
+		t.Errorf("config show invented a state mount for a container without one:\n%s",
+			out.String())
+	}
+	if out.String() == "" {
+		t.Error("config show printed no document at all")
+	}
+}
+
+// Stdout carries the document and nothing else, so `config show | jq` works.
+// The path that says where it came from goes to stderr.
+func TestConfigShowPrintsOnlyJSONToStdout(t *testing.T) {
+	a, out := newTestApp(t)
+	seedWorkspace(t, a)
+
+	folder := projectWithConfig(t)
+	if err := runContainerCreate(t.Context(), a, "", "owned", folder, createOpts{noStart: true}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	out.Reset()
+
+	if err := runContainerConfigShow(a, "", "owned"); err != nil {
+		t.Fatalf("config show: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("stdout is not valid JSON (%v):\n%s", err, out.String())
+	}
+}
+
+// Fatal here, unlike on stop or remove: this command exists to say what the
+// container was built from, and a file dev cannot parse has no honest answer
+// other than the error.
+func TestConfigShowReportsAnUnparseableProjectFile(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+
+	folder := t.TempDir()
+	writeProjectConfigIn(t, folder, `{"name":}`)
+	if err := runContainerCreate(t.Context(), a, "", "broken", folder, createOpts{noStart: true}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	err := runContainerConfigShow(a, "", "broken")
+	if err == nil {
+		t.Fatal("config show printed a document for a file that does not parse")
+	}
+	if !strings.Contains(err.Error(), "devcontainer.json") {
+		t.Errorf("error %q does not name the file", err)
 	}
 }
 
