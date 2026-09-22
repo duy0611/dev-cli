@@ -501,6 +501,20 @@ func runContainerRemove(ctx context.Context, a *app, workspace, name string, for
 	if err != nil {
 		return err
 	}
+
+	// Before the delete, because the cascade takes the worktree row with it and
+	// there would be nothing left to read afterwards.
+	//
+	// A warning rather than a refusal: `container remove` can perfectly well
+	// remove this container, and an operator who wants the container gone and
+	// the checkout kept has no other way to say so. What they must not have is
+	// a checkout on disk that nothing records.
+	if w, err := st.GetWorktree(t.workspace.Name, name); err == nil {
+		warnf(a, "%s was a worktree; the checkout at %s stays on disk "+
+			"(dev worktree remove %s would have taken both)",
+			name, xpath.Shorten(w.Path), name)
+	}
+
 	if err := st.DeleteContainer(t.workspace.Name, name); err != nil {
 		return err
 	}

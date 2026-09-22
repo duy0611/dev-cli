@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -567,4 +568,60 @@ func TestWorktreeRemoveRefusesAPlainContainer(t *testing.T) {
 	if got := exitCodeOf(err); got != exitNotFound {
 		t.Errorf("exit code = %d, want %d", got, exitNotFound)
 	}
+}
+
+// `container remove` on a worktree-backed container takes the container and
+// leaves the checkout, because the cascade drops the row that recorded it. A
+// warning rather than a refusal: an operator who wants the container gone and
+// the checkout kept has no other way to say so, and the warning is what stops
+// the checkout becoming an orphan nobody can explain.
+func TestContainerRemoveWarnsAboutTheCheckout(t *testing.T) {
+	requireGit(t)
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	repo := initRepo(t)
+	path := filepath.Join(t.TempDir(), "wt")
+	if err := runWorktreeCreate(t.Context(), a, "", "feat", baseOpts(repo, path)); err != nil {
+		t.Fatal(err)
+	}
+
+	warnings := captureStderr(t, func() {
+		if err := runContainerRemove(t.Context(), a, "", "feat", true); err != nil {
+			t.Fatalf("container remove: %v", err)
+		}
+	})
+
+	if !strings.Contains(warnings, path) {
+		t.Errorf("warning %q does not name the leftover checkout", warnings)
+	}
+	if !strings.Contains(warnings, "worktree remove") {
+		t.Errorf("warning %q does not name the command that cleans it up", warnings)
+	}
+	// The checkout is still there: the warning is a warning, not an action.
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("container remove deleted the checkout: %v", err)
+	}
+}
+
+// captureStderr collects what warnf writes, which goes to os.Stderr directly
+// rather than through the app's writer — it is deliberately kept out of a
+// piped list.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	defer func() { os.Stderr = old }()
+
+	fn()
+	w.Close()
+
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(r); err != nil {
+		t.Fatal(err)
+	}
+	return buf.String()
 }
