@@ -346,7 +346,3 @@ worse than none, since the rule looks handled.
 
 The hook allows a `Co-Authored-By:` naming a person. It is attribution to
 tooling that is refused, not co-authorship.
-
-## Claude Plan
-
-Keep the plan file at `.claude/plans/` so that other agent session can also see this file.
