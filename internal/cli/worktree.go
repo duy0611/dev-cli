@@ -240,14 +240,24 @@ func (a *app) createWorktreeRows(wsName, name, repo, path, herdrWS string, opts 
 		}
 		return err
 	}
-	return st.CreateWorktree(model.Worktree{
+	if err := st.CreateWorktree(model.Worktree{
 		WorkspaceName:  wsName,
 		ContainerName:  name,
 		Repo:           repo,
 		Branch:         opts.branch,
 		Path:           path,
 		HerdrWorkspace: herdrWS,
-	})
+	}); err != nil {
+		// Not one transaction, so a failure here leaves the container row
+		// behind unless it is cleaned up explicitly — deleted rather than left
+		// for the caller's checkout rollback to imply, since the checkout
+		// rollback says nothing about the database.
+		if delErr := st.DeleteContainer(wsName, name); delErr != nil {
+			warnf(a, "could not remove the container row after a failed worktree write: %v", delErr)
+		}
+		return err
+	}
+	return nil
 }
 
 // rollback removes a checkout a failed create had already made, so a command
