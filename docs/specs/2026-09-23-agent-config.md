@@ -79,7 +79,7 @@ mcp:
 # Per agent: additions to the shared lists, and what only that agent has.
 claude:
   marketplaces:
-    claude-plugins-official: github:anthropics/claude-plugins-official
+    claude-plugins-official: anthropics/claude-plugins-official
   plugins:
     - superpowers@claude-plugins-official
   skills: []
@@ -100,9 +100,15 @@ Rules:
   top-level one replaces it for that agent; that is the only override.
 - **`plugins` exists only where the agent has plugins**, and `marketplaces`
   only under `claude`. `hermes.plugins` is an unknown key.
+- **A marketplace's key is its own name**, the one `claude plugin marketplace
+  list` reports; the value is passed as-is to `claude plugin marketplace add`
+  (`owner/repo`, a git URL, a path). A key that does not match what the source
+  calls itself fails the step rather than re-adding it on every rebuild.
 - **Strict.** `version` is required and must be `1`. Unknown keys, an MCP entry
-  with both or neither of `command` and `url`, a skill with both or neither of
-  `git` and `path`, and a skill name that is not a valid directory name are all
+  with both or neither of `command` and `url`, a skill with neither `git` nor
+  `path` (with `git`, `path` is the subdirectory holding `SKILL.md`), a `path`
+  that climbs out of its repository, a local skill with no `SKILL.md`, and a
+  skill name that is not a valid directory name are all
   rejected with exit 2, naming the file and the key. A typo is caught at
   `create`, not discovered as a plugin that never arrived.
 - **A skill's name** is the last element of its `path` (for `git`, the
@@ -163,10 +169,13 @@ On `create` after `Up` succeeds, and on `rebuild` after `Rebuild` succeeds.
 Never on `start`, `up` or `exec` — the same contract as `devcontainer.json`:
 editing the file changes nothing until a rebuild.
 
-`create --no-start` cannot apply anything, because there is no running
-container to exec into. It sets `containers.agent_config_pending = 1` instead,
-and the next `start` applies the file and clears the flag. A failed apply also
-leaves the flag set, so the next `start` retries it. The flag records work `dev`
+`create` records `containers.agent_config_pending = 1` whenever the container
+has a file to apply, and `start` applies a pending declaration and clears the flag — so the
+start inside `create` applies it, and after `create --no-start`, which has no
+running container to exec into, the first later `start` does. `start-agent`
+honours the flag the same way. Every apply sets the flag before its first step
+and clears it after its last, so a failed or interrupted apply leaves it set
+and the next `start` retries it. The flag records work `dev`
 owes the container, not the container's state, so invariant 4 is untouched.
 
 ## Applying
@@ -188,25 +197,35 @@ left running for inspection.
 `internal/agent` gains one adapter per registry entry:
 
 ```go
-type Configurer interface {
-	Probe() []string
-	Steps(v agentcfg.AgentView) ([]Step, error)
+type Agent struct {
+	ID, Binary string
+	Args       []string
+	// Nil for an agent agents.yaml has no section for.
+	Configure func(v agentcfg.View) ([]Step, error)
 }
 
 type Step struct {
-	Desc  string    // "claude: install superpowers@claude-plugins-official"
+	Desc  string   // "claude: install superpowers@claude-plugins-official"
 	Cmd   []string
-	Stdin io.Reader // a local skill's tar or a merged config; nil otherwise
-	// Capture is set on a read step; its stdout feeds the next step's merge.
-	Capture bool
+	Stdin []byte   // a local skill's tar
+	// Check runs before Cmd and Done reads its stdout: true skips the step.
+	// It runs again after, and false then fails the step.
+	Check []string
+	Done  func(stdout []byte) bool
+	// File and Edit make the step a read-modify-write of one file.
+	File string
+	Edit func(current []byte) ([]byte, error)
 }
 ```
+
+The probe is `command -v <Binary>`, the check `start-agent` already makes.
 
 Steps are data, so adapters are tested without a container. Adding an agent is
 one adapter; nothing in `internal/cli` names one.
 
-- **claude** — `claude plugin marketplace add` per marketplace, skipping any
-  already listed by `claude plugin marketplace list`; `claude plugin install
+- **claude** — `claude plugin marketplace add` per marketplace, skipped when
+  `claude plugin marketplace list --json` already names it and verified by the
+  same list afterwards; `claude plugin install
   --scope user` per plugin; `claude mcp add-json --scope user NAME JSON` per
   server, preceded by `claude mcp remove --scope user NAME` so a changed
   definition replaces the old one.
@@ -220,15 +239,17 @@ one adapter; nothing in `internal/cli` names one.
   servers under `mcp_servers` by name.
 - **skills, all agents** — each skill directory under the agent's skills
   directory is replaced wholesale; directories `dev` did not declare are left
-  alone. A git skill is cloned once per apply into a temporary directory in the
-  container and copied into each agent.
+  alone. A git skill is cloned into a temporary directory in the container for
+  each agent that receives it — a shallow clone per agent is cheaper than the
+  cross-agent state sharing one would need.
 
 Every step is safe to repeat, because `rebuild` re-runs all of them over a
 state volume that already holds the previous result.
 
-The file-merging steps need the config directories, which are only fixed when
-the container persists state. Without the state volume the adapter uses the
-agent's default location (`~/.claude`, `~/.config/opencode`, `~/.hermes`).
+Every directory is named as a shell default —
+`${CLAUDE_CONFIG_DIR:-$HOME/.claude}`, `${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}`,
+`${HERMES_HOME:-$HOME/.hermes}` — so a container without the state volume gets
+each agent's default location with no branch in `dev`.
 
 ## Components
 
@@ -237,7 +258,7 @@ agent's default location (`~/.claude`, `~/.config/opencode`, `~/.hermes`).
   No exec, no cobra, no filesystem beyond reading the file and its local
   skills. Adds `go.yaml.in/yaml/v3`, decoding with `KnownFields(true)`; the
   hermes merge needs a YAML library regardless.
-- **`internal/agent`** — the `Configurer` per agent, and the opencode/hermes
+- **`internal/agent`** — `Configure` per agent, and the opencode/hermes
   merge functions.
 - **`internal/cli`** — flag handling on `create`, resolving the file, the
   apply loop over `Provider.Exec`, and the pending flag on `start`.
@@ -293,9 +314,17 @@ agent's default location (`~/.claude`, `~/.config/opencode`, `~/.hermes`).
 - Applying on `start` or on demand. A later `container sync-agents` could be
   added if rebuild turns out too heavy a way to pick up an edit.
 
-## To confirm while planning
+## Confirmed while planning
 
-1. Whether opencode installs `plugin` packages itself at startup or needs a
-   step to install them.
-2. hermes's syntax for an environment reference in `config.yaml`.
-3. Whether `claude plugin install` of an installed plugin exits 0.
+1. opencode installs the packages in `plugin` itself at startup (with Bun,
+   into its cache), so writing the name is the whole job. Its environment
+   reference is `{env:NAME}`; a stdio server is `{"type": "local", "command":
+   [argv], "environment": {}}`, a remote one `{"type": "remote", "url", "headers"}`.
+2. hermes expands `${NAME}` in `config.yaml` at load, so references pass
+   through unchanged.
+3. `claude plugin install` of an installed plugin exits 0. `claude mcp
+   add-json` fails on an existing name, hence remove-then-add. `claude plugin
+   marketplace add` of a known marketplace is undocumented, hence the list
+   check. `claude plugin install` is run without `-y`: a plugin whose
+   marketplace declares a command to run at install is refused unattended
+   rather than run, and the step's error says so.
