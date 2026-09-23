@@ -150,9 +150,11 @@ func startWith(t *testing.T, f *fakeContainer, bin []byte, agentSocket string) *
 	if err != nil {
 		t.Fatal(err)
 	}
-	go func() { _ = Host(agentSocket, pipes.Stdout, pipes.Stdin) }()
 
+	// Through pump, exactly as Start does, so these tests exercise the same
+	// goroutine that reports an unexpected exit rather than one beside it.
 	s := &Session{Socket: socket, pipes: pipes}
+	s.pump(agentSocket)
 	t.Cleanup(func() { _ = s.Close() })
 	waitForSocket(t, f.socketPath(socket))
 	return s
@@ -246,5 +248,47 @@ func TestSessionInstallIsAtomic(t *testing.T) {
 	// would eventually find one and skip a copy that never finished.
 	if _, err := os.Stat(f.socketPath(path + ".part")); err == nil {
 		t.Error("the partial file was left behind")
+	}
+}
+
+// TestSessionWarnsOnUnexpectedExit is the point of the warning: a relay that
+// dies on its own leaves an agent whose SSH_AUTH_SOCK names a socket that is
+// gone, and nothing else in the system says so until a commit refuses to sign.
+//
+// The relay is killed rather than closed, which is what an exec channel
+// collapsing looks like from here: Host's stdin reaches EOF with no Close
+// behind it.
+func TestSessionWarnsOnUnexpectedExit(t *testing.T) {
+	f := newFakeContainer(t)
+	stderr := captureStderr(t)
+	s := startWith(t, f, buildRelay(t), echoServer(t))
+
+	// Killed, not closed. Closing stdout is what makes Host's read return, and
+	// the process has to be gone first or it would go on holding the pipe.
+	if err := s.pipes.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.pipes.Wait()
+	_ = s.pipes.Stdout.Close()
+
+	waitFor(t, func() bool { return strings.Contains(stderr(), "stopped unexpectedly") },
+		"the warning was never printed")
+}
+
+// TestSessionClosePrintsNoWarning is the other half, and the reason the flag
+// exists at all: an ordinary shutdown reaches Host the same way, so without it
+// every clean session would end by telling the operator it had failed.
+func TestSessionClosePrintsNoWarning(t *testing.T) {
+	f := newFakeContainer(t)
+	stderr := captureStderr(t)
+	s := startWith(t, f, buildRelay(t), echoServer(t))
+
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	waitForGone(t, f.socketPath(s.Socket))
+
+	if got := stderr(); strings.Contains(got, "stopped unexpectedly") {
+		t.Errorf("a clean close warned: %q", got)
 	}
 }

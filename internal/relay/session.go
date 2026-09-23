@@ -7,8 +7,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/duy0611/dev-cli/internal/relaybin"
@@ -48,6 +50,13 @@ type Session struct {
 	pipes    *Pipes
 	closeOne sync.Once
 	closeErr error
+
+	// closing records that Close was called, so the goroutine running Host can
+	// tell an ordinary shutdown from the exec channel collapsing underneath it.
+	// Set before Close touches the pipes, or the race would be the wrong way
+	// round: Host can return before Close has finished, and a warning would be
+	// printed for a session the operator ended themselves.
+	closing atomic.Bool
 }
 
 // Start installs the relay into the container and runs it, then pumps agent
@@ -89,19 +98,58 @@ func Start(ctx context.Context, run RunFunc, start StartFunc, agentSocket string
 		return nil, fmt.Errorf("starting the relay: %w", err)
 	}
 
-	// The host half runs until the container half's stdout closes, which
-	// happens when the relay exits or the session is closed.
-	go func() {
-		_ = Host(agentSocket, pipes.Stdout, pipes.Stdin)
-	}()
+	s := &Session{Socket: socket, pipes: pipes}
+	s.pump(agentSocket)
+	return s, nil
+}
 
-	return &Session{Socket: socket, pipes: pipes}, nil
+// pump runs the host half in the background until the exec channel ends.
+//
+// A method rather than an inline goroutine so that the warning and the thing
+// that triggers it cannot drift apart: every path that starts a session goes
+// through here, the tests included.
+func (s *Session) pump(agentSocket string) {
+	go func() {
+		// Runs until the container half's stdout closes, which happens when the
+		// relay exits or the session is closed.
+		s.warnIfUnexpected(Host(agentSocket, s.pipes.Stdout, s.pipes.Stdin))
+	}()
+}
+
+// warnIfUnexpected reports a relay that stopped without being told to.
+//
+// The failure this exists for is silent by construction: the relay and the
+// agent are siblings, so the relay dying disturbs nothing the operator can see.
+// SSH_AUTH_SOCK was baked into the agent's environment at exec time and
+// commit.gpgsign with it, so the first sign of trouble is a commit refusing to
+// sign, often an hour later and nowhere near the cause.
+//
+// Straight to os.Stderr because there is no caller left to hand an error to —
+// this runs in a goroutine the command has already moved past.
+func (s *Session) warnIfUnexpected(err error) {
+	if s.closing.Load() {
+		return // an ordinary shutdown, which is not worth a word
+	}
+	// Host returns nil on a clean EOF, which is exactly the shape this failure
+	// takes: the channel collapsed and the relay tidied up after itself. So the
+	// warning is not conditional on err being non-nil; only its detail is.
+	detail := ""
+	if err != nil {
+		detail = ": " + err.Error()
+	}
+	fmt.Fprintf(os.Stderr,
+		"dev: the ssh agent relay stopped unexpectedly%s; commits will not sign\n", detail)
 }
 
 // Close stops the relay. Safe to call more than once, so a caller can defer it
 // and still close explicitly on the happy path.
 func (s *Session) Close() error {
 	s.closeOne.Do(func() {
+		// Before anything is closed, not after: closing stdin is what ends the
+		// relay, so Host can return and check this flag while Close is still
+		// in its grace period.
+		s.closing.Store(true)
+
 		// Closing stdin is the polite stop: the relay's read loop ends, it
 		// removes its own socket, and it exits. Give that a moment to happen
 		// before resorting to a kill — a killed relay cannot run its own
