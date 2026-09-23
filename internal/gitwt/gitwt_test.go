@@ -19,10 +19,27 @@ func requireGit(t *testing.T) {
 	}
 }
 
+// tempDir is t.TempDir() with the symlinks taken out.
+//
+// Git reports paths as it resolved them — it chdirs and asks getcwd, so both
+// `rev-parse --git-common-dir` and `worktree list` answer with a symlink-free
+// path. On macOS t.TempDir() sits under /var, which is a symlink to
+// /private/var, so an expectation built from the raw temp path disagrees with
+// git's answer about the same directory. This is the same rule production
+// follows through xpath.Resolve (invariant 2), applied to the fixtures.
+func tempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolving the temp directory: %v", err)
+	}
+	return dir
+}
+
 // initRepo builds a repository with one commit and returns its root.
 func initRepo(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
+	dir := tempDir(t)
 	run(t, dir, "init", "-q", ".")
 	// Identity is set per-repo: the host running the test may have none, and
 	// `git commit` refuses without one.
@@ -84,7 +101,7 @@ func TestCommonDirResolvesUpward(t *testing.T) {
 func TestCommonDirFromInsideAWorktree(t *testing.T) {
 	requireGit(t)
 	repo := initRepo(t)
-	wt := filepath.Join(t.TempDir(), "wt")
+	wt := filepath.Join(tempDir(t), "wt")
 	run(t, repo, "worktree", "add", "-q", wt, "-b", "feat")
 
 	got, err := CommonDir(t.Context(), wt)
@@ -101,7 +118,7 @@ func TestCommonDirFromInsideAWorktree(t *testing.T) {
 // than as <repo>/.git.
 func TestCommonDirOnABareRepository(t *testing.T) {
 	requireGit(t)
-	dir := t.TempDir()
+	dir := tempDir(t)
 	bare := filepath.Join(dir, "app.git")
 	run(t, dir, "init", "-q", "--bare", bare)
 
@@ -117,7 +134,7 @@ func TestCommonDirOnABareRepository(t *testing.T) {
 func TestCommonDirOutsideARepository(t *testing.T) {
 	requireGit(t)
 
-	_, err := CommonDir(t.Context(), t.TempDir())
+	_, err := CommonDir(t.Context(), tempDir(t))
 	if !errors.Is(err, ErrNotRepo) {
 		t.Errorf("err = %v, want ErrNotRepo", err)
 	}
@@ -126,7 +143,7 @@ func TestCommonDirOutsideARepository(t *testing.T) {
 func TestAddCreatesANewBranch(t *testing.T) {
 	requireGit(t)
 	repo := initRepo(t)
-	path := filepath.Join(t.TempDir(), "wt")
+	path := filepath.Join(tempDir(t), "wt")
 
 	if err := Add(t.Context(), repo, path, "feat", ""); err != nil {
 		t.Fatalf("Add: %v", err)
@@ -146,7 +163,7 @@ func TestAddChecksOutAnExistingBranch(t *testing.T) {
 	requireGit(t)
 	repo := initRepo(t)
 	run(t, repo, "branch", "existing")
-	path := filepath.Join(t.TempDir(), "wt")
+	path := filepath.Join(tempDir(t), "wt")
 
 	if err := Add(t.Context(), repo, path, "existing", ""); err != nil {
 		t.Fatalf("Add: %v", err)
@@ -157,9 +174,9 @@ func TestAddChecksOutAnExistingBranch(t *testing.T) {
 // there, which is the right answer for a repository just initialised.
 func TestAddOnARepositoryWithNoCommits(t *testing.T) {
 	requireGit(t)
-	repo := t.TempDir()
+	repo := tempDir(t)
 	run(t, repo, "init", "-q", ".")
-	path := filepath.Join(t.TempDir(), "wt")
+	path := filepath.Join(tempDir(t), "wt")
 
 	if err := Add(t.Context(), repo, path, "feat", ""); err != nil {
 		t.Errorf("Add on an empty repository: %v", err)
@@ -169,7 +186,7 @@ func TestAddOnARepositoryWithNoCommits(t *testing.T) {
 func TestRemoveRefusesADirtyCheckout(t *testing.T) {
 	requireGit(t)
 	repo := initRepo(t)
-	path := filepath.Join(t.TempDir(), "wt")
+	path := filepath.Join(tempDir(t), "wt")
 	if err := Add(t.Context(), repo, path, "feat", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +213,7 @@ func TestRemoveRefusesADirtyCheckout(t *testing.T) {
 func TestRemoveKeepsTheBranch(t *testing.T) {
 	requireGit(t)
 	repo := initRepo(t)
-	path := filepath.Join(t.TempDir(), "wt")
+	path := filepath.Join(tempDir(t), "wt")
 	if err := Add(t.Context(), repo, path, "feat", ""); err != nil {
 		t.Fatal(err)
 	}
