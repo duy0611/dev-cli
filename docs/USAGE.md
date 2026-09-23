@@ -483,6 +483,15 @@ lists nothing, the agent on your machine is empty — `ssh-add` there first.
 The relay lives for the length of a `dev` command, so a shell started with
 `docker exec` or `kubectl exec` has no agent to reach. Use `dev container shell`.
 
+**`the ssh agent relay stopped unexpectedly; commits will not sign`** — the
+relay died while the command that started it was still running, so anything the
+container signs from here on fails. It is not recoverable in place: the agent
+was handed its `SSH_AUTH_SOCK` when it started and a new relay would listen on a
+different path, so restart the `dev` command. Reported when it happens rather
+than left for the next commit to discover, because the failure is otherwise
+silent — the relay and your agent are siblings, and neither notices the other
+going away.
+
 **My commits arrive unverified** — signing uses the agent's *first* key, and an
 agent holding several gives no indication which you meant. Check with
 `ssh-add -L | head -1`; if that is not the key your forge knows, reorder your
