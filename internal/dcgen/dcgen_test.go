@@ -375,3 +375,114 @@ func TestCodexRoundTrips(t *testing.T) {
 		t.Errorf("ToolsOf = %v, want [codex]", got)
 	}
 }
+
+// A worktree container names the checkout as its workspace at the host path,
+// and bind-mounts git's common directory at the identical path beside it.
+//
+// The identical path is the whole trick: the checkout's .git file holds an
+// absolute `gitdir:` pointing into that directory, and the repository holds an
+// absolute backlink to the checkout. Both are host paths, and `git gc --auto`
+// prunes the worktree's registration when the backlink does not resolve — from
+// inside the container, silently.
+func TestRenderWorktreeMounts(t *testing.T) {
+	got, err := Render("feat", nil, Mount{
+		Host: "/home/u/wt/feat",
+		Bind: "/home/u/src/app/.git",
+	}, State{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	var doc struct {
+		WorkspaceFolder string   `json:"workspaceFolder"`
+		WorkspaceMount  string   `json:"workspaceMount"`
+		Mounts          []string `json:"mounts"`
+	}
+	if err := json.Unmarshal([]byte(got), &doc); err != nil {
+		t.Fatalf("unmarshalling the rendered document: %v", err)
+	}
+
+	if doc.WorkspaceFolder != "/home/u/wt/feat" {
+		t.Errorf("workspaceFolder = %q, want the checkout's host path", doc.WorkspaceFolder)
+	}
+	wantWS := "source=/home/u/wt/feat,target=/home/u/wt/feat,type=bind"
+	if doc.WorkspaceMount != wantWS {
+		t.Errorf("workspaceMount = %q, want %q", doc.WorkspaceMount, wantWS)
+	}
+	wantGit := "source=/home/u/src/app/.git,target=/home/u/src/app/.git,type=bind"
+	if !slices.Contains(doc.Mounts, wantGit) {
+		t.Errorf("mounts = %v, want it to hold %q", doc.Mounts, wantGit)
+	}
+}
+
+// Both mounts at once, no target repeated: docker refuses the whole run with
+// "duplicate mount destination" if one arrives twice.
+func TestRenderWorktreeWithState(t *testing.T) {
+	got, err := Render("feat", nil, Mount{
+		Host: "/home/u/wt/feat",
+		Bind: "/home/u/src/app/.git",
+	}, State{Volume: "dev-ws-feat-state"})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	var doc struct {
+		Mounts            []string `json:"mounts"`
+		PostCreateCommand string   `json:"postCreateCommand"`
+	}
+	if err := json.Unmarshal([]byte(got), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Mounts) != 2 {
+		t.Fatalf("mounts = %v, want two entries", doc.Mounts)
+	}
+	seen := map[string]bool{}
+	for _, m := range doc.Mounts {
+		_, target, _ := strings.Cut(m, "target=")
+		target, _, _ = strings.Cut(target, ",")
+		if seen[target] {
+			t.Errorf("mounts repeat the target %q; docker refuses that run", target)
+		}
+		seen[target] = true
+	}
+	// The state volume is chowned and the bind mounts are not: the devcontainer
+	// CLI UID-remaps a bind mount to the host user already, and a recursive
+	// chown over a repository would be slow and pointless.
+	if !strings.Contains(doc.PostCreateCommand, StateDir) {
+		t.Errorf("postCreateCommand %q does not chown the state volume", doc.PostCreateCommand)
+	}
+	if strings.Contains(doc.PostCreateCommand, "/home/u/wt/feat") {
+		t.Errorf("postCreateCommand %q chowns a bind mount", doc.PostCreateCommand)
+	}
+}
+
+// A folderless container is unchanged by any of this.
+func TestRenderFolderlessIsUnchanged(t *testing.T) {
+	got, err := Render("scratch", nil,
+		Mount{Volume: "dev-ws-scratch", Folder: "/workspaces/scratch"}, State{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if !strings.Contains(got, "source=dev-ws-scratch,target=/workspaces/scratch,type=volume") {
+		t.Errorf("rendered document lost the workspace volume:\n%s", got)
+	}
+}
+
+// Byte-stable output is what makes the stored copy comparable and lets
+// `rebuild --tools` tell a real change from a re-render.
+func TestRenderWorktreeIsStable(t *testing.T) {
+	m := Mount{Host: "/home/u/wt/feat", Bind: "/home/u/src/app/.git"}
+	first, err := Render("feat", []string{"yq"}, m, State{Volume: "v"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 5 {
+		again, err := Render("feat", []string{"yq"}, m, State{Volume: "v"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if again != first {
+			t.Fatal("Render is not byte-stable across calls")
+		}
+	}
+}

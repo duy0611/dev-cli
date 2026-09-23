@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -169,5 +170,64 @@ VALUES ('legacy', 'ws', 'folder', '/projects/legacy', '', '{}', '2026-09-01T00:0
 	}
 	if c.GeneratedConfig != "{}" {
 		t.Errorf("generated_config = %q, want the value the row already had", c.GeneratedConfig)
+	}
+}
+
+// TestMigrationAddsWorktrees covers upgrading a database created before the
+// worktrees table existed.
+//
+// The cascade is the part worth testing across a migration: a FOREIGN KEY
+// declared in a table created later still has to fire, and SQLite only honours
+// it with PRAGMA foreign_keys = ON, which Open sets.
+func TestMigrationAddsWorktrees(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dev.db")
+
+	// The schema as it stood after 0004, written out rather than replayed from
+	// the embedded files: the point is to start from the schema as it was.
+	pre := `
+CREATE TABLE providers (
+  name TEXT PRIMARY KEY, kind TEXT NOT NULL,
+  config TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL
+);
+CREATE TABLE workspaces (
+  name TEXT PRIMARY KEY,
+  provider_name TEXT NOT NULL REFERENCES providers(name),
+  ssh_forward INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+);
+CREATE TABLE workspace_settings (
+  workspace_name TEXT NOT NULL REFERENCES workspaces(name) ON DELETE CASCADE,
+  key TEXT NOT NULL, spec TEXT NOT NULL,
+  PRIMARY KEY (workspace_name, key)
+);
+CREATE TABLE containers (
+  name TEXT NOT NULL,
+  workspace_name TEXT NOT NULL REFERENCES workspaces(name) ON DELETE CASCADE,
+  source_kind TEXT NOT NULL, source TEXT NOT NULL, config_path TEXT NOT NULL,
+  generated_config TEXT NOT NULL DEFAULT '',
+  persist_state INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (workspace_name, name)
+);
+CREATE TABLE app_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);`
+
+	seedRaw(t, path, pre,
+		"0001_init.sql", "0002_generated_config.sql",
+		"0003_drop_gpg_forward.sql", "0004_persist_state.sql")
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+
+	seedWorktreeContainer(t, s)
+	if err := s.CreateWorktree(testWorktree()); err != nil {
+		t.Fatalf("CreateWorktree after migrating: %v", err)
+	}
+	if err := s.DeleteContainer("ws", "feat"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetWorktree("ws", "feat"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("the cascade did not fire after migrating: %v", err)
 	}
 }

@@ -230,3 +230,90 @@ func TestMaterialiseRereadsTheProjectConfig(t *testing.T) {
 	}
 	_ = first
 }
+
+// A project-owned worktree container gets both of a worktree's bind mounts
+// merged in, the same way the state mount is: dev never writes into a
+// project's own devcontainer.json (invariant 9), so there is no generated
+// document to name them in.
+func TestMaterialiseBuildsAWorktreeOverride(t *testing.T) {
+	path := writeProjectConfig(t, `{"name":"demo"}`)
+	c := projectContainer(path)
+	c.PersistState = false
+	c.WorktreeRepo = "/home/u/src/app/.git"
+
+	got, cleanup, err := materialise(c, true)
+	if err != nil {
+		t.Fatalf("materialise: %v", err)
+	}
+	defer cleanup()
+
+	if got.OverrideConfigPath == "" {
+		t.Fatal("materialise built no override for a worktree container")
+	}
+	body, err := os.ReadFile(got.OverrideConfigPath)
+	if err != nil {
+		t.Fatalf("reading the override: %v", err)
+	}
+	for _, want := range []string{c.WorktreeRepo, c.Source} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("override does not bind-mount %s: %s", want, body)
+		}
+	}
+}
+
+// A worktree container that also persists state gets all three bind mounts in
+// one document, with no target repeated — docker refuses the whole run with
+// "duplicate mount destination" otherwise.
+func TestMaterialiseWorktreeWithStateGetsBothMerges(t *testing.T) {
+	path := writeProjectConfig(t, `{"name":"demo"}`)
+	c := projectContainer(path)
+	c.WorktreeRepo = "/home/u/src/app/.git"
+
+	got, cleanup, err := materialise(c, true)
+	if err != nil {
+		t.Fatalf("materialise: %v", err)
+	}
+	defer cleanup()
+
+	body, err := os.ReadFile(got.OverrideConfigPath)
+	if err != nil {
+		t.Fatalf("reading the override: %v", err)
+	}
+	var doc struct {
+		Mounts []string `json:"mounts"`
+	}
+	if err := json.Unmarshal(body, &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(doc.Mounts) != 3 {
+		t.Fatalf("mounts = %v, want 3 entries", doc.Mounts)
+	}
+	seen := map[string]bool{}
+	for _, m := range doc.Mounts {
+		_, target, _ := strings.Cut(m, "target=")
+		target, _, _ = strings.Cut(target, ",")
+		if seen[target] {
+			t.Errorf("mounts repeat the target %q; docker refuses that run", target)
+		}
+		seen[target] = true
+	}
+}
+
+// A generated document already names both mounts, so no override is built for
+// one — the same rule the state mount follows.
+func TestMaterialiseBuildsNoWorktreeOverrideForAGeneratedContainer(t *testing.T) {
+	c := projectContainer("")
+	c.GeneratedConfig = `{"name":"demo"}`
+	c.WorktreeRepo = "/home/u/src/app/.git"
+
+	got, cleanup, err := materialise(c, true)
+	if err != nil {
+		t.Fatalf("materialise: %v", err)
+	}
+	defer cleanup()
+
+	if got.OverrideConfigPath != "" {
+		t.Errorf("OverrideConfigPath = %q, want empty for a generated container",
+			got.OverrideConfigPath)
+	}
+}

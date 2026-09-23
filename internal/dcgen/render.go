@@ -60,6 +60,17 @@ type Mount struct {
 	Volume string
 	// Folder is where the volume appears inside the container.
 	Folder string
+	// Host is a host directory to mount as the workspace at its own path,
+	// rather than at the CLI's /workspaces/<basename>. Set for a worktree
+	// checkout, whose registration in the repository is an absolute host path:
+	// mounted anywhere else, `git gc --auto` inside the container prunes the
+	// worktree away. Mutually exclusive with Volume.
+	Host string
+	// Bind is a host directory to mount at the identical path in the
+	// container, beside the workspace. Set to git's common directory for a
+	// worktree, whose .git file holds `gitdir: <common>/worktrees/<name>` —
+	// an absolute host path that resolves only if the directory is there.
+	Bind string
 }
 
 // State says whether a container keeps its agents' configuration on a volume.
@@ -85,33 +96,57 @@ func Render(name string, toolIDs []string, mount Mount, state State) (string, er
 		// will be sitting in.
 		"remoteUser": "vscode",
 	}
-	// Collected rather than assigned: postCreateCommand is a single string, and
-	// a container that is both folderless and state-persisting needs to chown
-	// two directories. Assigning twice would silently keep only the last.
-	var postCreate []string
+	// Collected rather than assigned. postCreateCommand is a single string and
+	// mounts is a single array, so a container needing two of either would
+	// silently keep only the last if each branch assigned directly.
+	var (
+		postCreate []string
+		mounts     []string
+	)
 
-	if mount.Volume != "" {
+	switch {
+	case mount.Volume != "":
 		// Both, never one. workspaceMount alone leaves the CLI deriving the
 		// in-container path from the host directory's basename, which for a
 		// folderless container is a temporary directory with a different name
 		// every invocation.
 		doc["workspaceFolder"] = mount.Folder
 		doc["workspaceMount"] = fmt.Sprintf("source=%s,target=%s,type=volume", mount.Volume, mount.Folder)
+		// A volume is created root-owned and, unlike a bind mount, gets no UID
+		// remapping from the CLI, so the remote user's first write fails.
 		postCreate = append(postCreate, chown(mount.Folder))
+	case mount.Host != "":
+		// The same path on both sides. Left to itself the CLI would mount this
+		// at /workspaces/<basename>, and the repository's backlink to this
+		// checkout is an absolute host path — `git worktree prune`, which
+		// `git gc --auto` runs, deletes a registration whose backlink does not
+		// resolve. No chown: the CLI UID-remaps a bind mount already.
+		doc["workspaceFolder"] = mount.Host
+		doc["workspaceMount"] = fmt.Sprintf("source=%s,target=%s,type=bind", mount.Host, mount.Host)
+	}
+
+	if mount.Bind != "" {
+		// Identical path again, and for the matching half of the same problem:
+		// the checkout's .git file points here with an absolute host path.
+		mounts = append(mounts, fmt.Sprintf("source=%s,target=%s,type=bind", mount.Bind, mount.Bind))
 	}
 
 	if state.Volume != "" {
 		// A volume rather than a bind mount, and so root-owned on creation for
-		// the same reason the workspace volume is: the chown below is what makes
-		// the remote user's first write succeed.
-		doc["mounts"] = []string{
-			fmt.Sprintf("source=%s,target=%s,type=volume", state.Volume, StateDir),
-		}
+		// the same reason the workspace volume is: the chown below is what
+		// makes the remote user's first write succeed.
+		mounts = append(mounts, fmt.Sprintf("source=%s,target=%s,type=volume", state.Volume, StateDir))
 		// A map, so encoding/json sorts the keys and the output stays stable.
 		doc["containerEnv"] = StateEnv()
 		postCreate = append(postCreate, chown(StateDir))
 	}
 
+	// Appended in a fixed order and never sorted: the order is already
+	// deterministic, and the byte-stability test that makes the stored copy
+	// comparable depends on it staying that way.
+	if len(mounts) > 0 {
+		doc["mounts"] = mounts
+	}
 	if len(postCreate) > 0 {
 		// Joined with && rather than ; so that a failure stops there instead of
 		// being hidden by the next command's success.

@@ -85,6 +85,11 @@ func (a *app) resolve(workspace, name string) (*target, error) {
 		return nil, err
 	}
 
+	// Set before materialise, which is the one place a project-owned worktree
+	// container's two bind mounts get merged in. A lookup miss means the
+	// container is not worktree-backed, which is true of most containers.
+	c.WorktreeRepo = a.worktreeRepo(wsName, name)
+
 	// Done here rather than in each command: every provider call needs a
 	// container whose ConfigPath a child process can open, and a command that
 	// forgot would fail only for generated containers.
@@ -155,8 +160,9 @@ func materialise(c model.Container, overrides bool) (model.Container, func(), er
 	return c, cleanup, nil
 }
 
-// overlayProjectConfig merges dev's state mount into a project's own
-// devcontainer.json for the length of one invocation.
+// overlayProjectConfig merges dev's state mount, and a worktree's bind mounts
+// when the container is one, into a project's own devcontainer.json for the
+// length of one invocation.
 //
 // Per invocation rather than stored: a project-owned container picks up edits
 // to its own devcontainer.json today because the CLI reads the live file, and a
@@ -165,24 +171,38 @@ func materialise(c model.Container, overrides bool) (model.Container, func(), er
 // GeneratedConfig is the wrong home for a second reason: rewriteGeneratedTools
 // re-renders it from the tool list and would destroy a project-derived copy.
 //
-// Nothing is written for a container that does not persist state, has no config
-// of its own, or runs on a provider that ignores a document's mounts.
+// Nothing is written for a container that neither persists state nor is
+// worktree-backed, has no config of its own, or runs on a provider that
+// ignores a document's mounts.
 func overlayProjectConfig(c model.Container, overrides bool) (model.Container, func(), error) {
-	if !overrides || !c.PersistState || c.ConfigPath == "" {
+	needsWorktree := c.WorktreeRepo != ""
+	if !overrides || c.ConfigPath == "" || (!c.PersistState && !needsWorktree) {
 		return c, func() {}, nil
 	}
 
-	raw, err := os.ReadFile(c.ConfigPath)
+	merged, err := os.ReadFile(c.ConfigPath)
 	if err != nil {
 		return c, func() {}, &overlayError{fmt.Errorf("reading %s: %w", c.ConfigPath, err)}
 	}
-	// The same helper the generated document uses, so the volume has one
-	// spelling across create, up and remove.
-	merged, err := dcgen.Overlay(raw, dcgen.State{
-		Volume: local.StateVolumeName(c.WorkspaceName, c.Name),
-	})
-	if err != nil {
-		return c, func() {}, &overlayError{fmt.Errorf("merging %s: %w", c.ConfigPath, err)}
+
+	// Applied before the state mount so both end up in one document: a
+	// worktree container that also persists state needs all three bind mounts,
+	// and each merge round-trips whatever the previous one produced.
+	if needsWorktree {
+		merged, err = dcgen.OverlayWorktree(merged, c.WorktreeRepo, c.Source)
+		if err != nil {
+			return c, func() {}, &overlayError{fmt.Errorf("merging %s: %w", c.ConfigPath, err)}
+		}
+	}
+	if c.PersistState {
+		// The same helper the generated document uses, so the volume has one
+		// spelling across create, up and remove.
+		merged, err = dcgen.Overlay(merged, dcgen.State{
+			Volume: local.StateVolumeName(c.WorkspaceName, c.Name),
+		})
+		if err != nil {
+			return c, func() {}, &overlayError{fmt.Errorf("merging %s: %w", c.ConfigPath, err)}
+		}
 	}
 
 	dir, err := os.MkdirTemp("", "dev-override-")
@@ -277,4 +297,21 @@ func (a *app) requireRunning(ctx context.Context, t *target) error {
 			t.container.Name, t.container.Name)
 	}
 	return nil
+}
+
+// worktreeRepo returns the git common directory a container's checkout was
+// created against, or "" when it is not worktree-backed.
+//
+// A lookup miss is not an error: most containers are not worktree-backed, and
+// "" is materialise's signal to skip the worktree merge entirely.
+func (a *app) worktreeRepo(workspace, container string) string {
+	st, err := a.store()
+	if err != nil {
+		return ""
+	}
+	w, err := st.GetWorktree(workspace, container)
+	if err != nil {
+		return ""
+	}
+	return w.Repo
 }

@@ -68,6 +68,53 @@ To get a shell instead:
 dev container shell api
 ```
 
+### Work a branch in its own checkout
+
+A worktree gives a branch its own directory, so an agent can work on it without
+disturbing what you have open. `dev worktree` makes the checkout and the
+container together, and removes them together.
+
+```
+❯ dev worktree create fix-header --branch fix-header --path ~/wt/fix-header --generate
+worktree fix-header on branch fix-header at ~/wt/fix-header
+container fix-header is running
+```
+
+Run it from inside the repository, or name one with `--repo`. `--path` has no
+default: nothing appears on your disk in a place you did not choose.
+
+git works inside the container. A worktree's `.git` is a file pointing at an
+absolute path in the repository, so `dev` bind-mounts the repository at that
+same path — commits you make inside are commits the repository can see, sharing
+one object store.
+
+```
+❯ dev container start-agent fix-header
+```
+
+When the branch is done:
+
+```
+❯ dev worktree remove fix-header
+worktree fix-header removed; branch fix-header kept
+```
+
+The branch stays. git refuses to remove a checkout with uncommitted work in it,
+and so does this — pass `--force` when you mean it.
+
+```
+❯ dev worktree list
+WORKSPACE  NAME        BRANCH      CHECKOUT  PATH
+default    fix-header  fix-header  ok        ~/wt/fix-header
+```
+
+`CHECKOUT` is read from git every time. `gone` means the checkout was removed
+outside `dev`; `dev worktree remove` still cleans up the container and the
+record.
+
+Local providers only. A pod has no host bind mounts, so the paths a worktree
+depends on cannot resolve there.
+
 ### A scratch sandbox with no project
 
 No repository, no host directory — somewhere to let an agent clone, scaffold or
@@ -626,6 +673,62 @@ either way.
 **`config show`** prints the configuration a container is built from: the
 generated document, or for a project-owned container the merged one, with the
 path it came from on stderr.
+
+### worktree
+
+```
+dev worktree create NAME --branch B --path P [--repo R] [--base REF]
+                         [--generate] [--tools LIST] [--no-persist-state]
+                         [--no-start] [--no-herdr] [--workspace W]
+dev worktree list [--all] [--workspace W]
+dev worktree remove NAME [--force] [--workspace W]
+```
+
+`NAME` names both the checkout's record and the container: one name, so there
+is nothing extra to remember when the two are removed together.
+
+**`create`**
+
+| Flag | Meaning |
+|---|---|
+| `--repo` | repository to add the worktree to (default: the one holding the working directory) |
+| `--branch` | branch to check out or create |
+| `--path` | where to create the checkout |
+| `--base` | start point for a new branch |
+| `--no-herdr` | do not register the checkout with Herdr |
+| `--no-start` | record the container without starting it |
+| `--generate` | generate a base Ubuntu configuration when the checkout ships none |
+| `--tools` | comma-separated tools to install in a generated container (see: dev container tools) |
+| `--no-persist-state` | do not give the container a volume for its agents' configuration |
+
+`--branch` and `--path` are required; `--path` has no default, so nothing
+appears on disk somewhere you did not choose. `--base` only has an effect when
+the branch does not already exist — passing it for one that does is a usage
+error, not a silent no-op.
+
+Local providers only: a workspace on the k8s provider is refused, since a pod
+has no host bind mounts and the two absolute paths a worktree depends on
+cannot resolve there.
+
+A checkout of a repository that ships its own `.devcontainer` keeps it
+untouched — `dev` never writes into a project's folder — and its bind mounts
+are merged into the document at invocation time instead, the same way the
+agent-state mount is for any other project-owned container.
+
+**`list`** reads the checkouts git still knows about, live, every time. The
+CHECKOUT column reads `ok` or `gone`; `gone` means the checkout was removed
+outside `dev`, and `dev worktree remove` still cleans up the container and the
+record either way.
+
+**`remove`** takes the container from the engine first, then asks git to
+remove the checkout, then drops the record. git refuses a checkout holding
+modified or untracked files; that refusal leaves the record intact so the
+command is retryable, and `--force` passes through to git. The branch is never
+deleted — the checkout is scaffolding, the branch is the work.
+
+`dev container remove` on a worktree-backed container still works: it removes
+the container and warns that the checkout at its path was left behind, naming
+`dev worktree remove` as what would have taken both.
 
 ### Environment
 
