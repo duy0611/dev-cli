@@ -63,6 +63,15 @@ func skillSteps(agentID, dir string, skills []agentcfg.Skill) []Step {
 // clone is cheap, and sharing one across agents would need state carried
 // between steps that are otherwise independent.
 //
+// That directory is a hidden one inside the skills directory, never $TMPDIR.
+// Under SELinux a file keeps its label across a rename, and /tmp is labelled
+// with the container's own MCS categories while the state volume is not: a
+// skill staged in /tmp and moved into place is readable by that container
+// alone, so once a rebuild gives the container new categories the next apply
+// cannot even remove it. Staged beside its target, every file is created on
+// the volume and labelled as the volume is, and the final mv stays a rename
+// within one filesystem.
+//
 // The repository is third-party content, so each skill directory is resolved
 // with realpath and has to land inside the clone: a path that is, or passes
 // through, a symlink out of it would otherwise install a link to anywhere, and
@@ -81,7 +90,8 @@ func gitSkillStep(agentID, dir, git, ref string, skills []agentcfg.Skill) Step {
 	if ref != "" {
 		branch = ` --branch "$2"`
 	}
-	script := `set -e; t=$(mktemp -d); trap 'rm -rf "$t"' EXIT; ` +
+	script := `set -e; d=` + dir + `; mkdir -p "$d"; ` +
+		`t=$(mktemp -d "$d/.dev-stage.XXXXXX"); trap 'rm -rf "$t"' EXIT; ` +
 		`git clone -q --depth 1` + branch + ` -- "$1" "$t/r"; ` +
 		`u=$1; shift 2; r=$(realpath "$t/r"); mkdir "$t/s"; ns=; ` +
 		`while [ $# -gt 0 ]; do n=$1; p=$2; shift 2; ` +
@@ -90,7 +100,6 @@ func gitSkillStep(agentID, dir, git, ref string, skills []agentcfg.Skill) Step {
 		`[ ! -L "$t/r/$p" ] && [ -d "$s" ] && [ -f "$s/SKILL.md" ] && [ ! -L "$s/SKILL.md" ] || ` +
 		`{ echo "no SKILL.md at $p in $u" >&2; exit 1; }; ` +
 		`cp -RP "$s" "$t/s/$n"; rm -rf "$t/s/$n/.git"; ns="$ns $n"; done; ` +
-		`d=` + dir + `; mkdir -p "$d"; ` +
 		`for n in $ns; do rm -rf "$d/$n"; mv "$t/s/$n" "$d/$n"; done`
 
 	args := []string{"sh", "-c", script, "sh", git, ref}

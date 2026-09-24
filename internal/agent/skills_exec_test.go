@@ -147,6 +147,37 @@ func TestGitSkillsFromOneRepository(t *testing.T) {
 	}
 }
 
+// Staging happens beside the skills, never in $TMPDIR. Under SELinux a file
+// keeps its label across a move, and /tmp carries the container's own MCS
+// categories: a skill staged there and moved onto the state volume is readable
+// only by that container, so after a rebuild the next apply cannot remove it.
+// An unusable TMPDIR stands in for the label, which a test cannot set.
+func TestAGitSkillIsNotStagedInTMPDIR(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, "good"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "good", "SKILL.md"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitRepo(t, repo)
+
+	skills := t.TempDir()
+	steps := skillSteps("claude", skills,
+		[]agentcfg.Skill{{Name: "good", Git: "file://" + repo, Path: "good"}})
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
+	if err := runLocally(t, steps[0]); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	entries, _ := os.ReadDir(skills)
+	if len(entries) != 1 || entries[0].Name() != "good" {
+		t.Errorf("skills directory holds %v, want only good", entries)
+	}
+}
+
 // The same escape through a directory above the skill: path a/b with a -> /.
 func TestAGitSkillBehindASymlinkedDirectoryIsRefused(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
