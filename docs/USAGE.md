@@ -413,6 +413,9 @@ first `start` applies it.
   recreated. Things you added by hand are left alone.
 - **`dev` only reads the file.** It never writes into the project.
 
+[`docs/agents.sample.yaml`](agents.sample.yaml) lists every key the file
+accepts, with a comment on each; copy it and delete what you do not need.
+
 `--agent-config PATH` applies another file instead — one in your dotfiles, say,
 which also gives a `--no-folder` container something to apply — and
 `--no-agent-config` applies none. The choice is fixed at create, so `rebuild`

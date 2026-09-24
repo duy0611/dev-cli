@@ -254,3 +254,17 @@ func TestRewriteRefsLeavesOtherDollarsAlone(t *testing.T) {
 		}
 	}
 }
+
+// The sample in docs/ is what an operator copies, and it claims to show every
+// key the file accepts. It has to stay loadable as the format changes.
+func TestTheSampleLoads(t *testing.T) {
+	s, err := Load(filepath.Join("..", "..", "docs", "agents.sample.yaml"))
+	if err != nil {
+		t.Fatalf("docs/agents.sample.yaml no longer loads: %v", err)
+	}
+	for _, id := range agents {
+		if _, ok := s.View(id); !ok {
+			t.Errorf("the sample says nothing to %s", id)
+		}
+	}
+}
