@@ -44,18 +44,6 @@ func TestCatalogIsSorted(t *testing.T) {
 	}
 }
 
-// opencode installs through an npm feature, so an image without a node runtime
-// fails at install time rather than at render time.
-func TestOpencodeDependsOnNode(t *testing.T) {
-	tool, ok := Lookup("opencode")
-	if !ok {
-		t.Fatal("no opencode in the catalog")
-	}
-	if len(tool.Requires) != 1 || tool.Requires[0] != "node" {
-		t.Errorf("opencode.Requires = %v, want [node]", tool.Requires)
-	}
-}
-
 // The stored string is compared and committed, so it has to be byte-stable:
 // sorted keys, two-space indent, one trailing newline.
 func TestRenderIsExactAndStable(t *testing.T) {
@@ -69,7 +57,7 @@ func TestRenderIsExactAndStable(t *testing.T) {
     "ghcr.io/devcontainers-extra/features/apt-get-packages:1": {
       "packages": "yq"
     },
-    "ghcr.io/devcontainers/features/node:1": {}
+    "ghcr.io/devcontainers/features/node:2": {}
   },
   "image": "mcr.microsoft.com/devcontainers/base:1-ubuntu-24.04",
   "name": "demo",
@@ -138,12 +126,22 @@ func TestRenderRejectsAnUnknownTool(t *testing.T) {
 	}
 }
 
+// No catalog entry declares Requires today, so the mechanism is exercised
+// against a catalog of its own rather than left untested until one does.
 func TestResolveAddsRequirements(t *testing.T) {
-	got, err := Resolve([]string{"opencode"})
+	saved := catalog
+	t.Cleanup(func() { catalog = saved })
+	catalog = []Tool{
+		{ID: "base", Summary: "base", Apt: "base"},
+		{ID: "mid", Summary: "mid", Apt: "mid", Requires: []string{"base"}},
+		{ID: "top", Summary: "top", Apt: "top", Requires: []string{"mid"}},
+	}
+
+	got, err := Resolve([]string{"top"})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	want := []string{"node", "opencode"}
+	want := []string{"base", "mid", "top"}
 	if !slices.Equal(got, want) {
 		t.Errorf("Resolve = %v, want %v", got, want)
 	}
@@ -182,7 +180,7 @@ func TestToolsOfIgnoresUnknownFeatures(t *testing.T) {
 	const cfg = `{
   "features": {
     "ghcr.io/someone/else:1": {},
-    "ghcr.io/devcontainers/features/node:1": {}
+    "ghcr.io/devcontainers/features/node:2": {}
   }
 }`
 	got, err := ToolsOf(cfg)

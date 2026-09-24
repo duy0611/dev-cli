@@ -29,9 +29,6 @@ const (
 	// which base:ubuntu already includes, installs it — offering a tool that is
 	// present would be a menu entry that does nothing.
 	aptFeature = "ghcr.io/devcontainers-extra/features/apt-get-packages:1"
-	// npmFeature installs one global npm package. It needs a node runtime,
-	// which is why every tool using it declares Requires.
-	npmFeature = "ghcr.io/devcontainers-extra/features/npm-package:1"
 )
 
 // Tool is one installable entry in the catalog.
@@ -51,7 +48,7 @@ type Tool struct {
 	Apt string
 	// Requires names catalog entries this one cannot work without. They are
 	// added to the selection, because the alternative is an image build that
-	// fails several minutes in with a message about npm.
+	// fails several minutes in with a message about a missing runtime.
 	Requires []string
 }
 
