@@ -1853,7 +1853,7 @@ func TestMergeHermesFromNothingAndFromNull(t *testing.T) {
 			t.Errorf("%q: out = %s", current, out)
 		}
 	}
-	if _, err := mergeHermes([]byte("mcp_testServers: [1]\n"), testServers); err == nil {
+	if _, err := mergeHermes([]byte("mcp_servers: [1]\n"), testServers); err == nil {
 		t.Error("accepted a list where a mapping belongs")
 	}
 }

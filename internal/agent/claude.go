@@ -92,7 +92,3 @@ func claudeMCP(m agentcfg.MCPServer) ([]byte, error) {
 		Env     map[string]string `json:"env,omitempty"`
 	}{"stdio", m.Command, m.Args, m.Env})
 }
-
-// Replaced in the next task; here only so the registry compiles.
-func configureOpencode(agentcfg.View) ([]Step, error) { return nil, nil }
-func configureHermes(agentcfg.View) ([]Step, error)   { return nil, nil }
