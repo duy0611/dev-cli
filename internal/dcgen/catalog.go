@@ -29,9 +29,6 @@ const (
 	// which base:ubuntu already includes, installs it — offering a tool that is
 	// present would be a menu entry that does nothing.
 	aptFeature = "ghcr.io/devcontainers-extra/features/apt-get-packages:1"
-	// npmFeature installs one global npm package. It needs a node runtime,
-	// which is why every tool using it declares Requires.
-	npmFeature = "ghcr.io/devcontainers-extra/features/npm-package:1"
 )
 
 // Tool is one installable entry in the catalog.
@@ -51,7 +48,7 @@ type Tool struct {
 	Apt string
 	// Requires names catalog entries this one cannot work without. They are
 	// added to the selection, because the alternative is an image build that
-	// fails several minutes in with a message about npm.
+	// fails several minutes in with a message about a missing runtime.
 	Requires []string
 }
 
@@ -80,10 +77,12 @@ var catalog = []Tool{
 	{ID: "hermes", Summary: "Hermes agent",
 		Feature: "ghcr.io/devcontainer-community/devcontainer-features/hermes-agent.nousresearch.com:1"},
 	{ID: "kubectl", Summary: "kubectl", Official: true, Feature: kubeFeature},
+	{ID: "mise", Summary: "Mise",
+		Feature: "ghcr.io/devcontainers-extra/features/mise:1"},
 	{ID: "node", Summary: "Node.js", Official: true,
-		Feature: "ghcr.io/devcontainers/features/node:1"},
-	{ID: "opencode", Summary: "OpenCode agent", Feature: npmFeature,
-		Options: map[string]any{"package": "opencode-ai"}, Requires: []string{"node"}},
+		Feature: "ghcr.io/devcontainers/features/node:2"},
+	{ID: "opencode", Summary: "OpenCode agent",
+		Feature: "ghcr.io/jsburckhardt/devcontainer-features/opencode:1"},
 	{ID: "python", Summary: "Python", Official: true,
 		Feature: "ghcr.io/devcontainers/features/python:1"},
 	{ID: "yq", Summary: "yq", Apt: "yq"},

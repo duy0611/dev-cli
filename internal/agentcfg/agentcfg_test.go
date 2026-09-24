@@ -152,6 +152,32 @@ func TestSkillShapes(t *testing.T) {
 	}
 }
 
+// One repository, several skills: paths expands into one Skill per path, in
+// order, each sharing the entry's git and ref.
+func TestSkillPathsExpand(t *testing.T) {
+	s, err := Load(write(t, `version: 1
+skills:
+  - git: https://github.com/obra/superpowers
+    ref: v6.4.1
+    paths:
+      - skills/brainstorming
+      - ./skills/writing-plans
+`, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, _ := s.View("claude")
+	want := []Skill{
+		{Name: "brainstorming", Git: "https://github.com/obra/superpowers", Ref: "v6.4.1", Path: "skills/brainstorming"},
+		{Name: "writing-plans", Git: "https://github.com/obra/superpowers", Ref: "v6.4.1", Path: "skills/writing-plans"},
+	}
+	if !slices.EqualFunc(v.Skills, want, func(a, b Skill) bool {
+		return a.Name == b.Name && a.Git == b.Git && a.Ref == b.Ref && a.Path == b.Path && a.Archive == nil
+	}) {
+		t.Errorf("skills = %+v", v.Skills)
+	}
+}
+
 func TestViewWithNothingForTheAgent(t *testing.T) {
 	s, err := Load(write(t, "version: 1\nclaude:\n  plugins: [a@b]\n", nil))
 	if err != nil {
@@ -199,6 +225,11 @@ func TestLoadRejects(t *testing.T) {
 		{"skill missing dir", "version: 1\nskills:\n  - path: ./gone\n", "gone"},
 		{"skill dot name", "version: 1\nskills:\n  - git: https://x/.\n", "name"},
 		{"duplicate skill", "version: 1\nskills:\n  - path: ./s\nclaude:\n  skills:\n    - git: https://x/s\n", "duplicate"},
+		{"skill path and paths", "version: 1\nskills:\n  - git: https://x/r\n    path: a\n    paths: [b]\n", "not both"},
+		{"skill empty paths", "version: 1\nskills:\n  - git: https://x/r\n    paths: []\n", "paths"},
+		{"skill paths on local", "version: 1\nskills:\n  - paths: [./s]\n", "git"},
+		{"skill paths escapes repo", "version: 1\nskills:\n  - git: https://x/r\n    paths: [a, ../up]\n", "inside the repository"},
+		{"duplicate skill in paths", "version: 1\nskills:\n  - git: https://x/r\n    paths: [a/s, b/s]\n", "duplicate"},
 		{"duplicate key", "version: 1\nmcp:\n  x: {command: a}\n  x: {command: b}\n", "x"},
 	}
 	for _, c := range cases {

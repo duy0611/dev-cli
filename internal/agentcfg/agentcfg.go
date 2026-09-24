@@ -88,6 +88,9 @@ type rawSkill struct {
 	Git  string `yaml:"git"`
 	Ref  string `yaml:"ref"`
 	Path string `yaml:"path"`
+	// Paths names several skills in one repository. Nil when absent, which
+	// is how an empty list is told apart from none given.
+	Paths []string `yaml:"paths"`
 }
 
 type rawClaude struct {
@@ -198,11 +201,11 @@ func Load(file string) (*Spec, error) {
 func buildSection(file, base, prefix string, skills []rawSkill, mcp map[string]MCPServer) (section, error) {
 	var sec section
 	for i, r := range skills {
-		sk, err := buildSkill(base, r)
+		sk, err := buildSkills(base, r)
 		if err != nil {
 			return section{}, fmt.Errorf("%s: %sskills[%d]: %w", file, prefix, i, err)
 		}
-		sec.skills = append(sec.skills, sk)
+		sec.skills = append(sec.skills, sk...)
 	}
 	for name, m := range mcp {
 		if err := validateMCP(name, m); err != nil {
@@ -213,28 +216,42 @@ func buildSection(file, base, prefix string, skills []rawSkill, mcp map[string]M
 	return sec, nil
 }
 
+// buildSkills expands one entry into the skills it names: several for a git
+// entry with paths, one otherwise. Each is a Skill of its own, so the
+// duplicate-name check in Load sees every name however the entries group them.
+func buildSkills(base string, r rawSkill) ([]Skill, error) {
+	if r.Paths == nil {
+		sk, err := buildSkill(base, r)
+		if err != nil {
+			return nil, err
+		}
+		return []Skill{sk}, nil
+	}
+	switch {
+	case r.Git == "":
+		// A local entry already names one directory; a list of them is a
+		// list of entries.
+		return nil, errors.New("paths only applies to a git skill; give each local skill its own entry")
+	case r.Path != "":
+		return nil, errors.New("give path or paths, not both")
+	case len(r.Paths) == 0:
+		return nil, errors.New("paths is empty; give at least one subdirectory")
+	}
+	out := make([]Skill, 0, len(r.Paths))
+	for _, p := range r.Paths {
+		sk, err := gitSkill(r.Git, r.Ref, p)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, sk)
+	}
+	return out, nil
+}
+
 func buildSkill(base string, r rawSkill) (Skill, error) {
 	switch {
 	case r.Git != "":
-		p := r.Path
-		if p == "" {
-			p = "."
-		}
-		// IsLocal refuses an absolute path and anything climbing out with
-		// "..": the path is spliced into a copy inside the container, and a
-		// skill must not be able to name a directory outside its clone.
-		if !filepath.IsLocal(p) {
-			return Skill{}, fmt.Errorf("path %q must stay inside the repository", r.Path)
-		}
-		p = filepath.ToSlash(filepath.Clean(p))
-		name := path.Base(p)
-		if p == "." {
-			name = strings.TrimSuffix(path.Base(r.Git), ".git")
-		}
-		if err := validSkillName(name); err != nil {
-			return Skill{}, err
-		}
-		return Skill{Name: name, Git: r.Git, Ref: r.Ref, Path: p}, nil
+		return gitSkill(r.Git, r.Ref, r.Path)
 
 	case r.Path != "":
 		if r.Ref != "" {
@@ -266,6 +283,30 @@ func buildSkill(base string, r rawSkill) (Skill, error) {
 	default:
 		return Skill{}, errors.New("give git or path")
 	}
+}
+
+// gitSkill is one skill at subdirectory p of a repository, the root when p
+// is empty.
+func gitSkill(git, ref, p string) (Skill, error) {
+	written := p
+	if p == "" {
+		p = "."
+	}
+	// IsLocal refuses an absolute path and anything climbing out with "..":
+	// the path is spliced into a copy inside the container, and a skill must
+	// not be able to name a directory outside its clone.
+	if !filepath.IsLocal(p) {
+		return Skill{}, fmt.Errorf("path %q must stay inside the repository", written)
+	}
+	p = filepath.ToSlash(filepath.Clean(p))
+	name := path.Base(p)
+	if p == "." {
+		name = strings.TrimSuffix(path.Base(git), ".git")
+	}
+	if err := validSkillName(name); err != nil {
+		return Skill{}, err
+	}
+	return Skill{Name: name, Git: git, Ref: ref, Path: p}, nil
 }
 
 // validSkillName is xpath.ValidateName minus the two names it accepts that

@@ -239,9 +239,12 @@ one adapter; nothing in `internal/cli` names one.
   servers under `mcp_servers` by name.
 - **skills, all agents** — each skill directory under the agent's skills
   directory is replaced wholesale; directories `dev` did not declare are left
-  alone. A git skill is cloned into a temporary directory in the container for
-  each agent that receives it — a shallow clone per agent is cheaper than the
-  cross-agent state sharing one would need.
+  alone. A git skill is cloned into a hidden staging directory inside the
+  agent's skills directory for each agent that receives it — a shallow clone
+  per agent is cheaper than the cross-agent state sharing one would need. Not
+  `/tmp`: under SELinux a moved file keeps the label of where it was created,
+  and `/tmp` carries the container's own categories, so a skill staged there
+  becomes unreadable to the next container a rebuild creates.
 
 Every step is safe to repeat, because `rebuild` re-runs all of them over a
 state volume that already holds the previous result.

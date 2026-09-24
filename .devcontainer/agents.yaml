@@ -22,44 +22,17 @@ version: 1
 # Re-applying replaces that directory; skills you added by hand are left alone.
 skills:
   # From git, cloned inside the container (the image needs git).
-  - git: https://github.com/obra/superpowers
+  - git: https://github.com/JuliusBrussee/caveman
     # Optional: a branch or tag. The default branch otherwise.
     # ref: main
     # Optional: the subdirectory holding SKILL.md. The repository root
     # otherwise, in which case the skill is named after the repository.
-    path: skills/brainstorming
-
-  # Several skills from one repository: paths instead of path, never both.
-  # Each lands under its own directory's name; the repository is cloned once
-  # per agent, and if any one path has no SKILL.md, none of them is installed.
-  - git: https://github.com/obra/superpowers
-    ref: v6.4.1
     paths:
-      - skills/writing-plans
-      - skills/systematic-debugging
-
-  # From the host, relative to this file, copied into the container. Useful
-  # for skills the project keeps next to its agents.yaml. The directory must
-  # exist and hold a SKILL.md, or `create` fails — hence commented out here.
-  # - path: ./skills/our-conventions
-
-# MCP servers, by name. Each is local (command) or remote (url), never both.
-mcp:
-  context7:
-    command: npx
-    args: ["-y", "@upstash/context7-mcp"]
-    env:
-      # ${NAME} is a reference, never a value: dev passes it to each agent in
-      # that agent's own syntax and the agent resolves it when it starts, from
-      # the workspace's settings. Never write a token into this file:
-      #   dev workspace set CONTEXT7_API_KEY keychain:context7
-      # A reference no setting defines is a warning, not an error.
-      CONTEXT7_API_KEY: ${CONTEXT7_API_KEY}
-
-  sentry:
-    url: https://mcp.sentry.dev/mcp
-    headers:
-      Authorization: Bearer ${SENTRY_TOKEN}
+     - skills/caveman
+     - skills/caveman-commit
+     - skills/caveman-compress
+     - skills/caveman-explore
+     - skills/caveman-review
 
 # ---------------------------------------------------------------------------
 # Per agent: additions to the shared layer, plus what only that agent has.
@@ -80,6 +53,8 @@ claude:
   # run unattended.
   plugins:
     - superpowers@claude-plugins-official
+    - context7@claude-plugins-official
+    - gopls-lsp@claude-plugins-official
 
   # Skills and MCP servers for Claude only, in the shared layer's shape.
   # skills: []
@@ -93,13 +68,4 @@ opencode:
   # mcp: {}
 
 hermes:
-  # hermes has no plugins, so no `plugins` key here.
-  mcp:
-    # A server with a shared server's name replaces it for this agent only —
-    # the one override the format allows. Here hermes pins @latest.
-    context7:
-      command: npx
-      args: ["-y", "@upstash/context7-mcp@latest"]
-      env:
-        CONTEXT7_API_KEY: ${CONTEXT7_API_KEY}
   # skills: []
