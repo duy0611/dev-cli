@@ -79,6 +79,18 @@ type Container struct {
 	// Credentials are not part of it. Agents authenticate from environment
 	// variables resolved per invocation, so nothing worth stealing rests here.
 	PersistState bool
+	// AgentConfig says which agents.yaml this container applies: "" for the
+	// project's own .devcontainer/agents.yaml when it has one, "none" when
+	// create was given --no-agent-config, otherwise the physical path
+	// --agent-config named. The choice and never the contents, so an edit to
+	// the file takes effect at the next rebuild. Fixed at create, like
+	// PersistState, so rebuild reads the same file without the flag.
+	AgentConfig string
+	// AgentConfigPending says applying that file is still owed: set at create
+	// when there is one, cleared once an apply finishes. It is what lets
+	// `create --no-start` hand the job to the first start, and a failed apply
+	// be retried by the next. Work dev owes, not live container status.
+	AgentConfigPending bool
 	// OverrideConfigPath is a merged devcontainer.json built for the length of
 	// one invocation: the project's own document with dev's state mount in it.
 	//

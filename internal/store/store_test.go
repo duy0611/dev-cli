@@ -435,3 +435,65 @@ func TestContainerRoundTripsAnEmptySource(t *testing.T) {
 		t.Errorf("Source = %q, want empty", got.Source)
 	}
 }
+
+// The choice of agents.yaml is fixed at create and read back on every rebuild,
+// so it has to survive the round trip exactly.
+func TestContainerRoundTripsAgentConfig(t *testing.T) {
+	s := openTest(t)
+	seed(t, s)
+
+	c := model.Container{
+		Name: "api", WorkspaceName: "ws", SourceKind: model.SourceFolder,
+		Source: "/src/api", AgentConfig: "/home/me/agents.yaml", AgentConfigPending: true,
+	}
+	if err := s.CreateContainer(c); err != nil {
+		t.Fatalf("CreateContainer: %v", err)
+	}
+	got, err := s.GetContainer("ws", "api")
+	if err != nil {
+		t.Fatalf("GetContainer: %v", err)
+	}
+	if got.AgentConfig != c.AgentConfig || !got.AgentConfigPending {
+		t.Errorf("got AgentConfig=%q pending=%v, want %q true",
+			got.AgentConfig, got.AgentConfigPending, c.AgentConfig)
+	}
+
+	if err := s.SetAgentConfigPending("ws", "api", false); err != nil {
+		t.Fatalf("SetAgentConfigPending: %v", err)
+	}
+	list, err := s.ListContainers("ws")
+	if err != nil {
+		t.Fatalf("ListContainers: %v", err)
+	}
+	if len(list) != 1 || list[0].AgentConfigPending {
+		t.Errorf("pending not cleared: %+v", list)
+	}
+}
+
+// A container row written without either field reads as "use the project's
+// default file" and "nothing owed" — the answer the migration gives rows that
+// predate it.
+func TestAgentConfigDefaultsToProjectFileAndNothingPending(t *testing.T) {
+	s := openTest(t)
+	seed(t, s)
+	if err := s.CreateContainer(model.Container{
+		Name: "api", WorkspaceName: "ws", SourceKind: model.SourceNone,
+	}); err != nil {
+		t.Fatalf("CreateContainer: %v", err)
+	}
+	got, err := s.GetContainer("ws", "api")
+	if err != nil {
+		t.Fatalf("GetContainer: %v", err)
+	}
+	if got.AgentConfig != "" || got.AgentConfigPending {
+		t.Errorf("got %q %v, want empty and false", got.AgentConfig, got.AgentConfigPending)
+	}
+}
+
+func TestSetAgentConfigPendingOnAMissingContainer(t *testing.T) {
+	s := openTest(t)
+	seed(t, s)
+	if err := s.SetAgentConfigPending("ws", "nope", true); !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
