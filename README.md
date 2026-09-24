@@ -1,5 +1,11 @@
 # DEV CLI
 
+[![CI](https://github.com/duy0611/dev-cli/workflows/CI/badge.svg)](https://github.com/duy0611/dev-cli/actions?query=workflow:"CI")
+[![GitHub tag](https://img.shields.io/github/tag/duy0611/dev-cli?include_prereleases=&sort=semver&color=blue)](https://github.com/duy0611/dev-cli/releases/)
+[![License](https://img.shields.io/badge/License-MIT-blue)](https://github.com/duy0611/dev-cli/blob/main/LICENSE)
+
+[![view - Documentation](https://img.shields.io/badge/view-Documentation-blue?style=for-the-badge)](/docs/ "Go to project documentation")
+
 A CLI for managing devcontainers and running coding agents inside them.
 
 `dev` does not reimplement the [devcontainer standard](https://containers.dev) —
