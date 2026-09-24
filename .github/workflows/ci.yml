@@ -1,4 +1,5 @@
-## Runs what `make lint && make test` runs locally, and nothing else.
+## Runs what `make lint && make test` and `make smoke` run locally, and nothing
+## else.
 ##
 ## The point is that a green tick means the same thing as a clean local run — so
 ## this file installs the tools and calls the Makefile targets, rather than
@@ -59,7 +60,36 @@ jobs:
       - name: Test
         run: make test
 
-      # Nothing here runs `make smoke`: it needs a real container engine, the
-      # devcontainer CLI, and a registry to push to. It is a local and manual
-      # check, and pretending otherwise would make this workflow flaky rather
-      # than useful.
+  # The local-provider half of `make smoke`, against the runner's own Docker.
+  # A job of its own, not a step after Test, so its image pulls and feature
+  # builds run beside the check above rather than after it.
+  #
+  # The Kubernetes half skips here: it needs DEV_SMOKE_K8S_CONTEXT and
+  # DEV_SMOKE_REGISTRY, and this workflow has no cluster or registry to name.
+  smoke:
+    runs-on: ubuntu-latest
+    # Generous, because the first create pulls images and builds features over
+    # the network; a hang should still end rather than hold a runner for six
+    # hours.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # ubuntu-latest ships Docker with buildx and Node with npm, but not the
+      # devcontainer CLI. Without it every smoke test skips and the job goes
+      # green having tested nothing.
+      - name: Install the devcontainer CLI
+        run: npm install -g @devcontainers/cli
+
+      # The smoke tests compile cmd/dev themselves; the relay has to be there
+      # first or that binary embeds none.
+      - name: Build the relay
+        run: make relay
+
+      - name: Smoke
+        run: make smoke

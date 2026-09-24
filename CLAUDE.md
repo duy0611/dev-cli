@@ -9,12 +9,13 @@ One binary, a SQLite database, and the external binaries it shells out to:
 `devcontainer` and `docker` always, `kubectl` for the k8s provider. One
 operator. The module is `github.com/duy0611/dev-cli`, released as 0.1.0.
 
-CI runs `make lint && make test` on push and pull request, and a `v*` tag builds
-`dev` for darwin and linux on both architectures and attaches them to the
-release (`.github/workflows/`). It installs tools and calls the Makefile targets
-rather than restating them, so a green tick means what a clean local run means.
-`make smoke` is not in CI and is not meant to be: it needs a real engine, the
-devcontainer CLI and a registry.
+CI runs `make lint && make test` on push and pull request, with `make smoke` as
+a second job beside it, and a `v*` tag builds `dev` for darwin and linux on both
+architectures and attaches them to the release (`.github/workflows/`). It
+installs tools and calls the Makefile targets rather than restating them, so a
+green tick means what a clean local run means. The smoke job runs the local
+provider against the runner's Docker; its Kubernetes half skips there, since CI
+has no cluster or registry to name.
 
 The design record is `docs/specs/2026-09-14-dev-cli.md`. Read it for intent;
 read the code for current state. `docs/USAGE.md` is the operator-facing
