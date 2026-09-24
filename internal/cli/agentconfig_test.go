@@ -349,3 +349,83 @@ func TestWorktreeCreateRecordsTheAgentConfigChoice(t *testing.T) {
 		t.Errorf("AgentConfig = %q, want %q", c.AgentConfig, agentConfigNone)
 	}
 }
+
+// runIn drives the real command tree against an existing test app, so a test
+// can create through runContainerCreate and then rebuild through cobra.
+func runIn(t *testing.T, a *app, argv ...string) error {
+	t.Helper()
+	root := newRootCmd("test")
+	root.AddCommand(newContainerCmd(a))
+	root.SilenceErrors = true
+	root.SilenceUsage = true
+	root.SetArgs(argv)
+	return root.Execute()
+}
+
+func TestRebuildReappliesTheFile(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	log := stubDevcontainer(t, "")
+	folder := projectWithAgents(t, claudeAgents)
+	if err := runContainerCreate(t.Context(), a, "", "api", folder, createOpts{}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// An edit waits for the rebuild, and the rebuild picks it up.
+	writeFile(t, filepath.Join(folder, ".devcontainer", "agents.yaml"),
+		"version: 1\nclaude:\n  plugins: [second@official]\n")
+
+	if err := runIn(t, a, "container", "rebuild", "api"); err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+	calls := callsIn(t, log)
+	rebuildAt := strings.Index(calls, "--remove-existing-container")
+	if rebuildAt < 0 {
+		t.Fatalf("no rebuild:\n%s", calls)
+	}
+	if !strings.Contains(calls[rebuildAt:], "claude plugin install --scope user second@official") {
+		t.Errorf("rebuild did not apply the edited file:\n%s", calls[rebuildAt:])
+	}
+}
+
+func TestRebuildWithAMissingAgentConfigFailsBeforeRebuilding(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	log := stubDevcontainer(t, "")
+	file := filepath.Join(t.TempDir(), "agents.yaml")
+	writeFile(t, file, "version: 1\nclaude:\n  plugins: [a@b]\n")
+
+	opts := createOpts{noFolder: true, noStart: true, agentConfig: file}
+	if err := runContainerCreate(t.Context(), a, "", "scratch", "", opts); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := os.Remove(file); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runIn(t, a, "container", "rebuild", "scratch")
+	if exitCodeOf(err) != exitNotFound {
+		t.Fatalf("exit %d (%v), want %d", exitCodeOf(err), err, exitNotFound)
+	}
+	if strings.Contains(callsIn(t, log), "--remove-existing-container") {
+		t.Error("the container was recreated before the missing file was noticed")
+	}
+}
+
+func TestRebuildOfAProjectThatDroppedItsFileClearsThePendingFlag(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	stubDevcontainer(t, "")
+	folder := projectWithAgents(t, claudeAgents)
+	if err := runContainerCreate(t.Context(), a, "", "api", folder, createOpts{noStart: true}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := os.Remove(filepath.Join(folder, ".devcontainer", "agents.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if err := runIn(t, a, "container", "rebuild", "api"); err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+	if containerRow(t, a, "api").AgentConfigPending {
+		t.Error("the flag outlived the file it was owed for")
+	}
+}

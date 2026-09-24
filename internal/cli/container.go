@@ -589,11 +589,22 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// Loaded before the rebuild, not after it: a malformed file, or
+			// an --agent-config file that has since gone, must stop the
+			// command while the old container still exists, rather than
+			// after it has been replaced by one that cannot be configured.
+			spec, err := loadAgentConfig(t.container)
+			if err != nil {
+				return err
+			}
 			if err := t.provider.Rebuild(cmd.Context(), t.container, environ, noCache); err != nil {
 				return err
 			}
 			a.printf("container %s rebuilt\n", t.container.Name)
-			return nil
+			// Every rebuild re-reads the file: it is the moment an edit takes
+			// effect, and a container without the state volume has just lost
+			// everything the last apply installed.
+			return a.applyAgentConfig(cmd.Context(), t.provider, t.container, environ, spec)
 		},
 	}
 	addWorkspaceFlag(cmd, &workspace)
