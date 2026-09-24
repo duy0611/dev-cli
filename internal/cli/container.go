@@ -58,6 +58,10 @@ type createOpts struct {
 	generate       bool
 	noPersistState bool
 	tools          []string
+	// agentConfig is --agent-config: an agents.yaml to apply instead of the
+	// project's own. noAgentConfig is --no-agent-config: apply none.
+	agentConfig   string
+	noAgentConfig bool
 }
 
 func newContainerCreateCmd(a *app) *cobra.Command {
@@ -82,7 +86,11 @@ func newContainerCreateCmd(a *app) *cobra.Command {
 			"global gitconfig — lives on a volume of its own and outlives a rebuild.\n" +
 			"Credentials do not go there: agents read those from the workspace's\n" +
 			"settings on every command. --no-persist-state opts out. Either way it is\n" +
-			"fixed at create; to change it, remove the container and create it again.",
+			"fixed at create; to change it, remove the container and create it again.\n\n" +
+			"A project's .devcontainer/agents.yaml, when it has one, declares its\n" +
+			"agents' skills, MCP servers and plugins; dev applies it inside the\n" +
+			"container once it is running, and again on every rebuild. --agent-config\n" +
+			"names another file, --no-agent-config applies none.",
 		Args: exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.tools = parseToolList(toolList)
@@ -100,6 +108,10 @@ func newContainerCreateCmd(a *app) *cobra.Command {
 		"comma-separated tools to install in a generated container (see: dev container tools)")
 	cmd.Flags().BoolVar(&opts.noPersistState, "no-persist-state", false,
 		"do not give the container a volume for its agents' configuration")
+	cmd.Flags().StringVar(&opts.agentConfig, "agent-config", "",
+		"apply this agents.yaml instead of the project's .devcontainer/agents.yaml")
+	cmd.Flags().BoolVar(&opts.noAgentConfig, "no-agent-config", false,
+		"apply no agents.yaml, even if the project has one")
 	return cmd
 }
 
@@ -118,6 +130,12 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 	}
 	if len(opts.tools) > 0 && !opts.generate && !opts.noFolder {
 		return usageErrorf("--tools only applies with --generate")
+	}
+	// Before anything else is resolved, so a bad flag or a missing file is
+	// reported as itself rather than as whatever fails first after it.
+	agentConfig, err := agentConfigChoice(opts.agentConfig, opts.noAgentConfig)
+	if err != nil {
+		return err
 	}
 
 	wsName, err := a.workspaceName(workspace)
@@ -189,6 +207,12 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 		// project-owned container has no document at all, and `rebuild --tools`
 		// re-renders a generated one from scratch.
 		PersistState: !opts.noPersistState,
+		AgentConfig:  agentConfig,
+	}
+	// After the source is known, since the default file lives in it, and
+	// before the row is written, so a malformed agents.yaml creates nothing.
+	if err := markAgentConfig(&c); err != nil {
+		return err
 	}
 	err = st.CreateContainer(c)
 	if errors.Is(err, store.ErrExists) {
@@ -432,7 +456,18 @@ func (a *app) start(ctx context.Context, workspace string, c model.Container) er
 		return err
 	}
 	a.printf("container %s is running\n", c.Name)
-	return nil
+
+	// Only when owed: at create, after `create --no-start`, or after an apply
+	// that failed. A plain start must not re-apply a file whose edits are
+	// meant to wait for a rebuild, the same contract devcontainer.json has.
+	if !c.AgentConfigPending {
+		return nil
+	}
+	spec, err := loadAgentConfig(c)
+	if err != nil {
+		return err
+	}
+	return a.applyAgentConfig(ctx, p, c, environ, spec)
 }
 
 func newContainerStopCmd(a *app) *cobra.Command {

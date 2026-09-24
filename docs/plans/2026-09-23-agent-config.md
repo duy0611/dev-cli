@@ -2605,7 +2605,7 @@ func TestCreateNoStartDefersTheApplyToStart(t *testing.T) {
 	if err := runContainerCreate(t.Context(), a, "", "api", folder, createOpts{noStart: true}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if strings.Contains(callsIn(t, log), "claude") {
+	if strings.Contains(callsIn(t, log), "claude plugin") {
 		t.Fatal("--no-start applied the file with no container to apply it to")
 	}
 	c := containerRow(t, a, "api")
@@ -2708,7 +2708,8 @@ func TestNoAgentConfigIgnoresTheProjectFile(t *testing.T) {
 		createOpts{noAgentConfig: true}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if strings.Contains(callsIn(t, log), "claude") {
+	// Not a bare "claude": CLAUDE_CONFIG_DIR rides --remote-env on every up.
+	if strings.Contains(callsIn(t, log), "claude plugin") {
 		t.Error("--no-agent-config applied the project file")
 	}
 	if c := containerRow(t, a, "api"); c.AgentConfig != agentConfigNone || c.AgentConfigPending {

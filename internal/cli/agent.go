@@ -76,6 +76,19 @@ func runContainerStartAgent(ctx context.Context, a *app, workspace, name, agentI
 		}
 	}
 
+	// start-agent can be the first thing to start a container created with
+	// --no-start, and the agent it is about to launch is what the file
+	// configures — so it honours an owed apply exactly as start does.
+	if t.container.AgentConfigPending {
+		spec, err := loadAgentConfig(t.container)
+		if err != nil {
+			return err
+		}
+		if err := a.applyAgentConfig(ctx, t.provider, t.container, environ, spec); err != nil {
+			return err
+		}
+	}
+
 	if err := a.ensureAgentPresent(ctx, t, ag, environ); err != nil {
 		return err
 	}
