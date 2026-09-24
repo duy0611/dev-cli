@@ -1,0 +1,71 @@
+# A reference agents.yaml: every key the file accepts, with what it does.
+#
+# Copy it to .devcontainer/agents.yaml in a project (or point
+# `dev container create --agent-config PATH` at it) and delete what you do not
+# need. dev applies it inside the container on `create` and again on every
+# `rebuild` — not on `start`, so an edit waits for a rebuild, the same as a
+# devcontainer.json. See docs/USAGE.md, "Declare a project's agent setup".
+#
+# Unknown keys are rejected, so a typo fails `create` instead of silently doing
+# nothing. That includes a `codex:` section: Codex has no adapter yet.
+
+# Required, and must be 1.
+version: 1
+
+# ---------------------------------------------------------------------------
+# Shared layer: every agent installed in the container receives these.
+# An agent the container does not have is skipped with a warning.
+# ---------------------------------------------------------------------------
+
+# Skills are SKILL.md directories. The one format all three agents share; each
+# lands in the agent's own skills directory under the directory's name.
+# Re-applying replaces that directory; skills you added by hand are left alone.
+skills:
+  # From git, cloned inside the container (the image needs git).
+  - git: https://github.com/JuliusBrussee/caveman
+    # Optional: a branch or tag. The default branch otherwise.
+    # ref: main
+    # Optional: the subdirectory holding SKILL.md. The repository root
+    # otherwise, in which case the skill is named after the repository.
+    paths:
+     - skills/caveman
+     - skills/caveman-commit
+     - skills/caveman-compress
+     - skills/caveman-explore
+     - skills/caveman-review
+
+# ---------------------------------------------------------------------------
+# Per agent: additions to the shared layer, plus what only that agent has.
+# Every section is optional.
+# ---------------------------------------------------------------------------
+
+claude:
+  # Marketplaces to add, as name: source. The name must be the one the
+  # marketplace gives itself — what `claude plugin marketplace list` shows —
+  # because that is how dev tells an added marketplace from a new one. The
+  # source is anything `claude plugin marketplace add` takes: owner/repo, a
+  # git URL, a path.
+  marketplaces:
+    claude-plugins-official: anthropics/claude-plugins-official
+
+  # Plugins to install, as name@marketplace, at user scope. A plugin whose
+  # marketplace declares a command to run at install is refused rather than
+  # run unattended.
+  plugins:
+    - superpowers@claude-plugins-official
+    - context7@claude-plugins-official
+    - gopls-lsp@claude-plugins-official
+
+  # Skills and MCP servers for Claude only, in the shared layer's shape.
+  # skills: []
+  # mcp: {}
+
+opencode:
+  # npm packages, added to the `plugin` list in opencode.json; opencode
+  # installs them itself when it starts. Plugins already listed stay listed.
+  plugins: []
+  # skills: []
+  # mcp: {}
+
+hermes:
+  # skills: []
