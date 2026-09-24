@@ -368,7 +368,9 @@ skills:                       # every installed agent gets these
   - path: ./skills/our-conventions          # relative to this file
   - git: https://github.com/obra/superpowers
     ref: v6.4.1
-    path: skills/brainstorming
+    paths:                                  # or path: for a single skill
+      - skills/brainstorming
+      - skills/writing-plans
 
 mcp:                          # and these
   context7:
@@ -401,6 +403,11 @@ first `start` applies it.
   exists only under `claude` and `opencode`, `marketplaces` only under `claude`.
   hermes has no plugins. A per-agent MCP server with a top-level server's name
   replaces it for that agent.
+- **One repository, several skills.** `paths` lists subdirectories of a git
+  skill, each named after its last segment; `path` takes one. The repository is
+  cloned once per agent, and skills from the same repository and `ref` share
+  that clone even across entries. If any path lacks a `SKILL.md`, none of that
+  repository's skills is replaced.
 - **`${NAME}` is a reference, never a value.** The file is committed, so `dev`
   never substitutes it; each agent resolves it when it starts, from the
   workspace's settings. A reference no setting defines is a warning.

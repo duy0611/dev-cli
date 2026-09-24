@@ -29,6 +29,15 @@ skills:
     # otherwise, in which case the skill is named after the repository.
     path: skills/brainstorming
 
+  # Several skills from one repository: paths instead of path, never both.
+  # Each lands under its own directory's name; the repository is cloned once
+  # per agent, and if any one path has no SKILL.md, none of them is installed.
+  - git: https://github.com/obra/superpowers
+    ref: v6.4.1
+    paths:
+      - skills/writing-plans
+      - skills/systematic-debugging
+
   # From the host, relative to this file, copied into the container. Useful
   # for skills the project keeps next to its agents.yaml. The directory must
   # exist and hold a SKILL.md, or `create` fails — hence commented out here.

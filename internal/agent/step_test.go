@@ -165,15 +165,41 @@ func TestSkillStepsForAGitSkill(t *testing.T) {
 		{Name: "r", Git: "https://x/r", Path: "."},
 	})
 	withRef, noRef := steps[0].Cmd, steps[1].Cmd
-	// The URL, subdirectory and ref arrive as positional arguments, never
-	// spliced into the script, since agents.yaml is not dev's to trust.
-	if !slices.Equal(withRef[3:], []string{"sh", "https://x/sp", "skills/brainstorming", "v1"}) {
+	// The URL, ref and each name and subdirectory arrive as positional
+	// arguments, never spliced into the script, since agents.yaml is not dev's
+	// to trust.
+	if !slices.Equal(withRef[3:], []string{"sh", "https://x/sp", "v1", "brainstorming", "skills/brainstorming"}) {
 		t.Errorf("args = %v", withRef[3:])
 	}
-	if !strings.Contains(withRef[2], `--branch "$3"`) || strings.Contains(noRef[2], "--branch") {
+	if !strings.Contains(withRef[2], `--branch "$2"`) || strings.Contains(noRef[2], "--branch") {
 		t.Errorf("--branch handling: %q / %q", withRef[2], noRef[2])
 	}
 	if strings.Contains(withRef[2], "https://x/sp") {
 		t.Error("the URL was spliced into the script")
+	}
+}
+
+// Skills from one repository at one ref share a clone, wherever they sit in
+// the list; a different ref of the same repository is a different checkout.
+func TestSkillStepsCloneEachRepositoryOnce(t *testing.T) {
+	steps := skillSteps("claude", "${D:-$HOME/.claude}/skills", []agentcfg.Skill{
+		{Name: "a", Git: "https://x/sp", Ref: "v1", Path: "skills/a"},
+		{Name: "ours", Archive: []byte("tar")},
+		{Name: "old", Git: "https://x/sp", Ref: "v0", Path: "skills/old"},
+		{Name: "b", Git: "https://x/sp", Ref: "v1", Path: "skills/b"},
+	})
+	var descs []string
+	for _, s := range steps {
+		descs = append(descs, s.Desc)
+	}
+	want := []string{"claude: skills a, b", "claude: skill ours", "claude: skill old"}
+	if !slices.Equal(descs, want) {
+		t.Fatalf("steps = %v, want %v", descs, want)
+	}
+	if !slices.Equal(steps[0].Cmd[3:], []string{"sh", "https://x/sp", "v1", "a", "skills/a", "b", "skills/b"}) {
+		t.Errorf("args = %v", steps[0].Cmd[3:])
+	}
+	if n := strings.Count(steps[0].Cmd[2], "git clone"); n != 1 {
+		t.Errorf("script clones %d times", n)
 	}
 }

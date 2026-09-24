@@ -99,6 +99,54 @@ func TestAGitSkillIsCopiedWithoutItsHistory(t *testing.T) {
 	}
 }
 
+// Several skills from one clone all land, and one bad path installs none of
+// them: a half-applied repository is harder to notice than a failed step.
+func TestGitSkillsFromOneRepository(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	repo := t.TempDir()
+	for _, name := range []string{"a", "b"} {
+		if err := os.MkdirAll(filepath.Join(repo, "skills", name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, "skills", name, "SKILL.md"), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitRepo(t, repo)
+	git := "file://" + repo
+
+	skills := t.TempDir()
+	steps := skillSteps("claude", skills, []agentcfg.Skill{
+		{Name: "a", Git: git, Path: "skills/a"},
+		{Name: "b", Git: git, Path: "skills/b"},
+	})
+	if len(steps) != 1 {
+		t.Fatalf("steps = %d, want one clone", len(steps))
+	}
+	if err := runLocally(t, steps[0]); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	for _, name := range []string{"a", "b"} {
+		if got, err := os.ReadFile(filepath.Join(skills, name, "SKILL.md")); err != nil || string(got) != name {
+			t.Errorf("skill %s: %q, %v", name, got, err)
+		}
+	}
+
+	fresh := t.TempDir()
+	steps = skillSteps("claude", fresh, []agentcfg.Skill{
+		{Name: "a", Git: git, Path: "skills/a"},
+		{Name: "gone", Git: git, Path: "skills/gone"},
+	})
+	if err := runLocally(t, steps[0]); err == nil {
+		t.Error("a repository with a missing skill was installed")
+	}
+	if entries, _ := os.ReadDir(fresh); len(entries) != 0 {
+		t.Errorf("a failed repository left %v behind", entries)
+	}
+}
+
 // The same escape through a directory above the skill: path a/b with a -> /.
 func TestAGitSkillBehindASymlinkedDirectoryIsRefused(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
