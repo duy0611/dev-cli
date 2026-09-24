@@ -47,6 +47,11 @@ func mergeOpencode(current []byte, plugins []string, servers map[string]agentcfg
 		if err := json.Unmarshal(std, &doc); err != nil {
 			return nil, fmt.Errorf("opencode.json is not an object: %w", err)
 		}
+		// null decodes without error and leaves the map nil; it means the
+		// same as an empty file.
+		if doc == nil {
+			doc = map[string]json.RawMessage{}
+		}
 	}
 
 	if len(plugins) > 0 {
@@ -73,6 +78,10 @@ func mergeOpencode(current []byte, plugins []string, servers map[string]agentcfg
 		if raw, ok := doc["mcp"]; ok {
 			if err := json.Unmarshal(raw, &mcp); err != nil {
 				return nil, fmt.Errorf("opencode.json: mcp is not an object: %w", err)
+			}
+			// "mcp": null, for the reason doc can be nil above.
+			if mcp == nil {
+				mcp = map[string]json.RawMessage{}
 			}
 		}
 		for name, m := range servers {

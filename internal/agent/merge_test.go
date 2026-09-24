@@ -185,3 +185,18 @@ func TestOpencodeAndHermesSteps(t *testing.T) {
 		t.Errorf("empty views produced steps: %+v %+v", o, h)
 	}
 }
+
+// JSON null is valid where an object belongs; json.Unmarshal leaves the map
+// nil and a write to it panics, which would exit 2 with a stack trace.
+func TestMergeOpencodeTreatsNullAsEmpty(t *testing.T) {
+	for _, current := range []string{`null`, `{"mcp": null}`, `{"plugin": null}`} {
+		out, err := mergeOpencode([]byte(current), []string{"p"}, testServers)
+		if err != nil {
+			t.Errorf("%s: %v", current, err)
+			continue
+		}
+		if !bytes.Contains(out, []byte(`"ctx"`)) || !bytes.Contains(out, []byte(`"p"`)) {
+			t.Errorf("%s: out = %s", current, out)
+		}
+	}
+}

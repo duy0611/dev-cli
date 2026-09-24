@@ -80,8 +80,13 @@ func readFileCmd(file string) []string {
 	return []string{"sh", "-c", `f=` + file + `; if [ -f "$f" ]; then cat "$f"; fi`}
 }
 
+// The write goes to a temporary beside the file and is renamed over it, so an
+// exec that dies mid-stream leaves the old file whole. A truncated one would
+// be read back by the retry as the starting point of the next merge, silently
+// dropping every setting the operator had in it.
 func writeFileCmd(file string) []string {
-	return []string{"sh", "-c", `f=` + file + `; mkdir -p "$(dirname "$f")" && cat > "$f"`}
+	return []string{"sh", "-c", `f=` + file + `; mkdir -p "$(dirname "$f")" && ` +
+		`cat > "$f.dev-tmp" && mv -f "$f.dev-tmp" "$f"`}
 }
 
 // Apply runs every configurable agent's steps for spec. An agent the file

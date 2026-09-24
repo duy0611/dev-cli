@@ -32,11 +32,22 @@ func skillSteps(agentID, dir string, skills []agentcfg.Skill) []Step {
 		// Cloned per agent into a temporary directory the trap removes. A
 		// shallow clone is cheap, and sharing one across agents would need
 		// state carried between steps that are otherwise independent.
+		//
+		// The repository is third-party content, so the skill directory is
+		// resolved with realpath and has to land inside the clone: a path
+		// that is, or passes through, a symlink out of it would otherwise
+		// install a link to anywhere, and the .git removal below would delete
+		// through it. cp -RP copies any links inside the skill as links, never
+		// following them, and .git is removed from the copy before it moves
+		// into place, so nothing is ever deleted through the target.
 		script := `set -e; t=$(mktemp -d); trap 'rm -rf "$t"' EXIT; ` +
 			`git clone -q --depth 1` + branch + ` -- "$1" "$t/r"; ` +
-			`[ -f "$t/r/$2/SKILL.md" ] || { echo "no SKILL.md at $2 in $1" >&2; exit 1; }; ` +
-			`d=` + target + `; rm -rf "$d"; mkdir -p "$(dirname "$d")"; ` +
-			`cp -R "$t/r/$2" "$d"; rm -rf "$d/.git"`
+			`r=$(realpath "$t/r"); s=$(realpath "$t/r/$2" 2>/dev/null) || s=; ` +
+			`case "$s/" in "$r/"*) ;; *) echo "$2 is outside the repository $1" >&2; exit 1;; esac; ` +
+			`[ ! -L "$t/r/$2" ] && [ -d "$s" ] && [ -f "$s/SKILL.md" ] && [ ! -L "$s/SKILL.md" ] || ` +
+			`{ echo "no SKILL.md at $2 in $1" >&2; exit 1; }; ` +
+			`cp -RP "$s" "$t/skill"; rm -rf "$t/skill/.git"; ` +
+			`d=` + target + `; rm -rf "$d"; mkdir -p "$(dirname "$d")"; mv "$t/skill" "$d"`
 		out = append(out, Step{
 			Desc: desc,
 			Cmd:  []string{"sh", "-c", script, "sh", sk.Git, sk.Path, sk.Ref},
