@@ -97,3 +97,30 @@ func Shorten(path string) string {
 	}
 	return path
 }
+
+// ResolveFile is Resolve for a regular file: the physical path, symlinks
+// followed. Used for a file dev reads again later, such as the agents.yaml
+// --agent-config names, so a later command finds the same file whatever the
+// working directory. A missing file wraps fs.ErrNotExist, which the CLI turns
+// into exit 3.
+func ResolveFile(path string) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("empty path")
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolving %s: %w", path, err)
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", fmt.Errorf("resolving %s: %w", path, err)
+	}
+	info, err := os.Stat(real)
+	if err != nil {
+		return "", fmt.Errorf("resolving %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("not a file: %s", real)
+	}
+	return real, nil
+}

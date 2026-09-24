@@ -13,6 +13,7 @@ command. For what `dev` *is* and how it fits together, read the
   - [Add a secret and rotate it](#add-a-secret-and-rotate-it)
   - [Push to git from inside a container](#push-to-git-from-inside-a-container)
   - [Keep an agent's plugins across a rebuild](#keep-an-agents-plugins-across-a-rebuild)
+  - [Declare a project's agent setup](#declare-a-projects-agent-setup)
   - [Commit a devcontainer.json that also works under dev](#commit-a-devcontainerjson-that-also-works-under-dev)
   - [Run a workspace in Kubernetes](#run-a-workspace-in-kubernetes)
   - [Clean up](#clean-up)
@@ -353,6 +354,76 @@ On k8s all of this already worked — the pod's home directory lives on the PVC 
 and a third subPath there carries the same paths, so the two providers behave
 identically.
 
+### Declare a project's agent setup
+
+The state volume keeps what you install in one container across its rebuilds.
+It does nothing for the next container. To stop typing the same `claude plugin
+install` in every new one, declare it in the project:
+
+```yaml
+# .devcontainer/agents.yaml
+version: 1
+
+skills:                       # every installed agent gets these
+  - path: ./skills/our-conventions          # relative to this file
+  - git: https://github.com/obra/superpowers
+    ref: v6.4.1
+    path: skills/brainstorming
+
+mcp:                          # and these
+  context7:
+    command: npx
+    args: ["-y", "@upstash/context7-mcp"]
+    env:
+      CONTEXT7_API_KEY: ${CONTEXT7_API_KEY}
+
+claude:
+  marketplaces:
+    claude-plugins-official: anthropics/claude-plugins-official
+  plugins: [superpowers@claude-plugins-official]
+opencode:
+  plugins: [opencode-wakatime]
+```
+
+```sh
+dev workspace set CONTEXT7_API_KEY keychain:context7
+dev container create api --folder ~/code/api
+```
+
+`create` applies the file once the container is running — Claude Code through
+its own CLI, opencode and hermes by merging into `opencode.json` and
+`config.yaml` — and `rebuild` applies it again. `start` does not: like a
+`devcontainer.json`, an edit waits for a rebuild. After `create --no-start`, the
+first `start` applies it.
+
+- **Top level vs. per agent.** `skills` and `mcp` at the top reach every agent
+  installed in the container; each agent's own section adds more. `plugins`
+  exists only under `claude` and `opencode`, `marketplaces` only under `claude`.
+  hermes has no plugins. A per-agent MCP server with a top-level server's name
+  replaces it for that agent.
+- **`${NAME}` is a reference, never a value.** The file is committed, so `dev`
+  never substitutes it; each agent resolves it when it starts, from the
+  workspace's settings. A reference no setting defines is a warning.
+- **An agent the container lacks is skipped with a warning**, so one file works
+  across containers with different tools. A step that fails — a plugin that
+  does not exist, a marketplace that cannot be reached — fails the command; the
+  container stays running and the next `start` retries.
+- **Nothing is removed.** A declared entry or skill directory is replaced; a
+  plugin you drop from the file stays installed until the container is
+  recreated. Things you added by hand are left alone.
+- **`dev` only reads the file.** It never writes into the project.
+
+[`docs/agents.sample.yaml`](agents.sample.yaml) lists every key the file
+accepts, with a comment on each; copy it and delete what you do not need.
+
+`--agent-config PATH` applies another file instead — one in your dotfiles, say,
+which also gives a `--no-folder` container something to apply — and
+`--no-agent-config` applies none. The choice is fixed at create, so `rebuild`
+reads the same file without being told again.
+
+Both providers support this; on k8s (experimental) the steps run through
+`kubectl exec`.
+
 ### Commit a devcontainer.json that also works under dev
 
 A project's own `.devcontainer/devcontainer.json` can name a mount at
@@ -454,6 +525,16 @@ in the namespace and name it with `--image-pull-secret`.
 not happen: the generated configuration chowns the volume to the remote user
 once, at create. If you see it, the `postCreateCommand` did not run — check
 `dev container logs NAME`.
+
+**`agents.yaml: hermes is not installed in this container; skipping it`** —
+the file declares something for an agent the image does not have. Add the agent
+to the project's `devcontainer.json` (or `--tools hermes` for a generated one)
+and rebuild, or ignore it if this container is not meant to run that agent.
+
+**`claude: marketplace NAME: the command succeeded but the change is not
+visible afterwards`** — the key under `marketplaces` is not the name the
+marketplace gives itself. `dev container exec NAME -- claude plugin marketplace
+list` shows the real one; use it as the key.
 
 **My agent's plugins are gone after a rebuild** — the container does not
 persist its state, which means it predates the volume becoming the default, or
@@ -593,8 +674,10 @@ Removing the active workspace leaves none active rather than a dangling pointer.
 ### container
 
 ```
-dev container create NAME --folder PATH [--generate] [--tools LIST] [--no-persist-state] [--no-start]
-dev container create NAME --no-folder [--tools LIST] [--no-persist-state] [--no-start]
+dev container create NAME --folder PATH [--generate] [--tools LIST] [--no-persist-state]
+                         [--agent-config PATH | --no-agent-config] [--no-start]
+dev container create NAME --no-folder [--tools LIST] [--no-persist-state]
+                         [--agent-config PATH | --no-agent-config] [--no-start]
 dev container list [--all]
 dev container start NAME
 dev container stop NAME
@@ -619,6 +702,8 @@ neither.
 | `--generate` | render a base Ubuntu configuration when the folder ships none |
 | `--tools` | comma-separated catalog tools for a generated container |
 | `--no-persist-state` | do not give the container a volume for its agents' configuration |
+| `--agent-config` | apply this agents.yaml instead of the project's `.devcontainer/agents.yaml` |
+| `--no-agent-config` | apply no agents.yaml, even if the project has one |
 | `--no-start` | record the container without starting it |
 
 The folder is resolved to a physical path before it is stored or mounted. On
@@ -643,6 +728,12 @@ they apply it anyway. `create` still creates the container — everything else
 works — but warns on stderr so a silently missing `/var/dev-state` is not a
 surprise at the next rebuild. Add the volume to your compose file yourself, or
 pass `--no-persist-state`.
+
+A project's `.devcontainer/agents.yaml` is applied once the container is
+running, and again on every `rebuild`; see
+[Declare a project's agent setup](#declare-a-projects-agent-setup). A malformed
+file is exit 2 before anything is created; an `--agent-config` file that does
+not exist is exit 3, at create or at a later rebuild.
 
 **`list`** reads live status from the engine every time; a stored copy would be
 wrong the moment anything happened outside `dev`. A `?` means the engine could
@@ -688,6 +779,7 @@ path it came from on stderr.
 ```
 dev worktree create NAME --branch B --path P [--repo R] [--base REF]
                          [--generate] [--tools LIST] [--no-persist-state]
+                         [--agent-config PATH | --no-agent-config]
                          [--no-start] [--no-herdr] [--workspace W]
 dev worktree list [--all] [--workspace W]
 dev worktree remove NAME [--force] [--workspace W]
@@ -709,6 +801,8 @@ is nothing extra to remember when the two are removed together.
 | `--generate` | generate a base Ubuntu configuration when the checkout ships none |
 | `--tools` | comma-separated tools to install in a generated container (see: dev container tools) |
 | `--no-persist-state` | do not give the container a volume for its agents' configuration |
+| `--agent-config` | apply this agents.yaml instead of the checkout's `.devcontainer/agents.yaml` |
+| `--no-agent-config` | apply no agents.yaml, even if the checkout has one |
 
 `--branch` and `--path` are required; `--path` has no default, so nothing
 appears on disk somewhere you did not choose. `--base` only has an effect when

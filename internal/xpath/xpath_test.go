@@ -1,6 +1,8 @@
 package xpath
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -97,5 +99,33 @@ func TestShorten(t *testing.T) {
 		if got := Shorten(in); got != want {
 			t.Errorf("Shorten(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestResolveFile(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "agents.yaml")
+	if err := os.WriteFile(file, []byte("version: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link.yaml")
+	if err := os.Symlink(file, link); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ResolveFile(link)
+	if err != nil {
+		t.Fatalf("ResolveFile: %v", err)
+	}
+	want, _ := filepath.EvalSymlinks(file)
+	if got != want {
+		t.Errorf("ResolveFile = %q, want %q", got, want)
+	}
+
+	if _, err := ResolveFile(dir); err == nil {
+		t.Error("ResolveFile accepted a directory")
+	}
+	if _, err := ResolveFile(filepath.Join(dir, "missing")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("missing file: err = %v, want fs.ErrNotExist", err)
 	}
 }

@@ -15,10 +15,11 @@ func (s *Store) CreateContainer(c model.Container) error {
 	_, err := s.db.Exec(
 		`INSERT INTO containers
 		   (name, workspace_name, source_kind, source, config_path, generated_config,
-		    persist_state, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		    persist_state, agent_config, agent_config_pending, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		c.Name, c.WorkspaceName, string(c.SourceKind), c.Source, c.ConfigPath,
-		c.GeneratedConfig, boolToInt(c.PersistState), nowString())
+		c.GeneratedConfig, boolToInt(c.PersistState), c.AgentConfig,
+		boolToInt(c.AgentConfigPending), nowString())
 	if err != nil {
 		if isUniqueViolation(err) {
 			return ErrExists
@@ -31,7 +32,7 @@ func (s *Store) CreateContainer(c model.Container) error {
 func (s *Store) GetContainer(workspace, name string) (model.Container, error) {
 	row := s.db.QueryRow(
 		`SELECT name, workspace_name, source_kind, source, config_path, generated_config,
-		        persist_state, created_at
+		        persist_state, agent_config, agent_config_pending, created_at
 		 FROM containers WHERE workspace_name = ? AND name = ?`, workspace, name)
 	return scanContainer(row)
 }
@@ -40,7 +41,7 @@ func (s *Store) GetContainer(workspace, name string) (model.Container, error) {
 // when workspace is empty.
 func (s *Store) ListContainers(workspace string) ([]model.Container, error) {
 	query := `SELECT name, workspace_name, source_kind, source, config_path, generated_config,
-	                 persist_state, created_at
+	                 persist_state, agent_config, agent_config_pending, created_at
 	          FROM containers`
 	args := []any{}
 	if workspace != "" {
@@ -80,10 +81,11 @@ func scanContainer(sc scanner) (model.Container, error) {
 		c         model.Container
 		kind      string
 		persist   int
+		pending   int
 		createdAt string
 	)
 	if err := sc.Scan(&c.Name, &c.WorkspaceName, &kind, &c.Source, &c.ConfigPath,
-		&c.GeneratedConfig, &persist, &createdAt); err != nil {
+		&c.GeneratedConfig, &persist, &c.AgentConfig, &pending, &createdAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return model.Container{}, ErrNotFound
 		}
@@ -91,6 +93,7 @@ func scanContainer(sc scanner) (model.Container, error) {
 	}
 	c.SourceKind = model.SourceKind(kind)
 	c.PersistState = persist != 0
+	c.AgentConfigPending = pending != 0
 
 	t, err := parseTime(createdAt)
 	if err != nil {
@@ -105,6 +108,19 @@ func (s *Store) UpdateContainerConfig(workspace, name, config string) error {
 	res, err := s.db.Exec(
 		`UPDATE containers SET generated_config = ?
 		 WHERE workspace_name = ? AND name = ?`, config, workspace, name)
+	if err != nil {
+		return fmt.Errorf("updating container %s: %w", name, err)
+	}
+	return requireOneRow(res, ErrNotFound)
+}
+
+// SetAgentConfigPending records whether applying a container's agents.yaml is
+// still owed. Set before the first step of an apply and cleared after the last,
+// so an apply that fails or is interrupted leaves it set for the next start.
+func (s *Store) SetAgentConfigPending(workspace, name string, pending bool) error {
+	res, err := s.db.Exec(
+		`UPDATE containers SET agent_config_pending = ?
+		 WHERE workspace_name = ? AND name = ?`, boolToInt(pending), workspace, name)
 	if err != nil {
 		return fmt.Errorf("updating container %s: %w", name, err)
 	}

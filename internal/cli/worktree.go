@@ -80,6 +80,10 @@ func newWorktreeCreateCmd(a *app) *cobra.Command {
 		"comma-separated tools to install in a generated container (see: dev container tools)")
 	cmd.Flags().BoolVar(&opts.create.noPersistState, "no-persist-state", false,
 		"do not give the container a volume for its agents' configuration")
+	cmd.Flags().StringVar(&opts.create.agentConfig, "agent-config", "",
+		"apply this agents.yaml instead of the checkout's .devcontainer/agents.yaml")
+	cmd.Flags().BoolVar(&opts.create.noAgentConfig, "no-agent-config", false,
+		"apply no agents.yaml, even if the checkout has one")
 	return cmd
 }
 
@@ -95,6 +99,11 @@ func runWorktreeCreate(ctx context.Context, a *app, workspace, name string, opts
 		// disk, and a checkout appearing somewhere they did not choose is worse
 		// than one more flag.
 		return usageErrorf("--path is required; it says where the checkout goes")
+	}
+	// Checked before the checkout exists, so a bad flag leaves nothing to roll
+	// back. createWorktreeRows repeats it to get the value; it is cheap.
+	if _, err := agentConfigChoice(opts.create.agentConfig, opts.create.noAgentConfig); err != nil {
+		return err
 	}
 
 	// First, before the store is opened or anything is created: this is the
@@ -221,6 +230,10 @@ func (a *app) createWorktreeRows(wsName, name, repo, path, herdrWS string, opts 
 		configPath = ""
 	}
 
+	agentConfig, err := agentConfigChoice(opts.create.agentConfig, opts.create.noAgentConfig)
+	if err != nil {
+		return err
+	}
 	st, err := a.store()
 	if err != nil {
 		return err
@@ -233,6 +246,12 @@ func (a *app) createWorktreeRows(wsName, name, repo, path, herdrWS string, opts 
 		ConfigPath:      configPath,
 		GeneratedConfig: generated,
 		PersistState:    !opts.create.noPersistState,
+		AgentConfig:     agentConfig,
+	}
+	// A failure here is returned before the row exists, and the caller rolls
+	// the checkout back, the same as for a bad devcontainer config.
+	if err := markAgentConfig(&c); err != nil {
+		return err
 	}
 	if err := st.CreateContainer(c); err != nil {
 		if errors.Is(err, store.ErrExists) {

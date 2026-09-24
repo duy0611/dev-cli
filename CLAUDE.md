@@ -65,7 +65,8 @@ internal/provider/local/  devcontainer CLI and docker adapter
 internal/provider/k8s/    devcontainer CLI, kubectl, manifests, lifecycle
 internal/secret/      spec -> value: literal, keychain, op
 internal/env/         assembles the env a container launches with
-internal/agent/       which agents exist and how to invoke them
+internal/agent/       which agents exist, how to invoke and configure them
+internal/agentcfg/    reading a project's agents.yaml
 internal/dcconfig/    locating a project's .devcontainer config
 internal/dcgen/       generating one: the tool catalog, render, reverse map
 internal/xpath/       physical paths, name and env-key validation
@@ -188,6 +189,15 @@ cannot implement it.
    since the volume's ownership then persists across every later start; k8s
    runs the same command but it is a no-op there, because the pod's `fsGroup`
    already makes the PVC group-writable.
+
+   `.devcontainer/agents.yaml` is the same rule from the other side: `dev`
+   reads it and never writes it, and applies what it declares *inside* the
+   container, through `Provider.Exec`, onto the state volume — never into the
+   project. `create` validates it before the row exists, the row records only
+   which file (`agent_config`) and whether an apply is owed
+   (`agent_config_pending`), and `rebuild` loads it before recreating the
+   container, so a file that has gone or stopped parsing fails while the old
+   container still exists.
 
 10. **A container's agent state is a column, not a document field.** Every new
     container mounts a volume at `/var/dev-state` unless `--no-persist-state`,
