@@ -29,6 +29,11 @@ const (
 	// which base:ubuntu already includes, installs it — offering a tool that is
 	// present would be a menu entry that does nothing.
 	aptFeature = "ghcr.io/devcontainers-extra/features/apt-get-packages:1"
+	// npmFeature installs one global npm package. It needs a node runtime,
+	// which is why every tool using it declares Requires. A features map holds
+	// one entry per reference, so a second tool on it would overwrite the
+	// first's package option — it serves one tool until that changes.
+	npmFeature = "ghcr.io/devcontainers-extra/features/npm-package:1"
 )
 
 // Tool is one installable entry in the catalog.
@@ -81,8 +86,13 @@ var catalog = []Tool{
 		Feature: "ghcr.io/devcontainers-extra/features/mise:1"},
 	{ID: "node", Summary: "Node.js", Official: true,
 		Feature: "ghcr.io/devcontainers/features/node:2"},
-	{ID: "opencode", Summary: "OpenCode agent",
-		Feature: "ghcr.io/jsburckhardt/devcontainer-features/opencode:1"},
+	// @opencode/cli, not opencode-ai or the standalone feature: those install
+	// 1.x, whose embedded Bun 1.3.14 crashes with "embedder failed to suspend
+	// thread" when started by docker exec or kubectl exec — which is how every
+	// agent is started (oven-sh/bun#31832). 2.x embeds a fixed Bun and is on
+	// npm only; the feature downloads GitHub releases, which stop at 1.x.
+	{ID: "opencode", Summary: "OpenCode agent", Feature: npmFeature,
+		Options: map[string]any{"package": "@opencode/cli"}, Requires: []string{"node"}},
 	{ID: "python", Summary: "Python", Official: true,
 		Feature: "ghcr.io/devcontainers/features/python:1"},
 	{ID: "yq", Summary: "yq", Apt: "yq"},
