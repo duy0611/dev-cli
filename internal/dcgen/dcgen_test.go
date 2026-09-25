@@ -44,6 +44,18 @@ func TestCatalogIsSorted(t *testing.T) {
 	}
 }
 
+// opencode installs through an npm feature, so an image without a node runtime
+// fails at install time rather than at render time.
+func TestOpencodeDependsOnNode(t *testing.T) {
+	tool, ok := Lookup("opencode")
+	if !ok {
+		t.Fatal("no opencode in the catalog")
+	}
+	if len(tool.Requires) != 1 || tool.Requires[0] != "node" {
+		t.Errorf("opencode.Requires = %v, want [node]", tool.Requires)
+	}
+}
+
 // The stored string is compared and committed, so it has to be byte-stable:
 // sorted keys, two-space indent, one trailing newline.
 func TestRenderIsExactAndStable(t *testing.T) {
@@ -126,8 +138,8 @@ func TestRenderRejectsAnUnknownTool(t *testing.T) {
 	}
 }
 
-// No catalog entry declares Requires today, so the mechanism is exercised
-// against a catalog of its own rather than left untested until one does.
+// Exercised against a catalog of its own, so a chain of requirements is
+// covered whatever the real entries happen to declare.
 func TestResolveAddsRequirements(t *testing.T) {
 	saved := catalog
 	t.Cleanup(func() { catalog = saved })

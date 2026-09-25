@@ -8,7 +8,9 @@
   "features": {
     "ghcr.io/anthropics/devcontainer-features/claude-code:1": {},
     "ghcr.io/devcontainer-community/devcontainer-features/hermes-agent.nousresearch.com:1": {},
-    "ghcr.io/jsburckhardt/devcontainer-features/opencode:1": {},
+    "ghcr.io/devcontainers-extra/features/npm-package:1": {
+      "package": "@opencode/cli"
+    },
     "ghcr.io/devcontainers/features/github-cli:1": {},
     "ghcr.io/devcontainers/features/go:1": {},
     "ghcr.io/devcontainers/features/node:2": {},

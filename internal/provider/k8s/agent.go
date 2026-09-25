@@ -37,7 +37,7 @@ func (p *Provider) ForwardAgent(ctx context.Context, c model.Container, agentSoc
 			args = append(args, "-i")
 		}
 		args = append(args, "deployment/"+objectName(c), "--")
-		args = append(args, asRemoteUser(dev.RemoteUser, dev.WorkspaceFolder, command)...)
+		args = append(args, asRemoteUser(dev.RemoteUser, dev.HomeDir(), dev.WorkspaceFolder, command)...)
 
 		var out bytes.Buffer
 		err := p.kube.stream(ctx, streamOpts{
@@ -51,7 +51,7 @@ func (p *Provider) ForwardAgent(ctx context.Context, c model.Container, agentSoc
 	start := func(ctx context.Context, command []string) (*relay.Pipes, error) {
 		args := p.kube.args(append([]string{
 			"exec", "-i", "deployment/" + objectName(c), "--",
-		}, asRemoteUser(dev.RemoteUser, dev.WorkspaceFolder, command)...)...)
+		}, asRemoteUser(dev.RemoteUser, dev.HomeDir(), dev.WorkspaceFolder, command)...)...)
 
 		cmd := exec.CommandContext(ctx, kubectlBin, args...)
 

@@ -148,7 +148,7 @@ func (p *Provider) Exec(ctx context.Context, c model.Container, command []string
 		args = append(args, "-i")
 	}
 	args = append(args, "deployment/"+objectName(c), "--")
-	args = append(args, asRemoteUser(dev.RemoteUser, dev.WorkspaceFolder, inner)...)
+	args = append(args, asRemoteUser(dev.RemoteUser, dev.HomeDir(), dev.WorkspaceFolder, inner)...)
 
 	return p.kube.stream(ctx, streamOpts{
 		Stdin:  opts.Stdin,
