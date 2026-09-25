@@ -48,7 +48,24 @@ type envVar struct{ Key, Value string }
 // the pod is root depends on the image, which this tool does not inspect: if it
 // is already the right user, or is not root and so cannot switch, the command
 // runs as-is rather than failing.
-func asRemoteUser(user, workdir string, argv []string) []string {
+//
+// `su -p` keeps the pod's environment, which is where the Secret's settings and
+// containerEnv live, but it keeps root's HOME, USER and LOGNAME with it. Those
+// three are reset to the remote user's: with HOME=/root, any tool that writes
+// under ~ fails with permission denied (opencode dies creating
+// /root/.local/share/opencode), and the home subPath mounted at home would
+// never be written at all.
+//
+// PATH goes the other way: su runs PAM, and pam_env replaces it with
+// /etc/environment's even under -p. The devcontainer CLI rewrites that file
+// with the image's PATH when it starts a container, which never happens here,
+// so it still holds the distro default and everything a feature put on PATH —
+// npm's global bin under nvm — vanishes, and start-agent reports an installed
+// agent as missing. The pod's PATH rides across in DEV_POD_PATH and is restored
+// inside the switched shell, after PAM has run; the other three are set there
+// too, since pam_env may name them as well. HOME is also set before su, or the
+// user's shell looks for its rc file in /root and complains it cannot read it.
+func asRemoteUser(user, home, workdir string, argv []string) []string {
 	cmd := shellJoin(argv)
 	if workdir != "" {
 		cmd = "cd " + shellQuote(workdir) + " && " + cmd
@@ -57,8 +74,10 @@ func asRemoteUser(user, workdir string, argv []string) []string {
 		return []string{"sh", "-c", cmd}
 	}
 
+	switched := fmt.Sprintf(`export PATH="$DEV_POD_PATH" HOME=%s USER=%s LOGNAME=%s; unset DEV_POD_PATH; %s`,
+		shellQuote(home), shellQuote(user), shellQuote(user), cmd)
 	script := fmt.Sprintf(
-		`if [ "$(id -un)" != %s ] && [ "$(id -u)" = 0 ]; then exec su -p %s -c %s; else exec sh -c %s; fi`,
-		shellQuote(user), shellQuote(user), shellQuote(cmd), shellQuote(cmd))
+		`if [ "$(id -un)" != %s ] && [ "$(id -u)" = 0 ]; then HOME=%s DEV_POD_PATH="$PATH" exec su -p %s -c %s; else exec sh -c %s; fi`,
+		shellQuote(user), shellQuote(home), shellQuote(user), shellQuote(switched), shellQuote(cmd))
 	return []string{"sh", "-c", script}
 }
