@@ -19,6 +19,7 @@ func newContainerStartAgentCmd(a *app) *cobra.Command {
 	var (
 		workspace string
 		agentID   string
+		kubeToken bool
 	)
 
 	cmd := &cobra.Command{
@@ -35,16 +36,17 @@ func newContainerStartAgentCmd(a *app) *cobra.Command {
 			if dash := cmd.ArgsLenAtDash(); dash >= 0 {
 				extra = args[dash:]
 			}
-			return runContainerStartAgent(cmd.Context(), a, workspace, args[0], agentID, extra)
+			return runContainerStartAgent(cmd.Context(), a, workspace, args[0], agentID, extra, kubeToken)
 		},
 	}
 	addWorkspaceFlag(cmd, &workspace)
+	addKubeTokenFlag(cmd, &kubeToken)
 	cmd.Flags().StringVar(&agentID, "agent", "claude",
 		"which agent to run ("+strings.Join(agent.IDs(), ", ")+")")
 	return cmd
 }
 
-func runContainerStartAgent(ctx context.Context, a *app, workspace, name, agentID string, extra []string) error {
+func runContainerStartAgent(ctx context.Context, a *app, workspace, name, agentID string, extra []string, kubeToken bool) error {
 	ag, err := agent.Lookup(agentID)
 	if err != nil {
 		return usageError(err)
@@ -60,6 +62,15 @@ func runContainerStartAgent(ctx context.Context, a *app, workspace, name, agentI
 	}
 
 	environ, err := a.containerEnv(ctx, t.container)
+	if err != nil {
+		return err
+	}
+
+	// Asked before Up, so a host-side failure — no kubectl, no contexts, a
+	// cancelled pick — does not start a container for nothing. Minted after it,
+	// below, so the token's lifetime starts with the session rather than before
+	// an image pull.
+	kubeReq, err := askKubeTokenIf(ctx, kubeToken)
 	if err != nil {
 		return err
 	}
@@ -90,6 +101,13 @@ func runContainerStartAgent(ctx context.Context, a *app, workspace, name, agentI
 	}
 
 	if err := a.ensureAgentPresent(ctx, t, ag, environ); err != nil {
+		return err
+	}
+
+	// After ensureAgentPresent, which may rebuild: a kubeconfig written into
+	// the old container would go with it.
+	environ, err = a.applyKubeToken(ctx, t, kubeReq, environ)
+	if err != nil {
 		return err
 	}
 

@@ -15,6 +15,7 @@ command. For what `dev` *is* and how it fits together, read the
   - [Keep an agent's plugins across a rebuild](#keep-an-agents-plugins-across-a-rebuild)
   - [Declare a project's agent setup](#declare-a-projects-agent-setup)
   - [Commit a devcontainer.json that also works under dev](#commit-a-devcontainerjson-that-also-works-under-dev)
+  - [Query a cluster from inside a container](#query-a-cluster-from-inside-a-container)
   - [Run a workspace in Kubernetes](#run-a-workspace-in-kubernetes)
   - [Clean up](#clean-up)
 - [Troubleshooting](#troubleshooting)
@@ -452,6 +453,77 @@ a `devcontainer.json` can call that resolver. Opened outside `dev`, the
 container starts, the agents have their state volume, and the secrets are
 simply absent.
 
+### Query a cluster from inside a container
+
+An agent sometimes needs to read a cluster — the pods behind a change, the
+events behind a failing rollout. `--kube-token` gives it `kubectl` access as a
+ServiceAccount you choose, with a token that expires on its own.
+
+This works the same on both providers and has nothing to do with the
+experimental k8s provider: the cluster you query and the engine the container
+runs in are unrelated.
+
+Make the ServiceAccount first, with only the access you mean to give. A
+read-only one in a single namespace:
+
+```sh
+kubectl -n team-a create serviceaccount reader
+kubectl -n team-a create rolebinding reader-view --clusterrole view --serviceaccount team-a:reader
+```
+
+Then pass the flag to `shell`, `exec` or `start-agent`:
+
+```
+$ dev container start-agent api --kube-token
+context: prod-eu
+namespace: team-a
+service account: reader
+duration, empty for kubectl's default (1h): 4h
+dev: token for team-a/reader on prod-eu expires at 19:42 (4h0m0s)
+```
+
+With `fzf` installed on the host, the first three questions are fzf lists of
+what your kubeconfig and the cluster offer. Without it, the choices are listed
+and you type one. A list the cluster will not give you — RBAC often forbids
+listing ServiceAccounts — becomes a free-text question, since you may know the
+name without being allowed to list it. The questions are asked every time.
+
+`dev` mints the token on the host with `kubectl create token`, writes a
+kubeconfig holding it to `/tmp/dev-kube/config` in the container, and runs the
+command with `KUBECONFIG` pointing there. The kubeconfig carries the token and
+nothing else of yours: your own client certificates and exec plugins never leave
+the host. The container needs `kubectl`; `dev` warns when it has none, and does
+not install it.
+
+**Refreshing.** When the token expires, `kubectl` in the container starts
+answering `Unauthorized`. Mint a new one from the host:
+
+```sh
+dev container exec api --kube-token -- true
+```
+
+`kubectl` rereads its kubeconfig on every call, so the session already running
+— the agent you started four hours ago — picks up the new token on its next
+call, without a restart.
+
+**The duration.** 1h is kubectl's default, not a limit. The cluster's limit is
+the API server's `--service-account-max-token-expiration`; upstream sets none,
+but a managed cluster may, and a cluster that caps below your request issues a
+shorter token without refusing. `dev` reads the token's real expiry and says so:
+
+```
+dev: asked for 4h0m0s, the cluster issued 1h0m0s; its maximum is lower
+```
+
+**The last mint wins.** There is one kubeconfig per container. A later
+`--kube-token` that picks a different ServiceAccount changes the identity of
+every session already using it — a read-only session becomes whatever the new
+account can do. Pick the same account when you refresh.
+
+Only commands run with the flag get `KUBECONFIG`. A plain `shell` afterwards
+does not, though the file is still there; on a k8s-provider pod that keeps it on
+the pod's own in-cluster credentials.
+
 ### Run a workspace in Kubernetes
 
 > The k8s provider is **experimental**. It works, but its configuration and
@@ -691,9 +763,9 @@ dev container stop NAME
 dev container remove NAME [--force]
 dev container rebuild NAME [--no-cache] [--tools LIST]
 dev container logs NAME [-f]
-dev container shell NAME
-dev container exec NAME -- CMD [ARGS...]
-dev container start-agent NAME [--agent claude|codex|hermes|opencode] [-- ARGS...]
+dev container shell NAME [--kube-token]
+dev container exec NAME [--kube-token] -- CMD [ARGS...]
+dev container start-agent NAME [--agent claude|codex|hermes|opencode] [--kube-token] [-- ARGS...]
 dev container sync NAME
 dev container tools
 dev container config show NAME
@@ -769,6 +841,14 @@ not to `dev`.
 
 **`start-agent`** defaults to `--agent claude`. The agent must already be
 installed in the image.
+
+**`--kube-token`**, on `shell`, `exec` and `start-agent`, asks for a context,
+namespace, ServiceAccount and duration, mints a token for that account on the
+host, writes a kubeconfig holding it to `/tmp/dev-kube/config` in the container
+and sets `KUBECONFIG` for the command. It needs a terminal — without one it is
+exit 2 — and a host `kubectl`. `shell` and `exec` refuse a stopped container
+before asking anything; `start-agent` asks before it starts one. See
+[Query a cluster from inside a container](#query-a-cluster-from-inside-a-container).
 
 **`sync`** pushes the workspace's settings into a container and never touches
 your files. On k8s it refreshes the Secret the pod is built from, leaving the
@@ -847,6 +927,7 @@ the container and warns that the checkout at its path was left behind, naming
 | `DEV_STATE` | where the SQLite database lives; default `~/.local/state/dev/dev.db` |
 | `DOCKER_HOST` | read by `docker`, which `dev` shells out to; how you point at Podman |
 | `SSH_AUTH_SOCK` | your ssh agent, read on the host when a workspace uses `--ssh-forward`. Inside the container it names the relay instead |
+| `KUBECONFIG` | set inside the container, for a command run with `--kube-token`, to the kubeconfig holding the minted token |
 | `DEV_SMOKE_K8S_CONTEXT` | turns on the Kubernetes half of `make smoke` |
 | `DEV_SMOKE_REGISTRY` | the other half of that switch; both must be set |
 | `DEV_SMOKE_K8S_NAMESPACE` | optional, default `default` |

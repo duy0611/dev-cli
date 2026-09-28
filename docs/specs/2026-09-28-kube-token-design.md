@@ -72,7 +72,7 @@ $ dev container shell api --kube-token
 context: (fzf list of kubectl config get-contexts -o name)
 namespace: (fzf list of namespaces in that context)
 service account: (fzf list of service accounts in that namespace)
-duration, empty for kubectl's default (1h) [1h]: 4h
+duration, empty for kubectl's default (1h): 4h
 dev: token for team-a/reader on prod-eu expires at 19:42 (4h0m)
 vscode@api:/workspaces/api$ kubectl get pods
 ```
@@ -85,9 +85,10 @@ The four questions, in order:
    context's default namespace listed first.
 3. **ServiceAccount** — from
    `kubectl --context C -n NS get serviceaccounts -o name`.
-4. **Duration** — free text, default `1h`. The label says that an empty answer
-   is kubectl's own default, which is 1h. Checked with `time.ParseDuration`
-   before anything is minted, and asked again if it does not parse.
+4. **Duration** — free text. The label says that an empty answer is kubectl's
+   own default, which is 1h; empty passes no `--duration` at all. Checked with
+   `time.ParseDuration` before anything is minted, and asked again if it does
+   not parse.
 
 When `fzf` is on the host's `PATH`, questions 1–3 are fzf lists: the choices go
 in on its stdin, it draws on `/dev/tty`, and the pick comes back on its stdout.
