@@ -49,7 +49,8 @@ Requires Go 1.26 or newer to build. At runtime you need:
 |---|---|
 | [`devcontainer` CLI](https://github.com/devcontainers/cli) | reads configurations and builds images, on both providers |
 | a Docker-compatible engine | Podman and Docker Desktop both work; `dev` talks to whichever `docker` points at. Needed for the k8s provider too, because that is where the image is built |
-| `kubectl` | only for the k8s provider |
+| `kubectl` | for the k8s provider, and for `--kube-token` |
+| [`fzf`](https://github.com/junegunn/fzf) | optional; `--kube-token` picks from lists with it when it is installed |
 | [`op`](https://developer.1password.com/docs/cli/) | only if you use `op://` settings |
 
 ## Concepts

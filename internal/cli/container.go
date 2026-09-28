@@ -704,21 +704,25 @@ func runContainerSync(ctx context.Context, a *app, workspace, name string) error
 // --- shell and exec ---------------------------------------------------------------
 
 func newContainerShellCmd(a *app) *cobra.Command {
-	var workspace string
+	var (
+		workspace string
+		kubeToken bool
+	)
 
 	cmd := &cobra.Command{
 		Use:   "shell NAME",
 		Short: "Open an interactive shell in a container",
 		Args:  exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runContainerShell(cmd.Context(), a, workspace, args[0])
+			return runContainerShell(cmd.Context(), a, workspace, args[0], kubeToken)
 		},
 	}
 	addWorkspaceFlag(cmd, &workspace)
+	addKubeTokenFlag(cmd, &kubeToken)
 	return cmd
 }
 
-func runContainerShell(ctx context.Context, a *app, workspace, name string) error {
+func runContainerShell(ctx context.Context, a *app, workspace, name string, kubeToken bool) error {
 	t, err := a.resolve(workspace, name)
 	if err != nil {
 		return err
@@ -731,6 +735,14 @@ func runContainerShell(ctx context.Context, a *app, workspace, name string) erro
 		return err
 	}
 	environ, err := a.containerEnv(ctx, t.container)
+	if err != nil {
+		return err
+	}
+	req, err := askKubeTokenIf(ctx, kubeToken)
+	if err != nil {
+		return err
+	}
+	environ, err = a.applyKubeToken(ctx, t, req, environ)
 	if err != nil {
 		return err
 	}
@@ -774,7 +786,10 @@ func detectShell(ctx context.Context, t *target) string {
 }
 
 func newContainerExecCmd(a *app) *cobra.Command {
-	var workspace string
+	var (
+		workspace string
+		kubeToken bool
+	)
 
 	cmd := &cobra.Command{
 		Use:   "exec NAME -- COMMAND [ARGS...]",
@@ -788,14 +803,15 @@ func newContainerExecCmd(a *app) *cobra.Command {
 			if dash < 0 {
 				return usageErrorf("no command given; use: dev container exec %s -- CMD [ARGS...]", args[0])
 			}
-			return runContainerExec(cmd.Context(), a, workspace, args[0], args[dash:])
+			return runContainerExec(cmd.Context(), a, workspace, args[0], args[dash:], kubeToken)
 		},
 	}
 	addWorkspaceFlag(cmd, &workspace)
+	addKubeTokenFlag(cmd, &kubeToken)
 	return cmd
 }
 
-func runContainerExec(ctx context.Context, a *app, workspace, name string, command []string) error {
+func runContainerExec(ctx context.Context, a *app, workspace, name string, command []string, kubeToken bool) error {
 	if len(command) == 0 {
 		return usageErrorf("no command given; use: dev container exec %s -- CMD [ARGS...]", name)
 	}
@@ -812,6 +828,14 @@ func runContainerExec(ctx context.Context, a *app, workspace, name string, comma
 		return err
 	}
 	environ, err := a.containerEnv(ctx, t.container)
+	if err != nil {
+		return err
+	}
+	req, err := askKubeTokenIf(ctx, kubeToken)
+	if err != nil {
+		return err
+	}
+	environ, err = a.applyKubeToken(ctx, t, req, environ)
 	if err != nil {
 		return err
 	}

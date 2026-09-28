@@ -6,8 +6,8 @@ Guidance for Claude Code (claude.ai/code) working in this repository.
 
 `dev`, a Go CLI that manages devcontainers and runs coding agents inside them.
 One binary, a SQLite database, and the external binaries it shells out to:
-`devcontainer` and `docker` always, `kubectl` for the k8s provider. One
-operator. The module is `github.com/duy0611/dev-cli`, released as 0.1.0.
+`devcontainer` and `docker` always, `kubectl` for the k8s provider and for
+`--kube-token`. One operator. The module is `github.com/duy0611/dev-cli`, released as 0.1.0.
 
 CI runs `make lint && make test` on push and pull request, with `make smoke` as
 a second job beside it, and a `v*` tag builds `dev` for darwin and linux on both
@@ -65,6 +65,7 @@ internal/provider/    Provider interface + registry
 internal/provider/local/  devcontainer CLI and docker adapter
 internal/provider/k8s/    devcontainer CLI, kubectl, manifests, lifecycle
 internal/secret/      spec -> value: literal, keychain, op
+internal/kubetoken/   minting a ServiceAccount token into a kubeconfig
 internal/env/         assembles the env a container launches with
 internal/agent/       which agents exist, how to invoke and configure them
 internal/agentcfg/    reading a project's agents.yaml
