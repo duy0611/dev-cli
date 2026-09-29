@@ -330,7 +330,7 @@ func envHas(env []provider.EnvVar, key string) bool {
 // Without the flag nothing changes: no question, no write, no KUBECONFIG.
 func TestExecWithoutKubeToken(t *testing.T) {
 	a := seedFake(t, model.StatusRunning)
-	if err := runContainerExec(t.Context(), a, "", "api", []string{"true"}, false); err != nil {
+	if err := runContainerExec(t.Context(), a, "", "api", []string{"true"}, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range fake.execs {
@@ -345,7 +345,7 @@ func TestExecWithoutKubeToken(t *testing.T) {
 func TestExecKubeTokenStoppedRefusesFirst(t *testing.T) {
 	noTerminal(t)
 	a := seedFake(t, model.StatusStopped)
-	err := runContainerExec(t.Context(), a, "", "api", []string{"true"}, true)
+	err := runContainerExec(t.Context(), a, "", "api", []string{"true"}, true, nil)
 	if exitCodeOf(err) != exitNotFound {
 		t.Errorf("err = %v (exit %d), want the not-running refusal", err, exitCodeOf(err))
 	}
@@ -355,7 +355,7 @@ func TestExecKubeTokenStoppedRefusesFirst(t *testing.T) {
 func TestExecKubeTokenNoTerminal(t *testing.T) {
 	noTerminal(t)
 	a := seedFake(t, model.StatusRunning)
-	err := runContainerExec(t.Context(), a, "", "api", []string{"true"}, true)
+	err := runContainerExec(t.Context(), a, "", "api", []string{"true"}, true, nil)
 	if exitCodeOf(err) != exitUsage {
 		t.Errorf("err = %v (exit %d)", err, exitCodeOf(err))
 	}
@@ -369,7 +369,7 @@ func TestExecKubeTokenNoTerminal(t *testing.T) {
 func TestStartAgentAsksBeforeUp(t *testing.T) {
 	noTerminal(t)
 	a := seedFake(t, model.StatusStopped)
-	err := runContainerStartAgent(t.Context(), a, "", "api", "claude", nil, true)
+	err := runContainerStartAgent(t.Context(), a, "", "api", "claude", nil, true, nil)
 	if exitCodeOf(err) != exitUsage {
 		t.Errorf("err = %v (exit %d)", err, exitCodeOf(err))
 	}

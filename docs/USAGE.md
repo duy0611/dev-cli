@@ -297,6 +297,16 @@ Four things to know:
   verifies it; only local checking needs a file mapping emails to keys, which
   `dev` cannot write for you.
 
+The workspace setting is a default, not a lock. `--ssh-agent` forwards the
+agent for one command in a workspace that does not, and `--no-ssh-agent` keeps
+it out of one command in a workspace that does — an agent you are about to
+leave unattended, say:
+
+```sh
+dev container exec api --ssh-agent -- git push
+dev container start-agent api --no-ssh-agent
+```
+
 Both providers support this. On k8s the relay rides `kubectl exec` rather than a
 local socket, so it works the same way from a pod.
 
@@ -733,8 +743,9 @@ dev workspace remove NAME
 `--ssh-forward` lets containers reach the ssh agent on your machine, for the
 length of each `dev` command, and signs commits with its first key. See
 [Push to git from inside a container](#push-to-git-from-inside-a-container).
-It is fixed at `init`: there is no flag to change it afterwards, so a workspace
-that needs it later is a new workspace.
+It is fixed at `init`: there is no flag to change it afterwards. A single
+command can override it with `--ssh-agent` or `--no-ssh-agent`; a workspace that
+needs the other default for good is a new workspace.
 
 | Spec | Resolved by |
 |---|---|
@@ -763,9 +774,9 @@ dev container stop NAME
 dev container remove NAME [--force]
 dev container rebuild NAME [--no-cache] [--tools LIST]
 dev container logs NAME [-f]
-dev container shell NAME [--kube-token]
-dev container exec NAME [--kube-token] -- CMD [ARGS...]
-dev container start-agent NAME [--agent claude|codex|hermes|opencode] [--kube-token] [-- ARGS...]
+dev container shell NAME [--kube-token] [--ssh-agent|--no-ssh-agent]
+dev container exec NAME [--kube-token] [--ssh-agent|--no-ssh-agent] -- CMD [ARGS...]
+dev container start-agent NAME [--agent claude|codex|hermes|opencode] [--kube-token] [--ssh-agent|--no-ssh-agent] [-- ARGS...]
 dev container sync NAME
 dev container tools
 dev container config show NAME
@@ -849,6 +860,13 @@ and sets `KUBECONFIG` for the command. It needs a terminal — without one it is
 exit 2 — and a host `kubectl`. `shell` and `exec` refuse a stopped container
 before asking anything; `start-agent` asks before it starts one. See
 [Query a cluster from inside a container](#query-a-cluster-from-inside-a-container).
+
+**`--ssh-agent`** and **`--no-ssh-agent`**, on `shell`, `exec` and
+`start-agent`, override the workspace's `--ssh-forward` for that one command:
+the first forwards the agent even if the workspace does not, the second keeps
+it out even if the workspace forwards it. With neither, the workspace decides.
+Giving both is exit 2. See
+[Push to git from inside a container](#push-to-git-from-inside-a-container).
 
 **`sync`** pushes the workspace's settings into a container and never touches
 your files. On k8s it refreshes the Secret the pod is built from, leaving the
