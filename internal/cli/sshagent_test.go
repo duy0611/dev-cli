@@ -87,7 +87,7 @@ func TestForwardAgentOffIsAPassthrough(t *testing.T) {
 		provider:  notForwarder{},
 	}
 
-	out, stop, err := a.forwardAgent(context.Background(), t2, in)
+	out, stop, err := a.forwardAgent(context.Background(), t2, nil, in)
 	if err != nil {
 		t.Fatalf("forwardAgent: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestForwardAgentNoHostAgent(t *testing.T) {
 		provider:  notForwarder{},
 	}
 
-	_, _, err := a.forwardAgent(context.Background(), t2, nil)
+	_, _, err := a.forwardAgent(context.Background(), t2, nil, nil)
 	if err == nil {
 		t.Fatal("expected an error when the host has no ssh agent")
 	}
@@ -125,6 +125,90 @@ func TestForwardAgentNoHostAgent(t *testing.T) {
 		t.Errorf("error should name %s, got: %v", sshAuthSockKey, err)
 	}
 }
+
+// --no-ssh-agent on a workspace that forwards: no relay, no socket, and no
+// error from a provider that could not have carried one anyway — proving the
+// override is honoured before anything tries to forward.
+func TestForwardAgentOverrideOff(t *testing.T) {
+	a, _ := newTestApp(t)
+	in := []provider.EnvVar{{Key: "FOO", Value: "bar"}}
+	off := false
+
+	t2 := &target{
+		workspace: model.Workspace{Name: "ws", SSHForward: true},
+		provider:  notForwarder{},
+	}
+
+	out, stop, err := a.forwardAgent(context.Background(), t2, &off, in)
+	if err != nil {
+		t.Fatalf("forwardAgent: %v", err)
+	}
+	stop()
+	if len(out) != len(in) || out[0] != in[0] {
+		t.Errorf("environment changed with --no-ssh-agent: %v", out)
+	}
+}
+
+// --ssh-agent on a workspace that does not forward: it tries, so a host with no
+// agent is reported exactly as it is for a workspace with forwarding on.
+func TestForwardAgentOverrideOn(t *testing.T) {
+	a, _ := newTestApp(t)
+	t.Setenv("SSH_AUTH_SOCK", "")
+	on := true
+
+	t2 := &target{
+		workspace: model.Workspace{Name: "ws", SSHForward: false},
+		provider:  notForwarder{},
+	}
+
+	_, _, err := a.forwardAgent(context.Background(), t2, &on, nil)
+	if err == nil {
+		t.Fatal("expected --ssh-agent to attempt forwarding and fail without a host agent")
+	}
+	if !strings.Contains(err.Error(), sshAuthSockKey) {
+		t.Errorf("error should name %s, got: %v", sshAuthSockKey, err)
+	}
+}
+
+func TestSSHAgentFlagsOverride(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		flags sshAgentFlags
+		want  *bool
+	}{
+		{"neither", sshAgentFlags{}, nil},
+		{"on", sshAgentFlags{on: true}, ptr(true)},
+		{"off", sshAgentFlags{off: true}, ptr(false)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := tc.flags.override()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (got == nil) != (tc.want == nil) || (got != nil && *got != *tc.want) {
+				t.Errorf("override() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// Both flags is a contradictory request, so it exits 2 on every command that
+// takes them (invariant 7) — and before the container is looked up, or a
+// missing one would exit 3 and hide the real mistake.
+func TestSSHAgentFlagsTogetherExitTwo(t *testing.T) {
+	for _, argv := range [][]string{
+		{"container", "shell", "api", "--ssh-agent", "--no-ssh-agent"},
+		{"container", "exec", "api", "--ssh-agent", "--no-ssh-agent", "--", "true"},
+		{"container", "start-agent", "api", "--ssh-agent", "--no-ssh-agent"},
+	} {
+		code, out := execute(t, argv...)
+		if code != exitUsage {
+			t.Errorf("%v: exit %d, want %d\n%s", argv, code, exitUsage, out)
+		}
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
 
 // TestWorkspaceInitStoresSSHForward covers the flag reaching the database.
 // Without the round trip a workspace would report forwarding on and every
@@ -247,7 +331,7 @@ func TestForwardAgentUnsupportedProvider(t *testing.T) {
 		provider:  notForwarder{},
 	}
 
-	_, _, err := a.forwardAgent(context.Background(), t2, nil)
+	_, _, err := a.forwardAgent(context.Background(), t2, nil, nil)
 	if err == nil {
 		t.Fatal("expected an error from a provider that cannot forward")
 	}

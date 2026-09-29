@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/spf13/cobra"
+
 	"github.com/duy0611/dev-cli/internal/provider"
 	"github.com/duy0611/dev-cli/internal/relay"
 )
@@ -13,23 +15,66 @@ import (
 // sshAuthSockKey is the variable ssh and git read to find an agent.
 const sshAuthSockKey = "SSH_AUTH_SOCK"
 
+// sshAgentFlags is --ssh-agent and --no-ssh-agent on a command that launches a
+// process in a container, overriding the workspace's setting for that one
+// command.
+type sshAgentFlags struct {
+	on, off bool
+}
+
+// addSSHAgentFlags registers the pair on cmd.
+func addSSHAgentFlags(cmd *cobra.Command, f *sshAgentFlags) {
+	cmd.Flags().BoolVar(&f.on, "ssh-agent", false,
+		"forward the host's ssh agent for this command, whatever the workspace says")
+	cmd.Flags().BoolVar(&f.off, "no-ssh-agent", false,
+		"do not forward the host's ssh agent for this command, whatever the workspace says")
+}
+
+// override reports the choice the flags make: nil when neither was given, so
+// the workspace's setting stands.
+//
+// Both at once is refused rather than resolved by order: the operator asked for
+// two opposite things, and whichever one won would be a guess. Checked here and
+// not with cobra's MarkFlagsMutuallyExclusive, whose error exits 1 instead of
+// the 2 a malformed request owes (invariant 7).
+func (f sshAgentFlags) override() (*bool, error) {
+	switch {
+	case f.on && f.off:
+		return nil, usageErrorf("--ssh-agent and --no-ssh-agent cannot be used together")
+	case f.on:
+		v := true
+		return &v, nil
+	case f.off:
+		v := false
+		return &v, nil
+	}
+	return nil, nil
+}
+
 // forwardAgent starts an agent relay for one command, when the workspace asks
-// for it, and returns the environment with SSH_AUTH_SOCK pointing at it.
+// for it or override does, and returns the environment with SSH_AUTH_SOCK
+// pointing at it. A non-nil override wins over the workspace in both
+// directions.
 //
 // The returned stop must be called before the command returns. The agent is
 // reachable from inside the container until it is, which is the whole feature
 // and also the reason the window is one command rather than the container's
 // lifetime.
 //
-// Returns environ unchanged, and a stop that does nothing, when the workspace
-// has forwarding off — so every caller can invoke this the same way.
-func (a *app) forwardAgent(ctx context.Context, t *target, environ []provider.EnvVar) ([]provider.EnvVar, func(), error) {
+// Returns environ unchanged, and a stop that does nothing, when forwarding is
+// off — so every caller can invoke this the same way.
+func (a *app) forwardAgent(ctx context.Context, t *target, override *bool,
+	environ []provider.EnvVar) ([]provider.EnvVar, func(), error) {
 	noop := func() {}
-	if !t.workspace.SSHForward {
+	forward := t.workspace.SSHForward
+	if override != nil {
+		forward = *override
+	}
+	if !forward {
 		return environ, noop, nil
 	}
 
-	// Refused rather than skipped: the workspace asked for the agent, so
+	// Refused rather than skipped: the operator asked for the agent, so
 	// carrying on without it would produce a "Permission denied (publickey)"
 	// later that says nothing about the real cause.
 	agentSocket, err := relay.AgentSocket()
@@ -42,7 +87,7 @@ func (a *app) forwardAgent(ctx context.Context, t *target, environ []provider.En
 	fwd, ok := t.provider.(provider.AgentForwarder)
 	if !ok {
 		return nil, noop, fmt.Errorf(
-			"workspace %s forwards the ssh agent, which provider %s does not support",
+			"forwarding the ssh agent into workspace %s, which provider %s does not support",
 			t.workspace.Name, t.workspace.ProviderName)
 	}
 

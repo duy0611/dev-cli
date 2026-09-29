@@ -707,6 +707,7 @@ func newContainerShellCmd(a *app) *cobra.Command {
 	var (
 		workspace string
 		kubeToken bool
+		sshAgent  sshAgentFlags
 	)
 
 	cmd := &cobra.Command{
@@ -714,15 +715,20 @@ func newContainerShellCmd(a *app) *cobra.Command {
 		Short: "Open an interactive shell in a container",
 		Args:  exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runContainerShell(cmd.Context(), a, workspace, args[0], kubeToken)
+			sshOverride, err := sshAgent.override()
+			if err != nil {
+				return err
+			}
+			return runContainerShell(cmd.Context(), a, workspace, args[0], kubeToken, sshOverride)
 		},
 	}
 	addWorkspaceFlag(cmd, &workspace)
 	addKubeTokenFlag(cmd, &kubeToken)
+	addSSHAgentFlags(cmd, &sshAgent)
 	return cmd
 }
 
-func runContainerShell(ctx context.Context, a *app, workspace, name string, kubeToken bool) error {
+func runContainerShell(ctx context.Context, a *app, workspace, name string, kubeToken bool, sshOverride *bool) error {
 	t, err := a.resolve(workspace, name)
 	if err != nil {
 		return err
@@ -746,7 +752,7 @@ func runContainerShell(ctx context.Context, a *app, workspace, name string, kube
 	if err != nil {
 		return err
 	}
-	environ, stopAgent, err := a.forwardAgent(ctx, t, environ)
+	environ, stopAgent, err := a.forwardAgent(ctx, t, sshOverride, environ)
 	if err != nil {
 		return err
 	}
@@ -789,6 +795,7 @@ func newContainerExecCmd(a *app) *cobra.Command {
 	var (
 		workspace string
 		kubeToken bool
+		sshAgent  sshAgentFlags
 	)
 
 	cmd := &cobra.Command{
@@ -803,15 +810,21 @@ func newContainerExecCmd(a *app) *cobra.Command {
 			if dash < 0 {
 				return usageErrorf("no command given; use: dev container exec %s -- CMD [ARGS...]", args[0])
 			}
-			return runContainerExec(cmd.Context(), a, workspace, args[0], args[dash:], kubeToken)
+			sshOverride, err := sshAgent.override()
+			if err != nil {
+				return err
+			}
+			return runContainerExec(cmd.Context(), a, workspace, args[0], args[dash:], kubeToken, sshOverride)
 		},
 	}
 	addWorkspaceFlag(cmd, &workspace)
 	addKubeTokenFlag(cmd, &kubeToken)
+	addSSHAgentFlags(cmd, &sshAgent)
 	return cmd
 }
 
-func runContainerExec(ctx context.Context, a *app, workspace, name string, command []string, kubeToken bool) error {
+func runContainerExec(ctx context.Context, a *app, workspace, name string, command []string,
+	kubeToken bool, sshOverride *bool) error {
 	if len(command) == 0 {
 		return usageErrorf("no command given; use: dev container exec %s -- CMD [ARGS...]", name)
 	}
@@ -839,7 +852,7 @@ func runContainerExec(ctx context.Context, a *app, workspace, name string, comma
 	if err != nil {
 		return err
 	}
-	environ, stopAgent, err := a.forwardAgent(ctx, t, environ)
+	environ, stopAgent, err := a.forwardAgent(ctx, t, sshOverride, environ)
 	if err != nil {
 		return err
 	}

@@ -20,6 +20,7 @@ func newContainerStartAgentCmd(a *app) *cobra.Command {
 		workspace string
 		agentID   string
 		kubeToken bool
+		sshAgent  sshAgentFlags
 	)
 
 	cmd := &cobra.Command{
@@ -36,17 +37,23 @@ func newContainerStartAgentCmd(a *app) *cobra.Command {
 			if dash := cmd.ArgsLenAtDash(); dash >= 0 {
 				extra = args[dash:]
 			}
-			return runContainerStartAgent(cmd.Context(), a, workspace, args[0], agentID, extra, kubeToken)
+			sshOverride, err := sshAgent.override()
+			if err != nil {
+				return err
+			}
+			return runContainerStartAgent(cmd.Context(), a, workspace, args[0], agentID, extra, kubeToken, sshOverride)
 		},
 	}
 	addWorkspaceFlag(cmd, &workspace)
 	addKubeTokenFlag(cmd, &kubeToken)
+	addSSHAgentFlags(cmd, &sshAgent)
 	cmd.Flags().StringVar(&agentID, "agent", "claude",
 		"which agent to run ("+strings.Join(agent.IDs(), ", ")+")")
 	return cmd
 }
 
-func runContainerStartAgent(ctx context.Context, a *app, workspace, name, agentID string, extra []string, kubeToken bool) error {
+func runContainerStartAgent(ctx context.Context, a *app, workspace, name, agentID string, extra []string,
+	kubeToken bool, sshOverride *bool) error {
 	ag, err := agent.Lookup(agentID)
 	if err != nil {
 		return usageError(err)
@@ -114,7 +121,7 @@ func runContainerStartAgent(ctx context.Context, a *app, workspace, name, agentI
 	// After the container is up and after any rebuild: the relay runs inside
 	// the container, so it has nothing to attach to before the first, and a
 	// rebuild would take the running relay down with the old container.
-	environ, stopAgent, err := a.forwardAgent(ctx, t, environ)
+	environ, stopAgent, err := a.forwardAgent(ctx, t, sshOverride, environ)
 	if err != nil {
 		return err
 	}
