@@ -1,4 +1,12 @@
-## Builds `dev` for every platform it runs on and attaches them to a tag.
+## Opens a release PR from the commits on main, and on its merge tags the
+## release and builds `dev` for every platform it runs on.
+##
+## release-please reads Conventional Commit subjects since the last release,
+## keeps a PR open that bumps .release-please-manifest.json and CHANGELOG.md,
+## and when that PR merges, creates the tag and the GitHub release. The build
+## lives in this same workflow rather than one triggered by the tag: a tag
+## pushed with GITHUB_TOKEN starts no other workflow, so a separate `on: push:
+## tags` would never run.
 ##
 ## `dev` is a host-side tool: it shells out to the devcontainer CLI, docker and
 ## kubectl, and reads the macOS Keychain. So it is built for the machines an
@@ -9,21 +17,54 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
-  # Runnable by hand so the build can be proved before a tag exists, which is
-  # the only way to find out that a cross-build is broken without publishing a
-  # broken release first.
+    branches: [main]
+  # Runnable by hand so the build can be proved before a release exists, which
+  # is the only way to find out that a cross-build is broken without publishing
+  # a broken release first.
   workflow_dispatch:
 
+# Two merges in quick succession must not race to open or update the same PR.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
-  contents: write # creating the release and uploading to it
+  contents: write # the tag, the release, and uploading to it
+  pull-requests: write # opening and updating the release PR
 
 jobs:
-  build:
+  release-please:
+    # A manual run is for proving the build, not for touching the release PR.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    outputs:
+      created: ${{ steps.rp.outputs.release_created }}
+      tag: ${{ steps.rp.outputs.tag_name }}
+    steps:
+      - id: rp
+        uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  build:
+    needs: release-please
+    # always(), because on a manual run release-please is skipped and a skipped
+    # need would otherwise skip this too. On a push it builds only when the
+    # merge being pushed was the release PR's.
+    if: >-
+      always() &&
+      (github.event_name == 'workflow_dispatch' ||
+       needs.release-please.outputs.created == 'true')
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.release-please.outputs.tag }}
     steps:
       - uses: actions/checkout@v5
         with:
+          # Checked out at the tag release-please just created, so the binaries
+          # are built from exactly the commit the release names.
+          ref: ${{ needs.release-please.outputs.tag || github.ref }}
           # The Makefile stamps the version from `git describe`, which reads
           # tags. A shallow clone has none, and every binary would call itself
           # the same thing.
@@ -42,8 +83,11 @@ jobs:
       - name: Build every platform
         run: |
           set -eu
-          version="${GITHUB_REF_NAME#v}"
-          [ "$version" = "$GITHUB_REF_NAME" ] && version="$(git describe --tags --always)"
+          if [ -n "$TAG" ]; then
+            version="${TAG#v}"
+          else
+            version="$(git describe --tags --always)"
+          fi
           mkdir -p release
 
           # The relay is built once. It is linux-only whatever the host is,
@@ -70,20 +114,19 @@ jobs:
           cd release && sha256sum *.tar.gz > SHA256SUMS
           cat SHA256SUMS
 
+      # The release already exists, with release-please's changelog as its
+      # notes; this only adds the files to it.
       - name: Attach to the release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            release/*.tar.gz
-            release/SHA256SUMS
-          generate_release_notes: false
+        if: env.TAG != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" release/*.tar.gz release/SHA256SUMS --clobber
 
-      # On a manual run there is no tag to attach to, so the binaries are kept
-      # as an artefact instead. That is what makes the dispatch trigger useful:
-      # the cross-build is proved, and nothing is published.
-      - name: Keep the binaries when there is no tag
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      # On a manual run there is no release to attach to, so the binaries are
+      # kept as an artefact instead. That is what makes the dispatch trigger
+      # useful: the cross-build is proved, and nothing is published.
+      - name: Keep the binaries when there is no release
+        if: env.TAG == ''
         uses: actions/upload-artifact@v4
         with:
           name: dev-binaries
