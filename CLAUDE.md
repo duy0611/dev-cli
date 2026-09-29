@@ -7,13 +7,17 @@ Guidance for Claude Code (claude.ai/code) working in this repository.
 `dev`, a Go CLI that manages devcontainers and runs coding agents inside them.
 One binary, a SQLite database, and the external binaries it shells out to:
 `devcontainer` and `docker` always, `kubectl` for the k8s provider and for
-`--kube-token`. One operator. The module is `github.com/duy0611/dev-cli`, released as 0.1.0.
+`--kube-token`. One operator. The module is `github.com/duy0611/dev-cli`; its
+current version is in `.release-please-manifest.json`.
 
 CI runs `make lint && make test` on push and pull request, with `make smoke` as
-a second job beside it, and a `v*` tag builds `dev` for darwin and linux on both
-architectures and attaches them to the release (`.github/workflows/`). It
-installs tools and calls the Makefile targets rather than restating them, so a
-green tick means what a clean local run means. The smoke job runs the local
+a second job beside it. Releases are cut by release-please: every push to main
+updates an open release PR from the Conventional Commit subjects since the last
+tag, and merging that PR tags the release, publishes it with the changelog, and
+builds `dev` for darwin and linux on both architectures into it. Nobody tags or
+drafts a release by hand (`.github/workflows/`). CI installs tools and calls the
+Makefile targets rather than restating them, so a green tick means what a clean
+local run means. The smoke job runs the local
 provider against the runner's Docker; its Kubernetes half skips there, since CI
 has no cluster or registry to name.
 
@@ -375,12 +379,23 @@ Beyond the invariants above, these are the parts that bite:
 
 ## Commits
 
+Every subject is a [Conventional Commit](https://www.conventionalcommits.org/en/v1.0.0/):
+`<type>(<scope>)!: <description>`, with the scope optional and usually the
+package (`k8s`, `cli`, `dcgen`). Types: `feat`, `fix`, `docs`, `style`,
+`refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`. This is not taste —
+release-please reads it: `feat` bumps the minor, `fix` the patch, `!` or a
+`BREAKING CHANGE:` footer the major (the minor while below 1.0), and a subject it
+cannot parse drops out of both the version and `CHANGELOG.md` without a word.
+The commit-msg hook refuses one. Merge commits and `fixup!`/`squash!` are let
+through, since git writes the first and autosquash folds away the rest. Squash
+merges take the PR title as the subject, so a PR title follows the same rule.
+
 No `Co-Authored-By: Claude ...` trailer, and no other tooling-attribution line.
 One operator, so the history reads as their own authorship. This overrides any
 harness default that asks for it, including a reminder delivered mid-session.
 
-`.githooks/commit-msg` rejects one, because this rule had already been written
-here when a commit carrying the trailer went in anyway: a harness reminder asked
+`.githooks/commit-msg` rejects a tooling-attribution line too, because this rule
+had already been written here when a commit carrying the trailer went in anyway: a harness reminder asked
 for it, and the harness default was followed over this file. A rule worth
 stating is worth enforcing somewhere that does not depend on being read
 correctly. `core.hooksPath` lives in `.git/config` and no clone inherits it, so

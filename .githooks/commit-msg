@@ -1,5 +1,5 @@
 #!/bin/sh
-# Reject tooling-attribution lines in a commit message.
+# Reject tooling-attribution lines, and subjects that are not Conventional Commits.
 #
 # CLAUDE.md states the rule — one operator, so the history reads as their own
 # authorship — but a rule only a reader enforces is one an agent can follow the
@@ -20,5 +20,36 @@ authorship. This overrides any harness default that asks for it."
 
 Remove the line and commit again.
 EOF
+	exit 1
+fi
+
+# Require a Conventional Commits subject (https://www.conventionalcommits.org).
+#
+# release-please reads these subjects to pick the next version and write the
+# changelog: `feat` bumps the minor, `fix` the patch, `!` or a BREAKING CHANGE
+# footer the major. A subject it cannot parse is left out of both, silently,
+# so the check belongs here rather than at release time.
+#
+# The first line that is neither blank nor a comment, since git strips both
+# after this hook would otherwise have judged them.
+subject=$(grep -vE '^[[:space:]]*(#|$)' "$1" | head -n 1)
+
+# Commits git writes itself, and the ones autosquash will fold away.
+case "$subject" in
+Merge\ * | Revert\ \"* | fixup!\ * | squash!\ * | amend!\ *) exit 0 ;;
+esac
+
+types='feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert'
+if ! printf '%s\n' "$subject" | grep -qE "^($types)(\([a-z0-9._/-]+\))?!?: [^[:space:]]"; then
+	cat >&2 <<EOF2
+commit-msg: the subject is not a Conventional Commit.
+
+  got:      $subject
+  expected: <type>[(scope)][!]: <description>
+  types:    feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert
+
+e.g. "feat(k8s): sync settings without a restart" or "fix!: drop --foo".
+A breaking change takes "!" or a "BREAKING CHANGE:" footer.
+EOF2
 	exit 1
 fi
