@@ -768,7 +768,7 @@ dev container create NAME --folder PATH [--generate] [--tools LIST] [--no-persis
                          [--agent-config PATH | --no-agent-config] [--no-start]
 dev container create NAME --no-folder [--tools LIST] [--no-persist-state]
                          [--agent-config PATH | --no-agent-config] [--no-start]
-dev container list [--all]
+dev container list [--all] [--timeout DURATION]
 dev container start NAME
 dev container stop NAME
 dev container remove NAME [--force]
@@ -827,7 +827,10 @@ not exist is exit 3, at create or at a later rebuild.
 
 **`list`** reads live status from the engine every time; a stored copy would be
 wrong the moment anything happened outside `dev`. A `?` means the engine could
-not be reached. The SOURCE column is `-` for a folderless container, and STATE
+not be reached, or did not answer within `--timeout` (default `10s`, any Go
+duration such as `30s` or `2m`). The timeout is per workspace, so one
+unreachable cluster costs one wait, not one per container, and leaves the other
+workspaces' statuses alone. Either way the list still prints and exits 0. The SOURCE column is `-` for a folderless container, and STATE
 says whether its agents' configuration is on a volume.
 
 **`start`** creates the container if the engine has none, which is what makes

@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/duy0611/dev-cli/internal/dcgen"
 	"github.com/duy0611/dev-cli/internal/model"
@@ -575,7 +576,7 @@ func TestListShowsADashForAFolderlessContainer(t *testing.T) {
 	}
 	out.Reset()
 
-	if err := runContainerList(t.Context(), a, "", false); err != nil {
+	if err := runContainerList(t.Context(), a, "", false, defaultListTimeout); err != nil {
 		t.Fatalf("list: %v", err)
 	}
 	line := ""
@@ -895,5 +896,50 @@ func TestRemoveSucceedsWithAnUnparseableProjectFile(t *testing.T) {
 	// not what docker would have said.
 	if err := runContainerRemove(t.Context(), a, "", "c1", true); err != nil {
 		t.Fatalf("a broken project file stranded the container: %v", err)
+	}
+}
+
+// A wedged engine must not hang the list: past the timeout the row reads "?"
+// and the command still succeeds, because the records are what it is for.
+func TestListGivesUpOnASlowEngine(t *testing.T) {
+	a, out := newTestApp(t)
+	seedWorkspace(t, a)
+
+	opts := createOpts{noFolder: true, noStart: true}
+	if err := runContainerCreate(t.Context(), a, "", "scratch", "", opts); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	out.Reset()
+
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	// exec, so the kill on cancel reaches the sleep rather than a shell that
+	// would leave it holding stdout open.
+	stubBin(t, dir, "docker", "exec /bin/sleep 30")
+
+	start := time.Now()
+	if err := runContainerList(t.Context(), a, "", false, 200*time.Millisecond); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("list took %s; the timeout did not stop it", elapsed)
+	}
+	fields := []string{}
+	for _, l := range strings.Split(out.String(), "\n") {
+		if strings.Contains(l, "scratch") {
+			fields = strings.Fields(l)
+		}
+	}
+	const statusCol = 2
+	if len(fields) <= statusCol || fields[statusCol] != "?" {
+		t.Errorf("STATUS is not ?: %q", out.String())
+	}
+}
+
+func TestListRefusesANonPositiveTimeout(t *testing.T) {
+	a, _ := newTestApp(t)
+	err := runContainerList(t.Context(), a, "", true, 0)
+	if got := exitCodeOf(err); got != exitUsage {
+		t.Errorf("exit code = %d, want %d (err: %v)", got, exitUsage, err)
 	}
 }
