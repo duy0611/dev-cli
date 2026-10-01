@@ -8,6 +8,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/duy0611/dev-cli/internal/dcconfig"
 	"github.com/duy0611/dev-cli/internal/dcgen"
@@ -311,10 +312,16 @@ func composeWarning(configPath string, persistState bool) string {
 
 // --- list ---------------------------------------------------------------------
 
+// defaultListTimeout bounds how long `container list` waits on one workspace's
+// engine. An unreachable cluster or a wedged docker daemon would otherwise hang
+// the one command an operator runs to find out what is wrong.
+const defaultListTimeout = 10 * time.Second
+
 func newContainerListCmd(a *app) *cobra.Command {
 	var (
 		workspace string
 		all       bool
+		timeout   time.Duration
 	)
 
 	cmd := &cobra.Command{
@@ -322,15 +329,20 @@ func newContainerListCmd(a *app) *cobra.Command {
 		Short: "List containers and their live status",
 		Args:  noArgs(),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runContainerList(cmd.Context(), a, workspace, all)
+			return runContainerList(cmd.Context(), a, workspace, all, timeout)
 		},
 	}
 	addWorkspaceFlag(cmd, &workspace)
 	cmd.Flags().BoolVar(&all, "all", false, "list every workspace's containers")
+	cmd.Flags().DurationVar(&timeout, "timeout", defaultListTimeout,
+		"how long to wait for each workspace's statuses before printing ?")
 	return cmd
 }
 
-func runContainerList(ctx context.Context, a *app, workspace string, all bool) error {
+func runContainerList(ctx context.Context, a *app, workspace string, all bool, timeout time.Duration) error {
+	if timeout <= 0 {
+		return usageErrorf("--timeout must be positive, got %s", timeout)
+	}
 	st, err := a.store()
 	if err != nil {
 		return err
@@ -354,8 +366,17 @@ func runContainerList(ctx context.Context, a *app, workspace string, all bool) e
 	}
 
 	// One provider per workspace, built once: every row otherwise rebuilds the
-	// same one.
+	// same one. The deadline is per workspace too, started at its first lookup,
+	// so one unreachable cluster costs the list one timeout rather than one per
+	// container, and does not eat into the budget of the workspaces after it.
 	providers := map[string]provider.Provider{}
+	deadlines := map[string]context.Context{}
+	var cancels []context.CancelFunc
+	defer func() {
+		for _, cancel := range cancels {
+			cancel()
+		}
+	}()
 	statusOf := func(c model.Container) string {
 		p, ok := providers[c.WorkspaceName]
 		if !ok {
@@ -368,10 +389,18 @@ func runContainerList(ctx context.Context, a *app, workspace string, all bool) e
 			}
 			providers[c.WorkspaceName] = p
 		}
-		s, err := p.Status(ctx, c)
+		wctx, ok := deadlines[c.WorkspaceName]
+		if !ok {
+			var cancel context.CancelFunc
+			wctx, cancel = context.WithTimeout(ctx, timeout)
+			deadlines[c.WorkspaceName] = wctx
+			cancels = append(cancels, cancel)
+		}
+		s, err := statusWithin(wctx, p, c)
 		if err != nil {
-			// A missing engine should not stop the list from printing what it
-			// knows: the records are the point, the status is the extra.
+			// A missing engine, or one too slow to answer, should not stop the
+			// list from printing what it knows: the records are the point, the
+			// status is the extra.
 			return "?"
 		}
 		return string(s)
@@ -395,6 +424,33 @@ func runContainerList(ctx context.Context, a *app, workspace string, all bool) e
 			row(w, c.WorkspaceName, c.Name, statusOf(c), sourceOf(c), onOff(c.PersistState))
 		}
 	})
+}
+
+// statusWithin returns when ctx is done even if Status has not. Cancelling the
+// context kills the engine CLI, but os/exec then waits for its stdout to close,
+// and a child it spawned that still holds the pipe keeps that wait going past
+// the deadline. The abandoned call finishes, or dies with the process, on its
+// own.
+func statusWithin(ctx context.Context, p provider.Provider, c model.Container) (model.Status, error) {
+	if err := ctx.Err(); err != nil {
+		return model.StatusAbsent, err
+	}
+	type result struct {
+		s   model.Status
+		err error
+	}
+	// Buffered, so the goroutine can send and exit after nobody is listening.
+	done := make(chan result, 1)
+	go func() {
+		s, err := p.Status(ctx, c)
+		done <- result{s, err}
+	}()
+	select {
+	case r := <-done:
+		return r.s, r.err
+	case <-ctx.Done():
+		return model.StatusAbsent, ctx.Err()
+	}
 }
 
 // --- lifecycle ------------------------------------------------------------------
