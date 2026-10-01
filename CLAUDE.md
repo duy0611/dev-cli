@@ -387,8 +387,13 @@ release-please reads it: `feat` bumps the minor, `fix` the patch, `!` or a
 `BREAKING CHANGE:` footer the major (the minor while below 1.0), and a subject it
 cannot parse drops out of both the version and `CHANGELOG.md` without a word.
 The commit-msg hook refuses one. Merge commits and `fixup!`/`squash!` are let
-through, since git writes the first and autosquash folds away the rest. Squash
-merges take the PR title as the subject, so a PR title follows the same rule.
+through, since git writes the first and autosquash folds away the rest.
+
+A PR title is **not** a Conventional Commit; write it as plain prose. PRs land
+as merge commits, and GitHub puts the PR title in the merge commit's body,
+where release-please parses it too — a conventional title lists the change
+twice in `CHANGELOG.md`, once from the branch's commit and once from the merge.
+The commits on the branch are what carry the type.
 
 No `Co-Authored-By: Claude ...` trailer, and no other tooling-attribution line.
 One operator, so the history reads as their own authorship. This overrides any
