@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/duy0611/dev-cli/compare/v0.7.0...v0.8.0) (2026-10-01)
+
+
+### Features
+
+* **cli:** time out container list status lookups ([a3c1a44](https://github.com/duy0611/dev-cli/commit/a3c1a44206d0cd9e121fffe112bf29d26480fe3c))
+
 ## [0.7.0](https://github.com/duy0611/dev-cli/compare/v0.6.0...v0.7.0) (2026-09-29)
 
 
