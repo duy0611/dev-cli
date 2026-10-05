@@ -1,6 +1,6 @@
 # DEV CLI
 
-[![CI](https://github.com/duy0611/dev-cli/workflows/CI/badge.svg)](https://github.com/duy0611/dev-cli/actions?query=workflow:"CI")
+[![CI](https://github.com/duy0611/dev-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/duy0611/dev-cli/actions/workflows/ci.yml)
 [![GitHub tag](https://img.shields.io/github/tag/duy0611/dev-cli?include_prereleases=&sort=semver&color=blue)](https://github.com/duy0611/dev-cli/releases/)
 [![License](https://img.shields.io/badge/License-MIT-blue)](https://github.com/duy0611/dev-cli/blob/main/LICENSE)
 
