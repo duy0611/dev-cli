@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
 )
 
@@ -18,6 +19,10 @@ const gitBin = "git"
 
 // ErrNotRepo is returned when a directory is not inside a git repository.
 var ErrNotRepo = errors.New("not a git repository")
+
+// ErrNoWorkTree is returned for a directory in a repository but in no
+// checkout of it: a bare repository, or its common directory.
+var ErrNoWorkTree = errors.New("not in a checkout")
 
 // Entry is one checkout as `git worktree list` reports it.
 type Entry struct {
@@ -135,6 +140,83 @@ func BranchExists(ctx context.Context, repo, branch string) bool {
 		"rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
 	cmd.Dir = repo
 	return cmd.Run() == nil
+}
+
+// Toplevel returns the root of the checkout holding dir.
+//
+// Unlike CommonDir, this answers the worktree dir is in, not the repository —
+// from inside a linked worktree it names that worktree, which is the checkout
+// whose files are wanted.
+func Toplevel(ctx context.Context, dir string) (string, error) {
+	cmd := exec.CommandContext(ctx, gitBin, "rev-parse", "--show-toplevel")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("%w: %s", ErrNoWorkTree, dir)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// IgnoredFiles lists the untracked files in a checkout that its own ignore
+// rules exclude, relative to its root.
+//
+// One entry per file, never --directory: that flag collapses a directory only
+// when everything under it is ignored and so groups the same tree differently
+// from one listing to the next, which leaves nothing that can be intersected.
+// Collapsing back into directories for the copy is the caller's job.
+func IgnoredFiles(ctx context.Context, dir string) ([]string, error) {
+	return lsFiles(ctx, dir, "--others", "--ignored", "--exclude-standard")
+}
+
+// MatchingFiles lists the untracked files in a checkout that the pattern files
+// match, in gitignore syntax, ignoring the checkout's own ignore rules.
+//
+// git reads the files in the order given, so a later one's negation overrides
+// an earlier one's match.
+func MatchingFiles(ctx context.Context, dir string, patternFiles []string) ([]string, error) {
+	args := []string{"--others", "--ignored"}
+	for _, f := range patternFiles {
+		args = append(args, "--exclude-from="+f)
+	}
+	return lsFiles(ctx, dir, args...)
+}
+
+// TrackedFiles lists the files git tracks in a checkout.
+func TrackedFiles(ctx context.Context, dir string) ([]string, error) {
+	return lsFiles(ctx, dir, "--cached")
+}
+
+// AllFiles lists every file in a checkout outside .git, tracked or not,
+// ignored or not.
+func AllFiles(ctx context.Context, dir string) ([]string, error) {
+	return lsFiles(ctx, dir, "--cached", "--others")
+}
+
+// lsFiles runs `git ls-files` and returns its paths sorted and deduplicated.
+//
+// -z, because a path may contain a newline and git would otherwise quote it.
+// Deduplicated because --cached lists a file once per conflicted stage.
+func lsFiles(ctx context.Context, dir string, args ...string) ([]string, error) {
+	cmd := exec.CommandContext(ctx, gitBin, append([]string{"ls-files", "-z"}, args...)...)
+	cmd.Dir = dir
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return nil, fmt.Errorf("listing files in %s: %s", dir, msg)
+	}
+	var paths []string
+	for p := range strings.SplitSeq(string(out), "\x00") {
+		if p != "" {
+			paths = append(paths, p)
+		}
+	}
+	slices.Sort(paths)
+	return slices.Compact(paths), nil
 }
 
 func runGit(ctx context.Context, repo string, args ...string) error {
