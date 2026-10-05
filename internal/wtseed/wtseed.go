@@ -107,6 +107,22 @@ func Select(ctx context.Context, source, dest string, patternFiles []string) ([]
 	return selectFrom(matched, ignored, all, tracked), nil
 }
 
+// Seed selects and copies in one step, returning what it copied.
+//
+// A failure is the caller's to roll back: a checkout holding half a
+// node_modules and no .env looks finished and is not, which is worse than an
+// error.
+func Seed(ctx context.Context, source, dest string, patternFiles []string) ([]string, error) {
+	entries, err := Select(ctx, source, dest, patternFiles)
+	if err != nil {
+		return nil, err
+	}
+	if err := Copy(ctx, source, dest, entries); err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
 // selectFrom is Select without git, so the set logic can be tested alone.
 func selectFrom(matched, ignored, all, tracked []string) []string {
 	isIgnored := set(ignored)

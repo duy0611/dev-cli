@@ -5,12 +5,14 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/duy0611/dev-cli/internal/dcconfig"
 	"github.com/duy0611/dev-cli/internal/gitwt"
 	"github.com/duy0611/dev-cli/internal/herdr"
 	"github.com/duy0611/dev-cli/internal/model"
 	"github.com/duy0611/dev-cli/internal/store"
+	"github.com/duy0611/dev-cli/internal/wtseed"
 	"github.com/duy0611/dev-cli/internal/xpath"
 	"github.com/spf13/cobra"
 )
@@ -34,12 +36,13 @@ func newWorktreeCmd(a *app) *cobra.Command {
 // worktreeOpts is what `worktree create` was asked for beyond the name. The
 // container half is a createOpts so the two commands cannot drift.
 type worktreeOpts struct {
-	repo    string
-	branch  string
-	path    string
-	base    string
-	noHerdr bool
-	create  createOpts
+	repo        string
+	branch      string
+	path        string
+	base        string
+	includeFile string
+	noHerdr     bool
+	create      createOpts
 }
 
 func newWorktreeCreateCmd(a *app) *cobra.Command {
@@ -58,6 +61,9 @@ func newWorktreeCreateCmd(a *app) *cobra.Command {
 			"it does; --path says where, and nothing is written anywhere else.\n\n" +
 			"git works inside the container: the repository is bind-mounted at its own\n" +
 			"host path, which is what the checkout's .git file points at.\n\n" +
+			"Ignored files the source checkout's .worktreeinclude lists — .env files,\n" +
+			"node_modules — are copied into the new one; --include-file adds patterns\n" +
+			"on top. The source is the checkout the command runs from, or --repo.\n\n" +
 			"Local providers only. Kubernetes has no host bind mounts, so the paths a\n" +
 			"worktree depends on cannot resolve there.",
 		Args: exactArgs(1),
@@ -72,6 +78,8 @@ func newWorktreeCreateCmd(a *app) *cobra.Command {
 	cmd.Flags().StringVar(&opts.branch, "branch", "", "branch to check out or create")
 	cmd.Flags().StringVar(&opts.path, "path", "", "where to create the checkout")
 	cmd.Flags().StringVar(&opts.base, "base", "", "start point for a new branch")
+	cmd.Flags().StringVar(&opts.includeFile, "include-file", "",
+		"more ignored-file patterns to copy in, on top of the source's "+wtseed.FileName)
 	cmd.Flags().BoolVar(&opts.noHerdr, "no-herdr", false, "do not register the checkout with Herdr")
 	cmd.Flags().BoolVar(&opts.create.noStart, "no-start", false, "record the container without starting it")
 	cmd.Flags().BoolVar(&opts.create.generate, "generate", false,
@@ -129,6 +137,25 @@ func runWorktreeCreate(ctx context.Context, a *app, workspace, name string, opts
 		}
 		return err
 	}
+	// The checkout whose ignored files are carried over: the one dir is in,
+	// which from inside a linked worktree is that worktree. A bare repository
+	// run from outside its worktrees has none, and that is only an error when
+	// patterns were asked for — there is no .worktreeinclude to read either.
+	source, err := gitwt.Toplevel(ctx, dir)
+	if err != nil && !errors.Is(err, gitwt.ErrNoWorkTree) {
+		return err
+	}
+	// Read before anything is created, so a mistyped --include-file costs no
+	// rollback.
+	patterns, err := wtseed.PatternFiles(source, opts.includeFile)
+	if err != nil {
+		if errors.Is(err, wtseed.ErrNoSource) {
+			return usageErrorf("--include-file: %s has no checkout to copy from "+
+				"(run from inside a worktree of this repository)", dir)
+		}
+		return usageErrorf("--include-file: %v", err)
+	}
+
 	if opts.base != "" && gitwt.BranchExists(ctx, repo, opts.branch) {
 		// Reads as one intent and means another: --base only has an effect when
 		// the branch is being created, so silently ignoring it here would hide
@@ -165,6 +192,14 @@ func runWorktreeCreate(ctx context.Context, a *app, workspace, name string, opts
 		return usageError(err)
 	}
 
+	// Before the rows, so dcconfig.Find sees the finished checkout: a project
+	// that ignores its .devcontainer and lists it gets that config used.
+	copied, err := wtseed.Seed(ctx, source, path, patterns)
+	if err != nil {
+		rollback(ctx, a, repo, path)
+		return err
+	}
+
 	herdrWS := ""
 	if !opts.noHerdr && herdr.Available(ctx) {
 		// Best-effort throughout: Herdr is a view onto a checkout that exists
@@ -180,6 +215,14 @@ func runWorktreeCreate(ctx context.Context, a *app, workspace, name string, opts
 	}
 
 	a.printf("worktree %s on branch %s at %s\n", name, opts.branch, xpath.Shorten(path))
+	if len(copied) > 0 {
+		noun := "paths"
+		if len(copied) == 1 {
+			noun = "path"
+		}
+		a.printf("copied %d ignored %s from %s (%s)\n", len(copied), noun,
+			xpath.Shorten(source), strings.Join(copied, ", "))
+	}
 
 	if opts.create.noStart {
 		return nil
