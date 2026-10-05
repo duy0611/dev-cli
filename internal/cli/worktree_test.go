@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/duy0611/dev-cli/internal/gitwt"
 	"github.com/duy0611/dev-cli/internal/model"
 	"github.com/duy0611/dev-cli/internal/provider/k8s"
 )
@@ -821,5 +822,23 @@ func TestWorktreeCreateIncludeFileFromABareRepository(t *testing.T) {
 	opts = baseOpts(bare, filepath.Join(t.TempDir(), "wt"))
 	if err := runWorktreeCreate(t.Context(), a, "", "feat", opts); err != nil {
 		t.Errorf("worktree create from a bare repository without the flag: %v", err)
+	}
+}
+
+// Everything carried over is ignored, and git removes ignored files with the
+// checkout — so a seeded worktree needs no --force to remove.
+func TestWorktreeRemoveNeedsNoForceAfterACopy(t *testing.T) {
+	requireGit(t)
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	repo := seededRepo(t)
+	writeFile(t, filepath.Join(repo, ".worktreeinclude"), ".env\nnode_modules/\n")
+	path := filepath.Join(t.TempDir(), "wt")
+	if err := runWorktreeCreate(t.Context(), a, "", "feat", baseOpts(repo, path)); err != nil {
+		t.Fatalf("worktree create: %v", err)
+	}
+
+	if err := gitwt.Remove(t.Context(), repo, path, false); err != nil {
+		t.Errorf("removing a seeded checkout without --force: %v", err)
 	}
 }
