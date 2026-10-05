@@ -93,17 +93,26 @@ A path is copied when all three hold:
 Rule 2 is what makes a broad pattern such as `*` safe: it cannot reach tracked
 files or `.git`.
 
-Git does the matching; there is no gitignore parser in Go:
+Git does the matching; there is no gitignore parser in Go. Every listing is
+`git ls-files -z`, one entry per file:
 
-- `git ls-files --others --ignored --exclude-standard --directory` in the source
-  lists ignored paths, an ignored directory collapsing to one entry;
-- `git ls-files --others --ignored --directory --exclude-from=<manifest>…` in
-  the source lists the paths the patterns match;
-- the intersection, minus `git ls-files` (tracked) in the destination, is the
-  copy list.
+- `--others --ignored --exclude-from=<manifest>…` in the source lists the files
+  the patterns match;
+- `--others --ignored --exclude-standard` in the source lists the files its own
+  rules ignore;
+- `--cached` in the destination lists what the new checkout tracks.
 
-A whole directory stays one entry, so a `node_modules/` of 100k files is one
-`cp` invocation.
+The intersection of the first two, minus the third (and anything beneath a
+tracked file, or above one), is the set of files to copy. They are then
+gathered back into the highest directories every file of which was chosen —
+counted against `--cached --others` in the source — and that do not hold a
+tracked file in the destination, so a `node_modules/` of 100k files is one `cp`
+invocation, while a directory the new checkout already has is copied into file
+by file rather than nested.
+
+`--directory` is not used: it collapses a directory only when everything under
+it is ignored, so two listings group the same tree differently and cannot be
+intersected.
 
 ## Flow inside `worktree create`
 

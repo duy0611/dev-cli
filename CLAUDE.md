@@ -205,6 +205,10 @@ cannot implement it.
    container, so a file that has gone or stopped parsing fails while the old
    container still exists.
 
+   `.worktreeinclude` is the same rule again: `worktree create` reads it from
+   the source checkout and never writes it, and the only place it copies into
+   is the checkout it has just made.
+
 10. **A container's agent state is a column, not a document field.** Every new
     container mounts a volume at `/var/dev-state` unless `--no-persist-state`,
     with `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `HERMES_HOME`,
