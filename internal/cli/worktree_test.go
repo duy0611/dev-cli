@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/duy0611/dev-cli/internal/gitwt"
 	"github.com/duy0611/dev-cli/internal/model"
 	"github.com/duy0611/dev-cli/internal/provider/k8s"
 )
@@ -624,4 +625,220 @@ func captureStderr(t *testing.T, fn func()) string {
 		t.Fatal(err)
 	}
 	return buf.String()
+}
+
+// --- carrying ignored files over ---------------------------------------------
+
+func gitIn(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// seededRepo is a repository whose checkout holds a .env and a node_modules,
+// both ignored, the way a project looks after its install has run once.
+func seededRepo(t *testing.T) string {
+	t.Helper()
+	repo := initRepo(t)
+	writeFile(t, filepath.Join(repo, ".gitignore"), ".env\nnode_modules/\n")
+	gitIn(t, repo, "add", ".gitignore")
+	gitIn(t, repo, "commit", "-qm", "ignore")
+	writeFile(t, filepath.Join(repo, ".env"), "TOKEN=1")
+	writeFile(t, filepath.Join(repo, "node_modules", "a", "index.js"), "a")
+	return repo
+}
+
+func TestWorktreeCreateCopiesTheListedIgnoredFiles(t *testing.T) {
+	requireGit(t)
+	a, out := newTestApp(t)
+	seedWorkspace(t, a)
+	repo := seededRepo(t)
+	// Uncommitted on purpose: the manifest is read from the source checkout,
+	// so the operator can try one before committing it.
+	writeFile(t, filepath.Join(repo, ".worktreeinclude"), ".env\nnode_modules/\n")
+	path := filepath.Join(t.TempDir(), "wt")
+
+	if err := runWorktreeCreate(t.Context(), a, "", "feat", baseOpts(repo, path)); err != nil {
+		t.Fatalf("worktree create: %v", err)
+	}
+
+	if b, err := os.ReadFile(filepath.Join(path, ".env")); err != nil || string(b) != "TOKEN=1" {
+		t.Errorf(".env in the checkout = %q, %v", b, err)
+	}
+	if _, err := os.Stat(filepath.Join(path, "node_modules", "a", "index.js")); err != nil {
+		t.Errorf("node_modules was not carried over: %v", err)
+	}
+	if !strings.Contains(out.String(), "copied 2 ignored paths") {
+		t.Errorf("output does not report the copy:\n%s", out)
+	}
+}
+
+// With neither a manifest nor the flag, create behaves exactly as before.
+func TestWorktreeCreateCopiesNothingUnasked(t *testing.T) {
+	requireGit(t)
+	a, out := newTestApp(t)
+	seedWorkspace(t, a)
+	repo := seededRepo(t)
+	path := filepath.Join(t.TempDir(), "wt")
+
+	if err := runWorktreeCreate(t.Context(), a, "", "feat", baseOpts(repo, path)); err != nil {
+		t.Fatalf("worktree create: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(path, ".env")); !os.IsNotExist(err) {
+		t.Errorf(".env was copied with nothing asking for it")
+	}
+	if strings.Contains(out.String(), "copied") {
+		t.Errorf("output mentions a copy that did not happen:\n%s", out)
+	}
+}
+
+// The flag's patterns add to the manifest's rather than replacing them.
+func TestWorktreeCreateIncludeFileAddsToTheManifest(t *testing.T) {
+	requireGit(t)
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	repo := seededRepo(t)
+	writeFile(t, filepath.Join(repo, ".worktreeinclude"), ".env\n")
+	extra := filepath.Join(t.TempDir(), "extra")
+	writeFile(t, extra, "node_modules/\n")
+	path := filepath.Join(t.TempDir(), "wt")
+
+	opts := baseOpts(repo, path)
+	opts.includeFile = extra
+	if err := runWorktreeCreate(t.Context(), a, "", "feat", opts); err != nil {
+		t.Fatalf("worktree create: %v", err)
+	}
+	for _, p := range []string{".env", "node_modules/a/index.js"} {
+		if _, err := os.Stat(filepath.Join(path, p)); err != nil {
+			t.Errorf("%s was not carried over: %v", p, err)
+		}
+	}
+}
+
+func TestWorktreeCreateRefusesAMissingIncludeFile(t *testing.T) {
+	requireGit(t)
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	repo := seededRepo(t)
+	path := filepath.Join(t.TempDir(), "wt")
+
+	opts := baseOpts(repo, path)
+	opts.includeFile = filepath.Join(t.TempDir(), "nope")
+	err := runWorktreeCreate(t.Context(), a, "", "feat", opts)
+	if got := exitCodeOf(err); got != exitUsage {
+		t.Errorf("exit code = %d (%v), want %d", got, err, exitUsage)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("a checkout was made before the flag was checked")
+	}
+}
+
+// A copy that fails leaves neither a checkout nor a record behind.
+func TestWorktreeCreateRollsBackAFailedCopy(t *testing.T) {
+	requireGit(t)
+	if os.Getuid() == 0 {
+		t.Skip("root reads unreadable files")
+	}
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	repo := seededRepo(t)
+	writeFile(t, filepath.Join(repo, ".worktreeinclude"), ".env\n")
+	if err := os.Chmod(filepath.Join(repo, ".env"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "wt")
+
+	err := runWorktreeCreate(t.Context(), a, "", "feat", baseOpts(repo, path))
+	if err == nil || !strings.Contains(err.Error(), ".env") {
+		t.Fatalf("worktree create = %v, want an error naming .env", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("the checkout at %s outlived a failed copy", path)
+	}
+	st, err := a.store()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.GetContainer("ws", "feat"); err == nil {
+		t.Error("a container row outlived a failed copy")
+	}
+}
+
+// A project that ignores its .devcontainer and lists it gets that config used:
+// the copy happens before the config is looked for.
+func TestWorktreeCreateFindsACopiedDevcontainer(t *testing.T) {
+	requireGit(t)
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	repo := initRepo(t)
+	writeFile(t, filepath.Join(repo, ".gitignore"), ".devcontainer/\n")
+	gitIn(t, repo, "add", ".gitignore")
+	gitIn(t, repo, "commit", "-qm", "ignore")
+	writeFile(t, filepath.Join(repo, ".devcontainer", "devcontainer.json"),
+		`{"name":"project","image":"ubuntu"}`)
+	writeFile(t, filepath.Join(repo, ".worktreeinclude"), ".devcontainer/\n")
+
+	opts := baseOpts(repo, filepath.Join(t.TempDir(), "wt"))
+	opts.create.generate = false
+	opts.create.tools = nil
+	if err := runWorktreeCreate(t.Context(), a, "", "feat", opts); err != nil {
+		t.Fatalf("worktree create: %v", err)
+	}
+	st, err := a.store()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := st.GetContainer("ws", "feat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ConfigPath == "" || c.GeneratedConfig != "" {
+		t.Errorf("the copied config was not used: path %q, generated %q",
+			c.ConfigPath, c.GeneratedConfig)
+	}
+}
+
+// A bare repository has no checkout to copy from; asking for a copy anyway is
+// a usage error, while not asking is fine.
+func TestWorktreeCreateIncludeFileFromABareRepository(t *testing.T) {
+	requireGit(t)
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	bare := filepath.Join(t.TempDir(), "bare.git")
+	gitIn(t, t.TempDir(), "clone", "-q", "--bare", initRepo(t), bare)
+	extra := filepath.Join(t.TempDir(), "extra")
+	writeFile(t, extra, ".env\n")
+
+	opts := baseOpts(bare, filepath.Join(t.TempDir(), "wt"))
+	opts.includeFile = extra
+	err := runWorktreeCreate(t.Context(), a, "", "feat", opts)
+	if got := exitCodeOf(err); got != exitUsage {
+		t.Errorf("exit code = %d (%v), want %d", got, err, exitUsage)
+	}
+
+	opts = baseOpts(bare, filepath.Join(t.TempDir(), "wt"))
+	if err := runWorktreeCreate(t.Context(), a, "", "feat", opts); err != nil {
+		t.Errorf("worktree create from a bare repository without the flag: %v", err)
+	}
+}
+
+// Everything carried over is ignored, and git removes ignored files with the
+// checkout — so a seeded worktree needs no --force to remove.
+func TestWorktreeRemoveNeedsNoForceAfterACopy(t *testing.T) {
+	requireGit(t)
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	repo := seededRepo(t)
+	writeFile(t, filepath.Join(repo, ".worktreeinclude"), ".env\nnode_modules/\n")
+	path := filepath.Join(t.TempDir(), "wt")
+	if err := runWorktreeCreate(t.Context(), a, "", "feat", baseOpts(repo, path)); err != nil {
+		t.Fatalf("worktree create: %v", err)
+	}
+
+	if err := gitwt.Remove(t.Context(), repo, path, false); err != nil {
+		t.Errorf("removing a seeded checkout without --force: %v", err)
+	}
 }

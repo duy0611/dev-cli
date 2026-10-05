@@ -94,6 +94,34 @@ one object store.
 ❯ dev container start-agent fix-header
 ```
 
+A fresh checkout holds only what git tracks, so the `.env` files and
+dependency trees your project ignores are missing. List the ones worth carrying
+over in a `.worktreeinclude` at the root of the checkout you run `create` from,
+in `.gitignore` syntax:
+
+```gitignore
+.env*
+node_modules/
+!.env.production
+```
+
+`create` then copies the ignored files it matches from that checkout into the
+new one:
+
+```
+❯ dev worktree create fix-header --branch fix-header --path ~/wt/fix-header --generate
+worktree fix-header on branch fix-header at ~/wt/fix-header
+copied 3 ignored paths from ~/src/app (.env, .env.local, node_modules/)
+container fix-header is running
+```
+
+On APFS and on btrfs or xfs the copy is a clone, costing neither time nor disk
+until a file changes; elsewhere it is a real copy. Run the project's install
+once the container is up — it fetches only what differs, and repairs a library
+built for the host rather than the container. A copied Python `.venv` still
+names the original checkout's path, so recreate it (`uv sync`,
+`python -m venv --clear`) rather than reuse it.
+
 When the branch is done:
 
 ```
@@ -886,7 +914,7 @@ path it came from on stderr.
 
 ```
 dev worktree create NAME --branch B --path P [--repo R] [--base REF]
-                         [--generate] [--tools LIST] [--no-persist-state]
+                         [--include-file PATH] [--generate] [--tools LIST] [--no-persist-state]
                          [--agent-config PATH | --no-agent-config]
                          [--no-start] [--no-herdr] [--workspace W]
 dev worktree list [--all] [--workspace W]
@@ -904,6 +932,7 @@ is nothing extra to remember when the two are removed together.
 | `--branch` | branch to check out or create |
 | `--path` | where to create the checkout |
 | `--base` | start point for a new branch |
+| `--include-file` | more patterns of ignored files to copy in, on top of the source's `.worktreeinclude` |
 | `--no-herdr` | do not register the checkout with Herdr |
 | `--no-start` | record the container without starting it |
 | `--generate` | generate a base Ubuntu configuration when the checkout ships none |
@@ -920,6 +949,33 @@ error, not a silent no-op.
 Local providers only: a workspace on the k8s provider is refused, since a pod
 has no host bind mounts and the two absolute paths a worktree depends on
 cannot resolve there.
+
+Ignored files are copied in from the *source* checkout: the one holding the
+working directory — from inside a linked worktree, that worktree — or the one
+`--repo` names. The patterns come from its `.worktreeinclude` and from
+`--include-file`:
+
+| `.worktreeinclude` | `--include-file` | Copied |
+|---|---|---|
+| absent | absent | nothing |
+| present | absent | what the file lists |
+| absent | given | what the flag's file lists |
+| present | given | both, the flag's patterns applied after the file's |
+
+Applied after, so a `!pattern` in the flag's file drops an entry the project's
+file lists, for that one create. A path is copied only when the patterns match
+it, the source's own ignore rules ignore it, and the new checkout does not
+track it — so a broad pattern cannot reach tracked files or `.git`, and a file
+the new branch commits is never overwritten. Symlinks are copied as symlinks.
+A missing or unreadable `--include-file` is a usage error before anything is
+created; so is passing one from a bare repository, which has no checkout to
+copy from. A copy that fails removes the checkout again. Nothing about the copy
+is recorded, and `remove` needs no `--force` on its account, since git removes
+ignored files with the checkout.
+
+The copy happens before the devcontainer configuration is looked for, so a
+project that ignores its `.devcontainer/` and lists it gets that configuration
+used.
 
 A checkout of a repository that ships its own `.devcontainer` keeps it
 untouched — `dev` never writes into a project's folder — and its bind mounts

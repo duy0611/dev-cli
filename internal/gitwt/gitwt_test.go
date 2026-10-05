@@ -240,3 +240,112 @@ func hasEntry(entries []Entry, path, branch string) bool {
 	}
 	return false
 }
+
+func write(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestToplevelFromASubdirectory(t *testing.T) {
+	requireGit(t)
+	repo := initRepo(t)
+	write(t, filepath.Join(repo, "sub", "g"))
+
+	got, err := Toplevel(t.Context(), filepath.Join(repo, "sub"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != repo {
+		t.Errorf("Toplevel = %q, want %q", got, repo)
+	}
+}
+
+// A bare repository has no working tree, so there is no checkout to name.
+func TestToplevelOnABareRepository(t *testing.T) {
+	requireGit(t)
+	repo := initRepo(t)
+	bare := filepath.Join(tempDir(t), "bare.git")
+	run(t, repo, "clone", "-q", "--bare", repo, bare)
+
+	if _, err := Toplevel(t.Context(), bare); !errors.Is(err, ErrNoWorkTree) {
+		t.Errorf("Toplevel on a bare repository = %v, want ErrNoWorkTree", err)
+	}
+}
+
+// Every file, not directories: a directory entry from --directory would be
+// grouped differently by each listing, and could not be intersected.
+func TestIgnoredFilesListsEachFile(t *testing.T) {
+	requireGit(t)
+	repo := initRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"),
+		[]byte("node_modules/\n.env\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(repo, "node_modules", "a", "i.js"))
+	write(t, filepath.Join(repo, ".env"))
+	write(t, filepath.Join(repo, "scratch"))
+
+	got, err := IgnoredFiles(t.Context(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{".env", "node_modules/a/i.js"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("IgnoredFiles = %v, want %v", got, want)
+	}
+}
+
+// The pattern files apply in order, so a later negation wins over an earlier
+// match — the property --include-file relies on to narrow a project's list.
+func TestMatchingFilesAppliesPatternFilesInOrder(t *testing.T) {
+	requireGit(t)
+	repo := initRepo(t)
+	write(t, filepath.Join(repo, ".env"))
+	write(t, filepath.Join(repo, ".env.production"))
+	write(t, filepath.Join(repo, "other"))
+	dir := tempDir(t)
+	first, second := filepath.Join(dir, "first"), filepath.Join(dir, "second")
+	if err := os.WriteFile(first, []byte(".env*\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(second, []byte("!.env.production\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := MatchingFiles(t.Context(), repo, []string{first, second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got, ",") != ".env" {
+		t.Errorf("MatchingFiles = %v, want [.env]", got)
+	}
+}
+
+func TestTrackedAndAllFiles(t *testing.T) {
+	requireGit(t)
+	repo := initRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(".env\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(repo, ".env"))
+
+	tracked, err := TrackedFiles(t.Context(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(tracked, ",") != "f" {
+		t.Errorf("TrackedFiles = %v, want [f]", tracked)
+	}
+	all, err := AllFiles(t.Context(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(all, ",") != ".env,.gitignore,f" {
+		t.Errorf("AllFiles = %v, want [.env .gitignore f]", all)
+	}
+}

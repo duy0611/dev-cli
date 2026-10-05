@@ -40,8 +40,20 @@ func TestSmokeWorktree(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "f"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	gitRun(t, repo, "add", "f")
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(".env\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", "f", ".gitignore")
 	gitRun(t, repo, "commit", "-qm", "init")
+	// An ignored file the manifest asks for, so the copy is proven to land
+	// somewhere the container can read — the checkout is a bind mount, and a
+	// file written to it on the host has to be what the container sees.
+	if err := os.WriteFile(filepath.Join(repo, ".env"), []byte("SMOKE=carried\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".worktreeinclude"), []byte(".env\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	path := filepath.Join(t.TempDir(), "wt")
 	t.Cleanup(func() {
@@ -76,6 +88,12 @@ func TestSmokeWorktree(t *testing.T) {
 			"git add made-inside && "+
 			"git -c user.email=c@example.com -c user.name=container commit -qm 'from the container'")
 
+	env := dev("container", "exec", name, "--workspace", ws, "--",
+		"cat", filepath.Join(resolved, ".env"))
+	if !strings.Contains(env, "SMOKE=carried") {
+		t.Errorf("the carried .env is not readable inside the container: %q", env)
+	}
+
 	out := gitOut(t, repo, "log", "--all", "--format=%s")
 	if !strings.Contains(out, "from the container") {
 		t.Errorf("the host repository cannot see the container's commit:\n%s", out)
@@ -93,6 +111,9 @@ func TestSmokeWorktree(t *testing.T) {
 		t.Errorf("the worktree registration was pruned away:\n%s", list)
 	}
 
+	// No --force, deliberately: everything carried over is ignored, and git
+	// removes ignored files with the checkout. A copy that blocked removal
+	// would turn every seeded worktree into one that needs forcing.
 	dev("worktree", "remove", name, "--workspace", ws)
 
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
