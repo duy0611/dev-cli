@@ -415,13 +415,23 @@ func runContainerList(ctx context.Context, a *app, workspace string, all bool, t
 		return xpath.Shorten(c.Source)
 	}
 
+	// Who owns the devcontainer.json decides what a rebuild reads and whether
+	// --tools applies, and a folder path alone does not say: a folder created
+	// with --generate looks the same as one that ships its own.
+	configOf := func(c model.Container) string {
+		if c.GeneratedConfig != "" {
+			return "generated"
+		}
+		return "project"
+	}
+
 	// Whether a container keeps its agents' configuration is fixed at create
 	// and invisible otherwise, so the list is the only place to find out
 	// without reading the generated document.
 	return a.table(func(w io.Writer) {
-		header(w, "WORKSPACE", "NAME", "STATUS", "SOURCE", "STATE")
+		header(w, "WORKSPACE", "NAME", "STATUS", "SOURCE", "CONFIG", "STATE")
 		for _, c := range containers {
-			row(w, c.WorkspaceName, c.Name, statusOf(c), sourceOf(c), onOff(c.PersistState))
+			row(w, c.WorkspaceName, c.Name, statusOf(c), sourceOf(c), configOf(c), onOff(c.PersistState))
 		}
 	})
 }

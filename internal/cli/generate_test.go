@@ -597,6 +597,48 @@ func TestListShowsADashForAFolderlessContainer(t *testing.T) {
 	}
 }
 
+// Whether dev wrote the configuration or the project ships it decides what a
+// rebuild reads and whether --tools applies, and nothing else on screen says
+// which.
+func TestListShowsWhereTheConfigCameFrom(t *testing.T) {
+	a, out := newTestApp(t)
+	seedWorkspace(t, a)
+
+	if err := runContainerCreate(t.Context(), a, "", "own", projectWithConfig(t), createOpts{noStart: true}); err != nil {
+		t.Fatalf("create own: %v", err)
+	}
+	if err := runContainerCreate(t.Context(), a, "", "gen", t.TempDir(), createOpts{generate: true, noStart: true}); err != nil {
+		t.Fatalf("create gen: %v", err)
+	}
+	if err := runContainerCreate(t.Context(), a, "", "scratch", "", createOpts{noFolder: true, noStart: true}); err != nil {
+		t.Fatalf("create scratch: %v", err)
+	}
+	out.Reset()
+
+	if err := runContainerList(t.Context(), a, "", false, defaultListTimeout); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	const configCol = 4
+	want := map[string]string{"own": "project", "gen": "generated", "scratch": "generated"}
+	for _, l := range strings.Split(out.String(), "\n") {
+		fields := strings.Fields(l)
+		if len(fields) < 2 {
+			continue
+		}
+		w, ok := want[fields[1]]
+		if !ok {
+			continue
+		}
+		delete(want, fields[1])
+		if len(fields) <= configCol || fields[configCol] != w {
+			t.Errorf("CONFIG column for %s is not %s: %q", fields[1], w, l)
+		}
+	}
+	for name := range want {
+		t.Errorf("%s is not in the list:\n%s", name, out.String())
+	}
+}
+
 // On by default, and the column is what every later command reads: the
 // document is re-rendered from it, the local provider mounts from it, and the
 // k8s manifest grows a subPath from it.
