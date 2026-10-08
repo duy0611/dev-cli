@@ -858,8 +858,10 @@ wrong the moment anything happened outside `dev`. A `?` means the engine could
 not be reached, or did not answer within `--timeout` (default `10s`, any Go
 duration such as `30s` or `2m`). The timeout is per workspace, so one
 unreachable cluster costs one wait, not one per container, and leaves the other
-workspaces' statuses alone. Either way the list still prints and exits 0. The SOURCE column is `-` for a folderless container, and STATE
-says whether its agents' configuration is on a volume.
+workspaces' statuses alone. Either way the list still prints and exits 0. The SOURCE column is `-` for a folderless container, CONFIG
+is `generated` when `dev` rendered the configuration (`--generate` or
+`--no-folder`) and `project` when the folder ships its own, and STATE says
+whether its agents' configuration is on a volume.
 
 **`start`** creates the container if the engine has none, which is what makes
 `create --no-start` followed by `start` work.
