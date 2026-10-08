@@ -125,6 +125,25 @@ func TestDeploymentCarriesTheThingsThatFailSilently(t *testing.T) {
 	}
 }
 
+// The seccomp profile is the runtime's default, which docker applies to a
+// local container without being asked and a pod does not get unless it is.
+func TestPodCarriesTheDefaultSeccompProfile(t *testing.T) {
+	objs := decode(t, testInput())
+	spec, _ := objs["Deployment"]["spec"].(map[string]any)
+	pod, _ := spec["template"].(map[string]any)
+	podSpec, _ := pod["spec"].(map[string]any)
+
+	sc, _ := podSpec["securityContext"].(map[string]any)
+	profile, _ := sc["seccompProfile"].(map[string]any)
+	if profile["type"] != "RuntimeDefault" {
+		t.Errorf("seccompProfile = %v, want type RuntimeDefault", sc["seccompProfile"])
+	}
+	// The existing guarantee must survive the new field beside it.
+	if sc["fsGroup"] != float64(defaultFSGroup) {
+		t.Errorf("fsGroup = %v, want %d", sc["fsGroup"], defaultFSGroup)
+	}
+}
+
 // Two subPaths, not one. Without the home mount, anything postCreate writes to
 // the home directory is destroyed by the next stop, and "postCreate runs once"
 // stops being true.

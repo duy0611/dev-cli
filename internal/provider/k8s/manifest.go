@@ -222,6 +222,15 @@ type podSecurityCtx struct {
 	// FSGroup makes the PVC group-writable by the pod, which is what lets a
 	// non-root remoteUser write to a volume the cluster provisions as root.
 	FSGroup int `json:"fsGroup"`
+	// SeccompProfile asks for the runtime's default syscall filter. Docker
+	// applies one to every local container unasked; a pod runs unconfined
+	// unless it says otherwise, which would leave the experimental provider
+	// the less contained of the two for no reason.
+	SeccompProfile seccompProfile `json:"seccompProfile"`
+}
+
+type seccompProfile struct {
+	Type string `json:"type"`
 }
 
 type containerSpec struct {
@@ -285,7 +294,10 @@ func buildDeployment(in manifestInput) deployment {
 				},
 				Spec: podSpec{
 					ServiceAccountName: in.Config.ServiceAccount,
-					SecurityContext:    &podSecurityCtx{FSGroup: defaultFSGroup},
+					SecurityContext: &podSecurityCtx{
+						FSGroup:        defaultFSGroup,
+						SeccompProfile: seccompProfile{Type: "RuntimeDefault"},
+					},
 					Containers: []containerSpec{{
 						Name:  containerNameMain,
 						Image: in.Image,

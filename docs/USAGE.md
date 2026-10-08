@@ -597,7 +597,10 @@ account can do. Pick the same account when you refresh.
 
 Only commands run with the flag get `KUBECONFIG`. A plain `shell` afterwards
 does not, though the file is still there; on a k8s-provider pod that keeps it on
-the pod's own in-cluster credentials.
+the pod's own in-cluster credentials. Those are the token of the provider's
+`serviceAccount` — the namespace's `default` account when unset, which holds no
+permissions unless someone has bound some to it. Leave that account unbound,
+and `--kube-token` stays the only way a container gains cluster access.
 
 ### Run a workspace in Kubernetes
 
