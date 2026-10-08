@@ -249,7 +249,7 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 	// every call, so `--no-start` defers it there, and recording a container
 	// still needs no engine.
 	if !opts.noStart {
-		if err := a.guardNewContainer(ctx, wsName, c); err != nil {
+		if err := a.guardNewContainer(ctx, wsName, &c); err != nil {
 			return err
 		}
 	}
@@ -563,11 +563,25 @@ func (a *app) start(ctx context.Context, workspace string, c model.Container) er
 	// that does not exist yet just as rebuild does. A start of an existing,
 	// stopped container re-reads nothing, but telling the two apart would
 	// need the engine's answer first — and the check is the cheaper question.
-	if err := a.checkEscape(ctx, p, c); err != nil {
+	cc, err := readConfig(ctx, p, c)
+	if err != nil {
+		return err
+	}
+	if err := a.escape(cc); err != nil {
 		return err
 	}
 	if err := p.Up(ctx, c, environ); err != nil {
 		return err
+	}
+	// A row with no digest — created with --no-start, or before the drift
+	// check existed — gets the one it just started from, so the next rebuild
+	// has something to compare against. Never overwritten here: start does not
+	// apply an existing container's edited configuration, so a changed
+	// document is still rebuild's to catch.
+	if cc != nil && c.ConfigDigest == "" {
+		if err := a.recordFirstDigest(cc); err != nil {
+			return err
+		}
 	}
 	a.record("start", workspace, c.Name, nil)
 	a.printf("container %s is running\n", c.Name)
@@ -679,6 +693,9 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 		workspace string
 		noCache   bool
 		toolList  string
+		// acceptConfig is --accept-config: rebuild with a configuration that
+		// changed since the container was last built. See checkDrift.
+		acceptConfig bool
 	)
 
 	cmd := &cobra.Command{
@@ -715,16 +732,40 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 				return err
 			}
 			// Before the rebuild, for agents.yaml's reason: a configuration
-			// that has come to ask for the host is refused while the old
-			// container still exists. Only create can grant the flag, so the
-			// way forward is to recreate — the moment to think about it.
-			if err := a.checkEscape(cmd.Context(), t.provider, t.container); err != nil {
+			// that changed since it was last built, or has come to ask for the
+			// host, is refused while the old container still exists. Drift
+			// first: a changed configuration is the more general answer, and
+			// --accept-config is the operator's review of exactly that.
+			// Only create can grant --allow-privileged, so an escape refusal
+			// means recreate — the moment to think about it.
+			cc, err := readConfig(cmd.Context(), t.provider, t.container)
+			if err != nil {
+				return err
+			}
+			digest, err := a.checkDrift(cc, acceptConfig)
+			if err != nil {
+				return err
+			}
+			if err := a.escape(cc); err != nil {
 				return err
 			}
 			if err := t.provider.Rebuild(cmd.Context(), t.container, environ, noCache); err != nil {
 				return err
 			}
-			a.record("rebuild", t.workspace.Name, t.container.Name, nil)
+			// After the rebuild succeeded, never before: a failed rebuild
+			// leaves the container on its old configuration, and the digest
+			// must go on describing that one.
+			if cc != nil && digest.Sum != t.container.ConfigDigest {
+				st, err := a.store()
+				if err != nil {
+					return err
+				}
+				if err := st.SetConfigDigest(t.workspace.Name, t.container.Name, digest.Sum, digest.Record()); err != nil {
+					return err
+				}
+			}
+			a.record("rebuild", t.workspace.Name, t.container.Name, map[string]any{"config_digest": digest.Sum})
+
 			a.printf("container %s rebuilt\n", t.container.Name)
 			// Every rebuild re-reads the file: it is the moment an edit takes
 			// effect, and a container without the state volume has just lost
@@ -736,6 +777,8 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 	cmd.Flags().BoolVar(&noCache, "no-cache", false, "rebuild the image without the layer cache")
 	cmd.Flags().StringVar(&toolList, "tools", "",
 		"change a generated container's tools, e.g. +yq,-helm (see: dev container tools)")
+	cmd.Flags().BoolVar(&acceptConfig, "accept-config", false,
+		"rebuild with a project configuration that changed since the container was last built")
 	return cmd
 }
 

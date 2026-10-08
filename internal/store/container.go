@@ -16,12 +16,12 @@ func (s *Store) CreateContainer(c model.Container) error {
 		`INSERT INTO containers
 		   (name, workspace_name, source_kind, source, config_path, generated_config,
 		    persist_state, agent_config, agent_config_pending,
-		    git_guard, allow_privileged, config_digest, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		    git_guard, allow_privileged, config_digest, config_digest_fields, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		c.Name, c.WorkspaceName, string(c.SourceKind), c.Source, c.ConfigPath,
 		c.GeneratedConfig, boolToInt(c.PersistState), c.AgentConfig,
 		boolToInt(c.AgentConfigPending), boolToInt(c.GitGuard),
-		boolToInt(c.AllowPrivileged), c.ConfigDigest, nowString())
+		boolToInt(c.AllowPrivileged), c.ConfigDigest, c.ConfigDigestFields, nowString())
 	if err != nil {
 		if isUniqueViolation(err) {
 			return ErrExists
@@ -35,7 +35,7 @@ func (s *Store) GetContainer(workspace, name string) (model.Container, error) {
 	row := s.db.QueryRow(
 		`SELECT name, workspace_name, source_kind, source, config_path, generated_config,
 		        persist_state, agent_config, agent_config_pending,
-		        git_guard, allow_privileged, config_digest, created_at
+		        git_guard, allow_privileged, config_digest, config_digest_fields, created_at
 		 FROM containers WHERE workspace_name = ? AND name = ?`, workspace, name)
 	return scanContainer(row)
 }
@@ -45,7 +45,7 @@ func (s *Store) GetContainer(workspace, name string) (model.Container, error) {
 func (s *Store) ListContainers(workspace string) ([]model.Container, error) {
 	query := `SELECT name, workspace_name, source_kind, source, config_path, generated_config,
 	                 persist_state, agent_config, agent_config_pending,
-	                 git_guard, allow_privileged, config_digest, created_at
+	                 git_guard, allow_privileged, config_digest, config_digest_fields, created_at
 	          FROM containers`
 	args := []any{}
 	if workspace != "" {
@@ -92,7 +92,7 @@ func scanContainer(sc scanner) (model.Container, error) {
 	)
 	if err := sc.Scan(&c.Name, &c.WorkspaceName, &kind, &c.Source, &c.ConfigPath,
 		&c.GeneratedConfig, &persist, &c.AgentConfig, &pending,
-		&guard, &allowPriv, &c.ConfigDigest, &createdAt); err != nil {
+		&guard, &allowPriv, &c.ConfigDigest, &c.ConfigDigestFields, &createdAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return model.Container{}, ErrNotFound
 		}
@@ -139,10 +139,10 @@ func (s *Store) SetAgentConfigPending(workspace, name string, pending bool) erro
 // SetConfigDigest records the digest of the configuration a container was just
 // built from. Written by create, and by a rebuild that found it changed and was
 // told to accept that, or that had none recorded yet.
-func (s *Store) SetConfigDigest(workspace, name, digest string) error {
+func (s *Store) SetConfigDigest(workspace, name, digest, fields string) error {
 	res, err := s.db.Exec(
-		`UPDATE containers SET config_digest = ?
-		 WHERE workspace_name = ? AND name = ?`, digest, workspace, name)
+		`UPDATE containers SET config_digest = ?, config_digest_fields = ?
+		 WHERE workspace_name = ? AND name = ?`, digest, fields, workspace, name)
 	if err != nil {
 		return fmt.Errorf("updating container %s: %w", name, err)
 	}

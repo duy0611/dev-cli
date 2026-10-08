@@ -879,7 +879,7 @@ dev container list [--all] [--timeout DURATION]
 dev container start NAME
 dev container stop NAME
 dev container remove NAME [--force]
-dev container rebuild NAME [--no-cache] [--tools LIST]
+dev container rebuild NAME [--no-cache] [--tools LIST] [--accept-config]
 dev container logs NAME [-f]
 dev container shell NAME [--kube-token] [--ssh-agent|--no-ssh-agent]
 dev container exec NAME [--kube-token] [--ssh-agent|--no-ssh-agent] -- CMD [ARGS...]
@@ -982,6 +982,18 @@ only to a container `dev` generated.
 
 A rebuild keeps the volume on both providers. To start from an empty workspace,
 `remove` and `create` — which is explicit about destroying the contents.
+
+A rebuild of a project-owned container first compares its configuration with
+the one the container was last built from — the merged configuration, its
+Dockerfile when it builds one, and its compose files — and refuses, exit 2, when
+it changed, naming the fields and files that did. `initializeCommand` runs on
+your host and a Dockerfile `RUN` line runs at build, so a change you did not
+make is worth reading before it runs. `--accept-config` rebuilds with it and
+records it as the new baseline; the next rebuild of the same configuration needs
+no flag. A container with no recorded configuration — one created before this
+check, or with `--no-start` and never started — records one at its next start or
+rebuild rather than refusing. Generated configurations are `dev`'s own and are
+never compared. The local provider only.
 
 **`exec`** needs the `--`; everything after it belongs to the command being run,
 not to `dev`.
@@ -1129,8 +1141,9 @@ container, event, and a summary. See
 | `--json` | the matching records as raw JSON lines, for `jq` |
 
 Events: `create`, `rebuild`, `start`, `stop`, `remove`, `exec`, `shell`,
-`start-agent`, `kube-token`, `relay`, `sync`, and `refused` for a command a
-guard stopped (with the reason and what it found).
+`start-agent`, `kube-token`, `relay`, `sync`, `refused` for a command a guard
+stopped (with the reason and what it found), and `accept-config` for a rebuild
+told to take a changed configuration (with what changed).
 
 Names are not looked up: a workspace or container that no longer exists still
 has history, so an unknown name prints nothing and exits `0` rather than `3`.

@@ -106,6 +106,10 @@ type Container struct {
 	// Empty for a generated configuration, which is dev's own, and for a row
 	// created before the digest existed, until its first rebuild records one.
 	ConfigDigest string
+	// ConfigDigestFields is a hash per field and per referenced file of that
+	// same configuration, so a rebuild that finds the digest changed can say
+	// which fields did. Hashes only: dev keeps no copy of the document.
+	ConfigDigestFields string
 	// OverrideConfigPath is a merged devcontainer.json built for the length of
 	// one invocation: the project's own document with dev's state mount in it.
 	//

@@ -11,8 +11,12 @@
 --
 -- config_digest '' means "not yet recorded": every generated container, whose
 -- configuration is dev's own, and existing rows until their next rebuild.
+-- config_digest_fields is a hash per top-level field and per referenced file of
+-- that same configuration, so a rebuild that finds the digest changed can say
+-- which fields did. Hashes only: dev keeps no copy of a document it does not own.
 --
 -- Literal defaults and NOT NULL, so the file replays against Postgres.
 ALTER TABLE containers ADD COLUMN git_guard INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE containers ADD COLUMN allow_privileged INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE containers ADD COLUMN config_digest TEXT NOT NULL DEFAULT '';
+ALTER TABLE containers ADD COLUMN config_digest_fields TEXT NOT NULL DEFAULT '';

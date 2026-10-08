@@ -516,7 +516,7 @@ func TestContainerRoundTripsTheHardeningColumns(t *testing.T) {
 		t.Errorf("got guard=%v allow=%v digest=%q", got.GitGuard, got.AllowPrivileged, got.ConfigDigest)
 	}
 
-	if err := s.SetConfigDigest("ws", "api", "sha256:def"); err != nil {
+	if err := s.SetConfigDigest("ws", "api", "sha256:def", "{}"); err != nil {
 		t.Fatalf("SetConfigDigest: %v", err)
 	}
 	list, err := s.ListContainers("ws")
@@ -526,7 +526,7 @@ func TestContainerRoundTripsTheHardeningColumns(t *testing.T) {
 	if len(list) != 1 || list[0].ConfigDigest != "sha256:def" {
 		t.Errorf("after SetConfigDigest: %+v", list)
 	}
-	if err := s.SetConfigDigest("ws", "nope", "x"); !errors.Is(err, ErrNotFound) {
+	if err := s.SetConfigDigest("ws", "nope", "x", ""); !errors.Is(err, ErrNotFound) {
 		t.Errorf("missing container: err = %v, want ErrNotFound", err)
 	}
 }

@@ -313,7 +313,7 @@ func (a *app) createWorktreeRows(ctx context.Context, wsName, name, repo, path, 
 	// recorded. Skipped for --no-start for container create's reason: start
 	// checks on every call.
 	if !opts.create.noStart {
-		if err := a.guardNewContainer(ctx, wsName, c, repo); err != nil {
+		if err := a.guardNewContainer(ctx, wsName, &c, repo); err != nil {
 			return err
 		}
 	}
