@@ -251,6 +251,55 @@ func TestSmokeGeneratedConfig(t *testing.T) {
 	dev("container", "remove", name)
 }
 
+// --from copies a tool list, not a document: the clone has to install what the
+// source installs, and on volumes named for itself.
+func TestSmokeCreateFrom(t *testing.T) {
+	requireBinaries(t, "devcontainer", "docker")
+
+	state := t.TempDir()
+	t.Setenv("DEV_STATE", state)
+
+	bin := buildBinary(t)
+	dev := func(args ...string) string {
+		t.Helper()
+		return run(t, bin, args...)
+	}
+
+	const (
+		src   = "dev-smoke-from-src"
+		clone = "dev-smoke-from-clone"
+		ws    = "dev-smoke-from-ws"
+	)
+	t.Cleanup(func() {
+		for _, name := range []string{clone, src} {
+			_ = exec.Command(bin, "container", "remove", name, "--force").Run()
+			_ = exec.Command("docker", "volume", "rm", "--force",
+				"dev-"+ws+"-"+name, "dev-"+ws+"-"+name+"-state").Run()
+		}
+	})
+
+	dev("provider", "configure", "dev-smoke-from-local", "--kind", "local")
+	dev("workspace", "init", ws, "--provider", "dev-smoke-from-local")
+
+	// Recorded only: the source never needs to run for its tools to be read.
+	dev("container", "create", src, "--no-folder", "--generate", "--tools", "yq", "--no-start")
+
+	t.Log("creating a container --from another; the first run pulls a base image and installs features")
+	dev("container", "create", clone, "--from", src, "--no-folder")
+
+	// yq because the base image does not ship it, so finding it proves the
+	// source's tool list reached the clone's build.
+	if out := dev("container", "exec", clone, "--", "yq", "--version"); !strings.Contains(out, "yq") {
+		t.Errorf("yq is not installed in the clone: %q", out)
+	}
+	if out := dockerVolumes(t, "dev-"+ws+"-"+src); len(out) != 0 {
+		t.Errorf("starting the clone created the source's volume: %v", out)
+	}
+
+	dev("container", "remove", clone)
+	dev("container", "remove", src)
+}
+
 // The claim a folderless container rests on: work survives a stop and a start,
 // because it is in a volume rather than in the container filesystem.
 func TestSmokeFolderless(t *testing.T) {

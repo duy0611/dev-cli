@@ -11,6 +11,7 @@ import (
 	"github.com/duy0611/dev-cli/internal/dcgen"
 	"github.com/duy0611/dev-cli/internal/model"
 	"github.com/duy0611/dev-cli/internal/provider/local"
+	"github.com/duy0611/dev-cli/internal/store"
 )
 
 // parseToolList splits a --tools value. Empty entries are dropped rather than
@@ -153,6 +154,84 @@ func applyToolDiff(current, spec []string) ([]string, error) {
 		return nil, usageError(err)
 	}
 	return resolved, nil
+}
+
+// applyFrom rewrites opts so that the create following it renders from another
+// container's tools and inherits its persisted choices, as --from asks.
+//
+// The tool list is what is copied, never the document: dcgen.Render bakes the
+// container's name, its workspace volume, its state volume and any worktree
+// binds into it, so a copy would mount the source's volumes into the new
+// container. The caller renders afresh for the new name instead, the route
+// rewriteGeneratedTools takes.
+//
+// Every check here runs before the caller writes anything — for worktree
+// create, before git makes a checkout — so a mistyped source costs nothing to
+// undo. The source row is only read.
+func applyFrom(a *app, wsName string, opts *createOpts) error {
+	if opts.from == "" {
+		return nil
+	}
+	// applyToolDiff treats a plain list as a replacement, so allowing one would
+	// silently discard everything --from exists to carry.
+	for _, s := range opts.tools {
+		if !strings.HasPrefix(s, "+") && !strings.HasPrefix(s, "-") {
+			return usageErrorf("with --from, --tools takes +/- changes to %s's tools", opts.from)
+		}
+	}
+
+	st, err := a.store()
+	if err != nil {
+		return err
+	}
+	src, err := st.GetContainer(wsName, opts.from)
+	if errors.Is(err, store.ErrNotFound) {
+		return notFoundErrorf("no such container: %s (workspace %s)", opts.from, wsName)
+	}
+	if err != nil {
+		return err
+	}
+	if src.GeneratedConfig == "" {
+		// Pointing at another project's file would leave a relative dockerfile
+		// anchored to that project; copying it would freeze a document dev does
+		// not own. Neither is worth doing silently.
+		return usageErrorf("container %s uses its project's own config; --from copies only generated ones",
+			opts.from)
+	}
+
+	tools, err := dcgen.ToolsOf(src.GeneratedConfig)
+	if err != nil {
+		// A corrupt row rather than a malformed request, so exit 1.
+		return fmt.Errorf("container %s: %w", opts.from, err)
+	}
+	// Only when changes were given: applyToolDiff resolves an empty spec to an
+	// empty list, which would install none of the source's tools.
+	if len(opts.tools) > 0 {
+		if tools, err = applyToolDiff(tools, opts.tools); err != nil {
+			return err
+		}
+	}
+	opts.tools = tools
+	// Always generate, so the picker never opens: --from has already said
+	// which tools.
+	opts.generate = true
+
+	// Inherited unless a flag said otherwise. --no-persist-state can only turn
+	// persistence off, so a source without it passes that on.
+	if !src.PersistState {
+		opts.noPersistState = true
+	}
+	if opts.agentConfig == "" && !opts.noAgentConfig {
+		// "" stays "": it means the project's own agents.yaml, which for the
+		// new container is the new folder's file, not the source's.
+		switch src.AgentConfig {
+		case agentConfigNone:
+			opts.noAgentConfig = true
+		default:
+			opts.agentConfig = src.AgentConfig
+		}
+	}
+	return nil
 }
 
 // rewriteGeneratedTools changes which tools a generated container installs.
