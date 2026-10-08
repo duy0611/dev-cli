@@ -63,6 +63,9 @@ type createOpts struct {
 	// project's own. noAgentConfig is --no-agent-config: apply none.
 	agentConfig   string
 	noAgentConfig bool
+	// from is --from: an existing generated container in the same workspace
+	// whose tools and persisted choices this one starts from. See applyFrom.
+	from string
 }
 
 func newContainerCreateCmd(a *app) *cobra.Command {
@@ -91,7 +94,13 @@ func newContainerCreateCmd(a *app) *cobra.Command {
 			"A project's .devcontainer/agents.yaml, when it has one, declares its\n" +
 			"agents' skills, MCP servers and plugins; dev applies it inside the\n" +
 			"container once it is running, and again on every rebuild. --agent-config\n" +
-			"names another file, --no-agent-config applies none.",
+			"names another file, --no-agent-config applies none.\n\n" +
+			"--from SOURCE starts from another container in the workspace whose\n" +
+			"configuration dev generated: its tools, its state volume setting and its\n" +
+			"agents.yaml choice. The configuration is rendered afresh for this\n" +
+			"container, so the two never share a volume. --tools then takes +/-\n" +
+			"changes to the source's list, and the other flags override what is\n" +
+			"inherited.",
 		Args: exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.tools = parseToolList(toolList)
@@ -113,6 +122,8 @@ func newContainerCreateCmd(a *app) *cobra.Command {
 		"apply this agents.yaml instead of the project's .devcontainer/agents.yaml")
 	cmd.Flags().BoolVar(&opts.noAgentConfig, "no-agent-config", false,
 		"apply no agents.yaml, even if the project has one")
+	cmd.Flags().StringVar(&opts.from, "from", "",
+		"start from another generated container's tools and settings")
 	return cmd
 }
 
@@ -129,17 +140,27 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 	case folder != "" && opts.noFolder:
 		return usageErrorf("--folder and --no-folder contradict each other")
 	}
-	if len(opts.tools) > 0 && !opts.generate && !opts.noFolder {
-		return usageErrorf("--tools only applies with --generate")
+	if len(opts.tools) > 0 && !opts.generate && !opts.noFolder && opts.from == "" {
+		return usageErrorf("--tools only applies with --generate or --from")
 	}
 	// Before anything else is resolved, so a bad flag or a missing file is
 	// reported as itself rather than as whatever fails first after it.
-	agentConfig, err := agentConfigChoice(opts.agentConfig, opts.noAgentConfig)
-	if err != nil {
+	if _, err := agentConfigChoice(opts.agentConfig, opts.noAgentConfig); err != nil {
 		return err
 	}
 
 	wsName, err := a.workspaceName(workspace)
+	if err != nil {
+		return err
+	}
+	// Before the source below is resolved, so it renders from the tools and
+	// inherited choices --from carries rather than asking for them.
+	if err := applyFrom(a, wsName, &opts); err != nil {
+		return err
+	}
+	// Again, now that --from may have filled in what the flags left empty. A
+	// file the source named that has since gone fails here, before any row.
+	agentConfig, err := agentConfigChoice(opts.agentConfig, opts.noAgentConfig)
 	if err != nil {
 		return err
 	}
