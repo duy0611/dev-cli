@@ -66,6 +66,9 @@ type createOpts struct {
 	// from is --from: an existing generated container in the same workspace
 	// whose tools and persisted choices this one starts from. See applyFrom.
 	from string
+	// allowPrivileged is --allow-privileged: let the configuration ask its
+	// engine for the host. See checkEscape.
+	allowPrivileged bool
 }
 
 func newContainerCreateCmd(a *app) *cobra.Command {
@@ -124,6 +127,8 @@ func newContainerCreateCmd(a *app) *cobra.Command {
 		"apply no agents.yaml, even if the project has one")
 	cmd.Flags().StringVar(&opts.from, "from", "",
 		"start from another generated container's tools and settings")
+	cmd.Flags().BoolVar(&opts.allowPrivileged, "allow-privileged", false,
+		"let the configuration ask for privileged mode, the engine socket, host namespaces or a mount of / or your home")
 	return cmd
 }
 
@@ -230,11 +235,23 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 		// re-renders a generated one from scratch.
 		PersistState: !opts.noPersistState,
 		AgentConfig:  agentConfig,
+		// The operator's choice, by flag, and nothing else's: a project file
+		// the agent can edit must not be able to grant it.
+		AllowPrivileged: opts.allowPrivileged,
 	}
 	// After the source is known, since the default file lives in it, and
 	// before the row is written, so a malformed agents.yaml creates nothing.
 	if err := markAgentConfig(&c); err != nil {
 		return err
+	}
+	// Before the row, for the same reason: a configuration that reaches the
+	// host must create nothing. Only when starting now — start checks again on
+	// every call, so `--no-start` defers it there, and recording a container
+	// still needs no engine.
+	if !opts.noStart {
+		if err := a.guardNewContainer(ctx, wsName, c); err != nil {
+			return err
+		}
 	}
 	err = st.CreateContainer(c)
 	if errors.Is(err, store.ErrExists) {
@@ -451,9 +468,10 @@ func runContainerList(ctx context.Context, a *app, workspace string, all bool, t
 	// and invisible otherwise, so the list is the only place to find out
 	// without reading the generated document.
 	return a.table(func(w io.Writer) {
-		header(w, "WORKSPACE", "NAME", "STATUS", "SOURCE", "CONFIG", "STATE")
+		header(w, "WORKSPACE", "NAME", "STATUS", "SOURCE", "CONFIG", "STATE", "HOST")
 		for _, c := range containers {
-			row(w, c.WorkspaceName, c.Name, statusOf(c), sourceOf(c), configOf(c), onOff(c.PersistState))
+			row(w, c.WorkspaceName, c.Name, statusOf(c), sourceOf(c), configOf(c), onOff(c.PersistState),
+				hostAccessOf(c))
 		}
 	})
 }
@@ -540,6 +558,14 @@ func (a *app) start(ctx context.Context, workspace string, c model.Container) er
 	}
 	defer cleanup()
 
+	// Every start, not only create's: `create --no-start` defers the check
+	// to here, and up applies a project's edited configuration to a container
+	// that does not exist yet just as rebuild does. A start of an existing,
+	// stopped container re-reads nothing, but telling the two apart would
+	// need the engine's answer first — and the check is the cheaper question.
+	if err := a.checkEscape(ctx, p, c); err != nil {
+		return err
+	}
 	if err := p.Up(ctx, c, environ); err != nil {
 		return err
 	}
@@ -686,6 +712,13 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 			// after it has been replaced by one that cannot be configured.
 			spec, err := loadAgentConfig(t.container)
 			if err != nil {
+				return err
+			}
+			// Before the rebuild, for agents.yaml's reason: a configuration
+			// that has come to ask for the host is refused while the old
+			// container still exists. Only create can grant the flag, so the
+			// way forward is to recreate — the moment to think about it.
+			if err := a.checkEscape(cmd.Context(), t.provider, t.container); err != nil {
 				return err
 			}
 			if err := t.provider.Rebuild(cmd.Context(), t.container, environ, noCache); err != nil {

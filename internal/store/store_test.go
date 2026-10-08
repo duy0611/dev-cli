@@ -497,3 +497,58 @@ func TestSetAgentConfigPendingOnAMissingContainer(t *testing.T) {
 		t.Errorf("err = %v, want ErrNotFound", err)
 	}
 }
+
+func TestContainerRoundTripsTheHardeningColumns(t *testing.T) {
+	s := openTest(t)
+	seed(t, s)
+	c := model.Container{
+		Name: "api", WorkspaceName: "ws", SourceKind: model.SourceFolder, Source: "/src/api",
+		GitGuard: true, AllowPrivileged: false, ConfigDigest: "sha256:abc",
+	}
+	if err := s.CreateContainer(c); err != nil {
+		t.Fatalf("CreateContainer: %v", err)
+	}
+	got, err := s.GetContainer("ws", "api")
+	if err != nil {
+		t.Fatalf("GetContainer: %v", err)
+	}
+	if !got.GitGuard || got.AllowPrivileged || got.ConfigDigest != "sha256:abc" {
+		t.Errorf("got guard=%v allow=%v digest=%q", got.GitGuard, got.AllowPrivileged, got.ConfigDigest)
+	}
+
+	if err := s.SetConfigDigest("ws", "api", "sha256:def"); err != nil {
+		t.Fatalf("SetConfigDigest: %v", err)
+	}
+	list, err := s.ListContainers("ws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].ConfigDigest != "sha256:def" {
+		t.Errorf("after SetConfigDigest: %+v", list)
+	}
+	if err := s.SetConfigDigest("ws", "nope", "x"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("missing container: err = %v, want ErrNotFound", err)
+	}
+}
+
+// A row written without naming the new columns is what every container created
+// before the migration looks like. It must keep behaving as it did: unguarded,
+// still allowed what it was allowed, and with no digest to compare against.
+func TestHardeningDefaultsSpeakForExistingRows(t *testing.T) {
+	s := openTest(t)
+	seed(t, s)
+	if _, err := s.db.Exec(
+		`INSERT INTO containers (name, workspace_name, source_kind, source, config_path,
+		   generated_config, persist_state, agent_config, agent_config_pending, created_at)
+		 VALUES ('old', 'ws', 'folder', '/src/old', '', '', 0, '', 0, ?)`, nowString()); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	got, err := s.GetContainer("ws", "old")
+	if err != nil {
+		t.Fatalf("GetContainer: %v", err)
+	}
+	if got.GitGuard || !got.AllowPrivileged || got.ConfigDigest != "" {
+		t.Errorf("got guard=%v allow=%v digest=%q, want false true empty",
+			got.GitGuard, got.AllowPrivileged, got.ConfigDigest)
+	}
+}

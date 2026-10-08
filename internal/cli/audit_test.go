@@ -19,7 +19,7 @@ func stubEngine(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
 	scripts := map[string]string{
-		"devcontainer": "#!/bin/sh\nexit 0\n",
+		"devcontainer": "#!/bin/sh\ncase \"$1\" in read-configuration) echo '{\"mergedConfiguration\":{}}';; esac\nexit 0\n",
 		// `ps --format {{.State}}` is how Status asks; `ps -aq` is how the
 		// container's id is found. Both say there is one, and it is running.
 		"docker": "#!/bin/sh\ncase \"$*\" in\n" +

@@ -91,6 +91,21 @@ type Container struct {
 	// `create --no-start` hand the job to the first start, and a failed apply
 	// be retried by the next. Work dev owes, not live container status.
 	AgentConfigPending bool
+	// GitGuard says host git is shielded from what this container writes under
+	// .git: its config is mounted read-only and its hooks are a container-only
+	// copy. Fixed at create, for PersistState's reason; set for a folder that
+	// is a git repository, never for a folderless container.
+	GitGuard bool
+	// AllowPrivileged says the operator let this container ask its engine for
+	// access to the host — privileged mode, the engine socket, host namespaces,
+	// a mount of the host's root or home. Fixed at create, by flag only: a
+	// project file the agent can edit must not be able to grant it.
+	AllowPrivileged bool
+	// ConfigDigest is the digest of the project configuration this container
+	// was last built from, so a rebuild can refuse one that changed unseen.
+	// Empty for a generated configuration, which is dev's own, and for a row
+	// created before the digest existed, until its first rebuild records one.
+	ConfigDigest string
 	// OverrideConfigPath is a merged devcontainer.json built for the length of
 	// one invocation: the project's own document with dev's state mount in it.
 	//

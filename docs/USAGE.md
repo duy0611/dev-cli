@@ -870,6 +870,7 @@ Removing the active workspace leaves none active rather than a dangling pointer.
 ```
 dev container create NAME --folder PATH [--generate] [--tools LIST] [--no-persist-state]
                          [--agent-config PATH | --no-agent-config] [--no-start]
+                         [--allow-privileged]
 dev container create NAME --no-folder [--tools LIST] [--no-persist-state]
                          [--agent-config PATH | --no-agent-config] [--no-start]
 dev container create NAME --from SOURCE (--folder PATH | --no-folder) [--tools +ID,-ID]
@@ -937,6 +938,22 @@ running, and again on every `rebuild`; see
 file is exit 2 before anything is created; an `--agent-config` file that does
 not exist is exit 3, at create or at a later rebuild.
 
+A project-owned configuration that asks its engine for the host is refused,
+exit 2, before anything is created: privileged mode (from the project or from a
+feature such as `docker-in-docker`), a mount of the engine socket, a host
+namespace (`--pid=host`, `--network=host`, `--ipc=host`, `--userns=host`,
+`--uts=host`), a `--device`, or a bind mount of `/` or your home directory or
+anything above it. For a compose project, every service in its compose files is
+checked the same way. The refusal names each finding and where it came from.
+`--allow-privileged` lets it through; it is the operator's decision, fixed at
+create, and nothing in the project can grant it. `start` and `rebuild` check
+again, so a configuration edited to ask for the host later is refused then,
+while the old container still exists — recreate it with the flag if you mean
+it. `capAdd` and `securityOpt` are not refused: they widen what root can do
+inside the container, not the way out of it. Generated configurations are
+never checked, since they hold nothing privileged. The local provider only: the
+experimental k8s provider builds its own pod spec and ignores all of these.
+
 **`list`** reads live status from the engine every time; a stored copy would be
 wrong the moment anything happened outside `dev`. A `?` means the engine could
 not be reached, or did not answer within `--timeout` (default `10s`, any Go
@@ -944,8 +961,10 @@ duration such as `30s` or `2m`). The timeout is per workspace, so one
 unreachable cluster costs one wait, not one per container, and leaves the other
 workspaces' statuses alone. Either way the list still prints and exits 0. The SOURCE column is `-` for a folderless container, CONFIG
 is `generated` when `dev` rendered the configuration (`--generate` or
-`--no-folder`) and `project` when the folder ships its own, and STATE says
-whether its agents' configuration is on a volume.
+`--no-folder`) and `project` when the folder ships its own, STATE says
+whether its agents' configuration is on a volume, and HOST says whether the
+container may ask its engine for the host — `allowed` for one created with
+`--allow-privileged` or before that check existed, `refused` otherwise.
 
 **`start`** creates the container if the engine has none, which is what makes
 `create --no-start` followed by `start` work.
@@ -1002,7 +1021,7 @@ path it came from on stderr.
 dev worktree create NAME --branch B --path P [--repo R] [--base REF]
                          [--include-file PATH] [--generate] [--tools LIST] [--from SOURCE]
                          [--no-persist-state] [--agent-config PATH | --no-agent-config]
-                         [--no-start] [--no-herdr] [--workspace W]
+                         [--no-start] [--no-herdr] [--allow-privileged] [--workspace W]
 dev worktree list [--all] [--workspace W]
 dev worktree remove NAME [--force] [--workspace W]
 ```
@@ -1110,7 +1129,8 @@ container, event, and a summary. See
 | `--json` | the matching records as raw JSON lines, for `jq` |
 
 Events: `create`, `rebuild`, `start`, `stop`, `remove`, `exec`, `shell`,
-`start-agent`, `kube-token`, `relay`, `sync`.
+`start-agent`, `kube-token`, `relay`, `sync`, and `refused` for a command a
+guard stopped (with the reason and what it found).
 
 Names are not looked up: a workspace or container that no longer exists still
 has history, so an unknown name prints nothing and exits `0` rather than `3`.

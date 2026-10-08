@@ -62,9 +62,10 @@ func (a *app) record(event, workspace, container string, fields map[string]any) 
 // allowed from the moment it existed.
 func (a *app) recordCreate(workspace string, c model.Container) {
 	a.record("create", workspace, c.Name, map[string]any{
-		"source_kind":   string(c.SourceKind),
-		"generated":     c.GeneratedConfig != "",
-		"persist_state": c.PersistState,
+		"source_kind":      string(c.SourceKind),
+		"generated":        c.GeneratedConfig != "",
+		"persist_state":    c.PersistState,
+		"allow_privileged": c.AllowPrivileged,
 	})
 }
 
