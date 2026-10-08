@@ -24,9 +24,6 @@ tell afterwards what happened:
 4. **No record.** Nothing says what ran in which container, when, or which
    kube token was minted for it — which is what deciding what to revoke needs.
 
-On Kubernetes the pod also mounts its ServiceAccount token whether or not the
-operator asked for cluster access.
-
 ## Goal
 
 A container created after this lands cannot make host git run a program of its
@@ -250,12 +247,15 @@ exists — the same ordering `rebuild` already uses for `agents.yaml`.
 
 ## 4. Kubernetes pod
 
-In `buildDeployment`, always:
+In `buildDeployment`, always: `securityContext.seccompProfile: {type:
+RuntimeDefault}` on the pod. Docker applies its default profile to every local
+container; a pod runs unconfined unless it asks.
 
-- `automountServiceAccountToken: false`. `--kube-token` stays the explicit
-  route. The `USAGE.md` note that a plain shell "keeps the pod's own in-cluster
-  credentials" becomes false and is rewritten.
-- `securityContext.seccompProfile: {type: RuntimeDefault}` on the pod.
+The ServiceAccount token stays mounted. It is the token of the provider's
+`serviceAccount`, the namespace's `default` account when unset, and that
+account holds no permissions unless someone binds some to it — so the token is
+only worth what the operator chose to grant. `USAGE.md` says so: leave the
+account unbound and `--kube-token` stays the only route to cluster access.
 
 No column. The provider is experimental; every Deployment changes on its next
 start and `Recreate` handles it.
@@ -383,7 +383,7 @@ Unit (`make test`, no engine, stub executables per the conventions):
 - Audit: record shape per event; sentinel secret never written; concurrent
   writers produce whole lines; `dev audit` filtering, `--since` both forms,
   unknown names exit 0, malformed line skipped.
-- k8s manifest: `automountServiceAccountToken: false` and the seccomp profile
+- k8s manifest: the seccomp profile
   present on every Deployment.
 - Exit codes: every refusal is 2.
 

@@ -55,7 +55,7 @@ what a fooled agent can do, not whether it will be fooled.
 | The operator's host | write `.git/hooks` and `.git/config` (both run by host `git`); edit `.devcontainer/` (applied at `rebuild`, `initializeCommand` runs on the host) | host git reads neither; config drift refused at `rebuild` |
 | The host, via the engine | nothing new — but a project config or feature asking for `privileged`, the engine socket, or host namespaces is applied without question | refused unless `--allow-privileged` |
 | The operator's other ssh keys | sign with *any* loaded key, for any host, while a session is live | documented: relay a dedicated agent holding only the GitHub key |
-| The cluster (k8s) | read the pod's auto-mounted ServiceAccount token | no token unless `--kube-token` |
+| The cluster (k8s) | read the pod's ServiceAccount token | unchanged — the token carries only what the operator bound to that account; `USAGE.md` says to leave it unbound |
 | API keys | read them from its environment and send them anywhere | still can — they are dedicated, capped, revocable, and the runbook says how |
 | The container | become root with `sudo` | still can; nothing inside the container depends on it not |
 | Accountability | nothing records what ran | append-only audit log on the host |
@@ -121,7 +121,7 @@ article does not cover. **Build** items are specified in the next section.
 | Guardrail | Protects | Friction | Decision |
 |---|---|---|---|
 | `no-new-privileges` + `--cap-drop=ALL` (local), `--allow-sudo` escape hatch | in-container controls from root | large: no `apt install`; project lifecycle commands using `sudo` fail; the Go feature (`SYS_PTRACE`, `seccomp=unconfined`) refused; `dev`'s own `sudo chown` of the state volume must move host-side; compose projects cannot be shown to comply | **dropped**: its only job was to protect in-container controls (egress firewall, agent policy), and those are deferred. Root in an unprivileged container is still contained; the escape guard covers what is not. |
-| k8s: `automountServiceAccountToken: false` | the cluster | none — `--kube-token` is the explicit route | **build — 2** |
+| k8s: `automountServiceAccountToken: false` | the cluster | none | **dropped in review**: the token is the provider's `serviceAccount`, the namespace `default` when unset, which holds no permissions unless bound. Leaving it unbound is the control, and `USAGE.md` says so. |
 | k8s: `seccompProfile: RuntimeDefault` | the node kernel | none in practice; docker already applies its default profile | **build — 2** |
 | k8s: `runAsNonRoot`, `allowPrivilegeEscalation: false`, capability drop | in-container controls | breaks images whose remote user is not uid 1000; same reasoning as local | **dropped** |
 | Read-only root filesystem | persistence inside the container | large: every tool writing outside a tmpfs breaks | **rejected** |
@@ -286,7 +286,6 @@ compose file; anything the check cannot read is reported, not assumed safe.
 
 In `buildManifest`, always:
 
-- `automountServiceAccountToken: false`.
 - Pod `securityContext.seccompProfile: {type: RuntimeDefault}`.
 
 Every existing Deployment changes on its next start; `Recreate` handles it, and
@@ -352,7 +351,7 @@ transcript or Claude's OpenTelemetry export (catalogue, step 5).
 
 | # | Item | Size |
 |---|---|---|
-| 1 | 2 k8s: SA token off, seccomp | S |
+| 1 | 2 k8s: seccomp | S |
 | 2 | 1.1 container-only `.git/config` and `.git/hooks` | M |
 | 3 | 1.3 escape guard | M |
 | 4 | 1.2 config drift check | S |
