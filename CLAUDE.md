@@ -10,8 +10,9 @@ One binary, a SQLite database, and the external binaries it shells out to:
 `--kube-token`. One operator. The module is `github.com/duy0611/dev-cli`; its
 current version is in `.release-please-manifest.json`.
 
-CI runs `make lint && make test` on push and pull request, with `make smoke` as
-a second job beside it. Releases are cut by release-please: every push to main
+CI runs `make lint && make test` on push and pull request, on Linux amd64 and
+macOS arm64, with `make smoke` as a second job beside it on Linux amd64 and
+arm64 — macOS runners have no nested virtualisation, so no engine starts there. Releases are cut by release-please: every push to main
 updates an open release PR from the Conventional Commit subjects since the last
 tag, and merging that PR tags the release, publishes it with the changelog, and
 builds `dev` for darwin and linux on both architectures into it. Nobody tags or

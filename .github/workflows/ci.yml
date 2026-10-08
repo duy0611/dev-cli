@@ -22,8 +22,17 @@ permissions:
   contents: read
 
 jobs:
+  # On both the operator's platforms: Linux on amd64, and macOS on Apple
+  # Silicon, which is where `dev` is mostly run. The keychain backend, path
+  # resolution (invariant 2) and the stub-executable harness all touch the host
+  # OS, so a pass on Linux says nothing about darwin.
   check:
-    runs-on: ubuntu-latest
+    strategy:
+      # One platform failing is no reason to stop learning about the other.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
 
@@ -66,8 +75,19 @@ jobs:
   #
   # The Kubernetes half skips here: it needs DEV_SMOKE_K8S_CONTEXT and
   # DEV_SMOKE_REGISTRY, and this workflow has no cluster or registry to name.
+  #
+  # Linux on both architectures, not macOS: GitHub's macOS runners are Apple
+  # Silicon VMs without nested virtualisation, so no container engine starts on
+  # them, and every smoke test would skip and go green having tested nothing.
+  # What an Apple Silicon laptop runs inside its engine's VM is linux/arm64, and
+  # that is what the arm runner exercises — arm64 images, features, and the
+  # arm64 build of the embedded relay.
   smoke:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
     # Generous, because the first create pulls images and builds features over
     # the network; a hang should still end rather than hold a runner for six
     # hours.
@@ -80,7 +100,7 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # ubuntu-latest ships Docker with buildx and Node with npm, but not the
+      # Both Ubuntu images ship Docker with buildx and Node with npm, but not the
       # devcontainer CLI. Without it every smoke test skips and the job goes
       # green having tested nothing.
       - name: Install the devcontainer CLI
