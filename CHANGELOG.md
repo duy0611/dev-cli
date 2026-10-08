@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.9.0](https://github.com/duy0611/dev-cli/compare/v0.8.0...v0.9.0) (2026-10-08)
+
+
+### Features
+
+* **cli:** container create --from ([7ae4796](https://github.com/duy0611/dev-cli/commit/7ae4796ea7e45617925961b0a24085b1e5c6f104))
+* **cli:** show config origin in container list ([4123fd2](https://github.com/duy0611/dev-cli/commit/4123fd205c7e2574d5e33b51a78ad2aef87b84b7))
+* **cli:** worktree create --from ([02327bf](https://github.com/duy0611/dev-cli/commit/02327bf33bbbf615ffc696edd4dcc1d620776f6f))
+
 ## [0.8.0](https://github.com/duy0611/dev-cli/compare/v0.7.0...v0.8.0) (2026-10-05)
 
 
