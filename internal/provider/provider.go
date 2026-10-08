@@ -111,6 +111,9 @@ type AgentSession interface {
 	// Socket is the path inside the container to put in SSH_AUTH_SOCK.
 	Socket() string
 	Close() error
+	// End reports how the session ended — clean, killed or unexpected — once
+	// Close has returned. For the audit log.
+	End() string
 }
 
 // Factory builds the Provider for a configured provider record.

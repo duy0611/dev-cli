@@ -17,6 +17,7 @@ command. For what `dev` *is* and how it fits together, read the
   - [Commit a devcontainer.json that also works under dev](#commit-a-devcontainerjson-that-also-works-under-dev)
   - [Query a cluster from inside a container](#query-a-cluster-from-inside-a-container)
   - [Run a workspace in Kubernetes](#run-a-workspace-in-kubernetes)
+  - [See what ran, and when](#see-what-ran-and-when)
   - [Clean up](#clean-up)
 - [Troubleshooting](#troubleshooting)
 - [Command reference](#command-reference)
@@ -635,6 +636,41 @@ dev container exec api -- git pull
 `dev container sync api` pushes your workspace *settings*, not your files. See
 [Add a secret and rotate it](#add-a-secret-and-rotate-it).
 
+### See what ran, and when
+
+Every container `dev` creates, rebuilds, starts, stops or removes, every command
+it runs in one, every kube token it mints and every ssh agent relay it opens is
+written to an audit log on the host, beside the database. No container can
+reach it, so an agent cannot edit the record of what it did.
+
+```sh
+dev audit                                # everything, oldest first
+dev audit --container api --since 24h    # one container, the last day
+dev audit --event exec,start-agent       # only commands that ran
+dev audit --json | jq 'select(.exit_code != 0)'
+```
+
+```
+2026-10-08 14:02:11  personal/api  create       folder
+2026-10-08 14:02:40  personal/api  start
+2026-10-08 14:03:05  personal/api  kube-token   sa reader in team-a (dev-cluster), expires 15:03
+2026-10-08 16:15:52  personal/api  start-agent  claude, exit 0, after 2h12m47s
+2026-10-08 16:15:52  personal/api  relay        clean after 2h12m47s
+```
+
+It records names, never values: the command you typed, setting names, the
+ServiceAccount a token was minted for — never a setting's value, an environment
+variable's value, or a token. It is the place to start when deciding what to
+revoke after a container has had something it should not.
+
+A removed container's history stays: the log outlives `container remove` and
+`workspace remove`, and `dev audit --container NAME` reads it for a container
+that no longer exists. A command that runs for a long time is recorded once it
+ends, so a session cut off by the host going down leaves no record of itself.
+
+What the log cannot see is what an agent did *inside* a session — that is the
+agent's own transcript.
+
 ### Clean up
 
 ```sh
@@ -1055,11 +1091,40 @@ deleted — the checkout is scaffolding, the branch is the work.
 the container and warns that the checkout at its path was left behind, naming
 `dev worktree remove` as what would have taken both.
 
+### audit
+
+```
+dev audit [--workspace W] [--container C] [--event E]... [--since D] [--json]
+```
+
+Prints the audit log oldest first, one record per line: time, workspace and
+container, event, and a summary. See
+[See what ran, and when](#see-what-ran-and-when).
+
+| Flag | |
+|---|---|
+| `--workspace W` | only records for this workspace. Does **not** default to the active workspace: the log is the view across everything |
+| `--container C` | only records for this container |
+| `--event E` | only these events; repeatable or comma-separated |
+| `--since D` | a duration back from now (`24h`, `30m`) or an RFC 3339 time |
+| `--json` | the matching records as raw JSON lines, for `jq` |
+
+Events: `create`, `rebuild`, `start`, `stop`, `remove`, `exec`, `shell`,
+`start-agent`, `kube-token`, `relay`, `sync`.
+
+Names are not looked up: a workspace or container that no longer exists still
+has history, so an unknown name prints nothing and exits `0` rather than `3`.
+No log yet also prints nothing. A damaged line is skipped with a warning naming
+its line number. `--since` that is neither form exits `2`.
+
+The file is `audit.jsonl` in the state directory, mode `0600`. A record that
+cannot be written warns once and never fails the command it belongs to.
+
 ### Environment
 
 | Variable | Meaning |
 |---|---|
-| `DEV_STATE` | where the SQLite database lives; default `~/.local/state/dev/dev.db` |
+| `DEV_STATE` | the state directory: the SQLite database `dev.db` and the audit log `audit.jsonl`; default `~/.local/state/dev/` |
 | `DOCKER_HOST` | read by `docker`, which `dev` shells out to; how you point at Podman |
 | `SSH_AUTH_SOCK` | your ssh agent, read on the host when a workspace uses `--ssh-forward`. Inside the container it names the relay instead |
 | `KUBECONFIG` | set inside the container, for a command run with `--kube-token`, to the kubeconfig holding the minted token |

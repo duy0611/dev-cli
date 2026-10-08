@@ -256,6 +256,19 @@ func (a *app) injectKubeTokenWith(ctx context.Context, t *target, req kubetoken.
 		return provider.EnvVar{}, err
 	}
 	reportExpiry(a, req, tok, time.Now())
+	// Which identity went into the container and until when — never the token.
+	fields := map[string]any{
+		"context":         req.Context,
+		"namespace":       req.Namespace,
+		"service_account": req.ServiceAccount,
+	}
+	if req.Duration > 0 {
+		fields["requested"] = req.Duration.String()
+	}
+	if !tok.Expiry.IsZero() {
+		fields["expires"] = tok.Expiry.UTC().Format(time.RFC3339)
+	}
+	a.record("kube-token", t.workspace.Name, t.container.Name, fields)
 
 	// On stdin, never as an argument: an argument shows in the process list on
 	// the host and in the container.

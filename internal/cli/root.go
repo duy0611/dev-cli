@@ -22,7 +22,7 @@ import (
 // Returning the code rather than calling os.Exit keeps every deferred cleanup
 // in the command path running, and leaves main() as the only place that exits.
 func Execute(version string) int {
-	a := &app{out: os.Stdout}
+	a := &app{out: os.Stdout, version: version}
 	defer a.close()
 
 	// Ctrl-C cancels the command's context rather than killing the process, so
@@ -42,6 +42,7 @@ func Execute(version string) int {
 		newWorkspaceCmd(a),
 		newContainerCmd(a),
 		newWorktreeCmd(a),
+		newAuditCmd(a),
 	)
 
 	// Cobra prints usage after any error by default, which buries a one-line

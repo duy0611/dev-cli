@@ -329,6 +329,7 @@ func (a *app) createWorktreeRows(wsName, name, repo, path, herdrWS string, opts 
 		}
 		return err
 	}
+	a.recordCreate(wsName, c)
 	return nil
 }
 
@@ -519,6 +520,7 @@ func runWorktreeRemove(ctx context.Context, a *app, workspace, name string, forc
 	if err := st.DeleteContainer(wsName, name); err != nil {
 		return err
 	}
+	a.record("remove", wsName, name, map[string]any{"worktree": true})
 
 	// Herdr last and best-effort, for the same reason as on create.
 	if err := herdr.Close(ctx, w.HerdrWorkspace); err != nil {

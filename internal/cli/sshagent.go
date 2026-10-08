@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -63,6 +64,16 @@ func (f sshAgentFlags) override() (*bool, error) {
 //
 // Returns environ unchanged, and a stop that does nothing, when forwarding is
 // off — so every caller can invoke this the same way.
+// agentForwarded reports whether a command on t forwards the ssh agent: the
+// workspace's setting, unless the command's flag overrode it. The same rule
+// forwardAgent applies, for the audit record.
+func agentForwarded(t *target, override *bool) bool {
+	if override != nil {
+		return *override
+	}
+	return t.workspace.SSHForward
+}
+
 func (a *app) forwardAgent(ctx context.Context, t *target, override *bool,
 	environ []provider.EnvVar) ([]provider.EnvVar, func(), error) {
 	noop := func() {}
@@ -95,6 +106,7 @@ func (a *app) forwardAgent(ctx context.Context, t *target, override *bool,
 	if err != nil {
 		return nil, noop, err
 	}
+	started := time.Now()
 
 	stop := func() {
 		if err := session.Close(); err != nil {
@@ -103,6 +115,13 @@ func (a *app) forwardAgent(ctx context.Context, t *target, override *bool,
 			// exec regardless.
 			fmt.Fprintf(os.Stderr, "dev: stopping the ssh agent relay: %v\n", err)
 		}
+		// After Close, so End can tell a relay that died mid-session — whose
+		// commits stopped signing — from one that was shut down.
+		a.record("relay", t.workspace.Name, t.container.Name, map[string]any{
+			"started": started.UTC().Format(time.RFC3339Nano),
+			"ended":   time.Now().UTC().Format(time.RFC3339Nano),
+			"end":     session.End(),
+		})
 	}
 
 	// Appended last, so this wins over a workspace setting of the same name.

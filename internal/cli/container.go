@@ -243,6 +243,7 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 	if err != nil {
 		return err
 	}
+	a.recordCreate(wsName, c)
 	if opts.noFolder {
 		a.printf("container %s (workspace %s) with no folder\n", name, wsName)
 	} else {
@@ -542,6 +543,7 @@ func (a *app) start(ctx context.Context, workspace string, c model.Container) er
 	if err := p.Up(ctx, c, environ); err != nil {
 		return err
 	}
+	a.record("start", workspace, c.Name, nil)
 	a.printf("container %s is running\n", c.Name)
 
 	// Only when owed: at create, after `create --no-start`, or after an apply
@@ -573,6 +575,7 @@ func newContainerStopCmd(a *app) *cobra.Command {
 			if err := t.provider.Stop(cmd.Context(), t.container); err != nil {
 				return err
 			}
+			a.record("stop", t.workspace.Name, t.container.Name, nil)
 			a.printf("container %s stopped\n", t.container.Name)
 			return nil
 		},
@@ -640,6 +643,7 @@ func runContainerRemove(ctx context.Context, a *app, workspace, name string, for
 	if err := st.DeleteContainer(t.workspace.Name, name); err != nil {
 		return err
 	}
+	a.record("remove", t.workspace.Name, name, nil)
 	a.printf("container %s removed\n", name)
 	return nil
 }
@@ -687,6 +691,7 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 			if err := t.provider.Rebuild(cmd.Context(), t.container, environ, noCache); err != nil {
 				return err
 			}
+			a.record("rebuild", t.workspace.Name, t.container.Name, nil)
 			a.printf("container %s rebuilt\n", t.container.Name)
 			// Every rebuild re-reads the file: it is the moment an edit takes
 			// effect, and a container without the state volume has just lost
@@ -781,6 +786,7 @@ func runContainerSync(ctx context.Context, a *app, workspace, name string) error
 		keys = append(keys, e.Key)
 	}
 	slices.Sort(keys)
+	a.record("sync", t.workspace.Name, t.container.Name, map[string]any{"settings": keys})
 	// What is true afterwards, rather than what was done — the same postcondition
 	// Syncer promises. "Synced N settings" would contradict the local provider's
 	// own line a moment earlier saying it had nothing to push.
@@ -846,13 +852,20 @@ func runContainerShell(ctx context.Context, a *app, workspace, name string, kube
 	defer stopAgent()
 
 	shell := detectShell(ctx, t)
-	return t.provider.Exec(ctx, t.container, []string{shell}, provider.ExecOpts{
+	started := time.Now()
+	err = t.provider.Exec(ctx, t.container, []string{shell}, provider.ExecOpts{
 		Env:    environ,
 		TTY:    true,
 		Stdin:  os.Stdin,
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,
 	})
+	a.recordRun("shell", t, started, map[string]any{
+		"argv":       []string{shell},
+		"ssh_agent":  agentForwarded(t, sshOverride),
+		"kube_token": kubeToken,
+	}, err)
+	return err
 }
 
 // detectShell picks the best shell the image actually has.
@@ -945,10 +958,19 @@ func runContainerExec(ctx context.Context, a *app, workspace, name string, comma
 	}
 	defer stopAgent()
 
-	return t.provider.Exec(ctx, t.container, command, provider.ExecOpts{
+	started := time.Now()
+	err = t.provider.Exec(ctx, t.container, command, provider.ExecOpts{
 		Env:    environ,
 		Stdin:  os.Stdin,
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,
 	})
+	// argv only: the command the operator typed. environ holds resolved
+	// settings and never reaches the log.
+	a.recordRun("exec", t, started, map[string]any{
+		"argv":       command,
+		"ssh_agent":  agentForwarded(t, sshOverride),
+		"kube_token": kubeToken,
+	}, err)
+	return err
 }

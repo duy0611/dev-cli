@@ -57,6 +57,34 @@ type Session struct {
 	// round: Host can return before Close has finished, and a warning would be
 	// printed for a session the operator ended themselves.
 	closing atomic.Bool
+
+	// unexpected records that the channel collapsed before Close, and killed
+	// that Close had to kill a wedged relay. Read by End, for the audit log.
+	unexpected atomic.Bool
+	killed     atomic.Bool
+}
+
+// How a session ended, as End reports it.
+const (
+	EndClean      = "clean"      // told to stop, and stopped
+	EndKilled     = "killed"     // told to stop, and had to be killed
+	EndUnexpected = "unexpected" // stopped before anyone told it to
+)
+
+// End reports how the session ended. Meaningful once Close has returned.
+//
+// Unexpected wins over killed: a relay that died mid-session and was then
+// reaped is a session whose commits stopped signing, and that is the fact
+// worth having on record.
+func (s *Session) End() string {
+	switch {
+	case s.unexpected.Load():
+		return EndUnexpected
+	case s.killed.Load():
+		return EndKilled
+	default:
+		return EndClean
+	}
 }
 
 // Start installs the relay into the container and runs it, then pumps agent
@@ -130,6 +158,7 @@ func (s *Session) warnIfUnexpected(err error) {
 	if s.closing.Load() {
 		return // an ordinary shutdown, which is not worth a word
 	}
+	s.unexpected.Store(true)
 	// Host returns nil on a clean EOF, which is exactly the shape this failure
 	// takes: the channel collapsed and the relay tidied up after itself. So the
 	// warning is not conditional on err being non-nil; only its detail is.
@@ -175,6 +204,7 @@ func (s *Session) Close() error {
 		case <-time.After(closeGrace):
 			// Wedged, most likely on a half-open connection. Kill it, or the
 			// command the operator ran would never return.
+			s.killed.Store(true)
 			if s.pipes.Kill != nil {
 				_ = s.pipes.Kill()
 			}
