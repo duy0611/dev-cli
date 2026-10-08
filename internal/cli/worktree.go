@@ -64,6 +64,9 @@ func newWorktreeCreateCmd(a *app) *cobra.Command {
 			"Ignored files the source checkout's .worktreeinclude lists — .env files,\n" +
 			"node_modules — are copied into the new one; --include-file adds patterns\n" +
 			"on top. The source is the checkout the command runs from, or --repo.\n\n" +
+			"--from SOURCE generates the checkout's configuration from another\n" +
+			"generated container's tools, as on container create. It is checked before\n" +
+			"git runs, so a wrong source leaves no checkout behind.\n\n" +
 			"Local providers only. Kubernetes has no host bind mounts, so the paths a\n" +
 			"worktree depends on cannot resolve there.",
 		Args: exactArgs(1),
@@ -92,6 +95,8 @@ func newWorktreeCreateCmd(a *app) *cobra.Command {
 		"apply this agents.yaml instead of the checkout's .devcontainer/agents.yaml")
 	cmd.Flags().BoolVar(&opts.create.noAgentConfig, "no-agent-config", false,
 		"apply no agents.yaml, even if the checkout has one")
+	cmd.Flags().StringVar(&opts.create.from, "from", "",
+		"start from another generated container's tools and settings")
 	return cmd
 }
 
@@ -168,6 +173,11 @@ func runWorktreeCreate(ctx context.Context, a *app, workspace, name string, opts
 		return err
 	}
 	if err := a.requireLocalProvider(wsName); err != nil {
+		return err
+	}
+	// Before the checkout, like every other knowable mistake: a mistyped or
+	// project-owned source then leaves no checkout and no branch to roll back.
+	if err := applyFrom(a, wsName, &opts.create); err != nil {
 		return err
 	}
 
