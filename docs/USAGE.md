@@ -241,6 +241,43 @@ catalog does not know is left alone rather than dropped.
 This only applies to containers `dev` generated. For a project-owned one, edit
 the project's `devcontainer.json` and run `dev container rebuild NAME`.
 
+### Start another container like an existing one
+
+`--from` starts a new container from the setup of one you already have in the
+workspace, so you do not retype its tools:
+
+```sh
+dev container create scratch --from api --no-folder
+dev container create other   --from api --folder ~/src/other
+dev worktree  create fix     --from api --branch fix --path ~/src/api-fix
+```
+
+It copies three things from the source: its tool list, whether it keeps agent
+state on a volume, and which agents.yaml it applies. `--tools` then takes only
+`+`/`-` changes to that list (`--tools +helm,-yq`), since a replacement list
+would throw away what `--from` copied. `--no-persist-state`, `--agent-config` and
+`--no-agent-config` override what is inherited. A source that applies its own
+project's agents.yaml passes that on as "the new folder's own agents.yaml", not
+as the source's file.
+
+These are never copied:
+
+- **Volumes and mounts.** The configuration is rendered afresh for the new
+  container, so it gets its own workspace volume, its own state volume and, for a
+  worktree, bind mounts for its own checkout. The two containers share nothing
+  on disk.
+- **Work.** Files, agent state and history stay with the source.
+- **A project's own configuration.** Only a container `dev` generated can be a
+  source. One built from a project's `devcontainer.json` is refused (exit 2),
+  because that file belongs to its project. Point `--folder` at a project that
+  ships the same file instead. A target folder that ships a configuration of its
+  own is refused too, as with `--generate`.
+
+The source is only read, it does not need to be running, and its later changes
+do not reach the clone. After create, the new container is an ordinary generated
+container. On local the same tools give the same image layers, so the build is
+expected to come from Docker's cache. Each container still gets its own image.
+
 ### Add a secret and rotate it
 
 A setting is one environment variable for every container in a workspace,
@@ -796,6 +833,8 @@ dev container create NAME --folder PATH [--generate] [--tools LIST] [--no-persis
                          [--agent-config PATH | --no-agent-config] [--no-start]
 dev container create NAME --no-folder [--tools LIST] [--no-persist-state]
                          [--agent-config PATH | --no-agent-config] [--no-start]
+dev container create NAME --from SOURCE (--folder PATH | --no-folder) [--tools +ID,-ID]
+                         [--no-persist-state] [--agent-config PATH | --no-agent-config] [--no-start]
 dev container list [--all] [--timeout DURATION]
 dev container start NAME
 dev container stop NAME
@@ -822,7 +861,13 @@ neither.
 | `--no-persist-state` | do not give the container a volume for its agents' configuration |
 | `--agent-config` | apply this agents.yaml instead of the project's `.devcontainer/agents.yaml` |
 | `--no-agent-config` | apply no agents.yaml, even if the project has one |
+| `--from` | start from another generated container's tools and settings in this workspace |
 | `--no-start` | record the container without starting it |
+
+With `--from`, `--generate` is implied and `--tools` takes only `+`/`-` changes.
+A source that does not exist is exit 3. A source built from a project's own
+configuration, or a plain `--tools` list, is exit 2. See
+[Start another container like an existing one](#start-another-container-like-an-existing-one).
 
 The folder is resolved to a physical path before it is stored or mounted. On
 macOS the engine runs in a VM and resolves paths inside it, where `/tmp` is a
@@ -914,8 +959,8 @@ path it came from on stderr.
 
 ```
 dev worktree create NAME --branch B --path P [--repo R] [--base REF]
-                         [--include-file PATH] [--generate] [--tools LIST] [--no-persist-state]
-                         [--agent-config PATH | --no-agent-config]
+                         [--include-file PATH] [--generate] [--tools LIST] [--from SOURCE]
+                         [--no-persist-state] [--agent-config PATH | --no-agent-config]
                          [--no-start] [--no-herdr] [--workspace W]
 dev worktree list [--all] [--workspace W]
 dev worktree remove NAME [--force] [--workspace W]
@@ -940,11 +985,19 @@ is nothing extra to remember when the two are removed together.
 | `--no-persist-state` | do not give the container a volume for its agents' configuration |
 | `--agent-config` | apply this agents.yaml instead of the checkout's `.devcontainer/agents.yaml` |
 | `--no-agent-config` | apply no agents.yaml, even if the checkout has one |
+| `--from` | start from another generated container's tools and settings in this workspace |
 
 `--branch` and `--path` are required; `--path` has no default, so nothing
 appears on disk somewhere you did not choose. `--base` only has an effect when
 the branch does not already exist — passing it for one that does is a usage
 error, not a silent no-op.
+
+`--from` behaves as it does on `container create`. The source is checked before
+git runs, so a missing or project-owned source leaves no checkout and no new
+branch behind. The check for a configuration in the checkout itself can only run
+after the checkout exists; if the branch ships one, the checkout is removed
+again. The source may itself be a worktree container, but its bind mounts are
+never copied.
 
 Local providers only: a workspace on the k8s provider is refused, since a pod
 has no host bind mounts and the two absolute paths a worktree depends on
