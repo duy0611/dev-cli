@@ -97,6 +97,8 @@ func newWorktreeCreateCmd(a *app) *cobra.Command {
 		"apply no agents.yaml, even if the checkout has one")
 	cmd.Flags().StringVar(&opts.create.from, "from", "",
 		"start from another generated container's tools and settings")
+	cmd.Flags().BoolVar(&opts.create.allowPrivileged, "allow-privileged", false,
+		"let the configuration ask for privileged mode, the engine socket, host namespaces or a mount of / or your home")
 	return cmd
 }
 
@@ -219,7 +221,7 @@ func runWorktreeCreate(ctx context.Context, a *app, workspace, name string, opts
 		}
 	}
 
-	if err := a.createWorktreeRows(wsName, name, repo, path, herdrWS, opts); err != nil {
+	if err := a.createWorktreeRows(ctx, wsName, name, repo, path, herdrWS, opts); err != nil {
 		rollback(ctx, a, repo, path)
 		return err
 	}
@@ -257,7 +259,7 @@ func runWorktreeCreate(ctx context.Context, a *app, workspace, name string, opts
 // transaction: the store's methods each own their statement, and the cascade
 // means a worktree row cannot outlive its container even if this returns
 // halfway.
-func (a *app) createWorktreeRows(wsName, name, repo, path, herdrWS string, opts worktreeOpts) error {
+func (a *app) createWorktreeRows(ctx context.Context, wsName, name, repo, path, herdrWS string, opts worktreeOpts) error {
 	configPath, err := dcconfig.Find(path)
 	switch {
 	case err == nil && opts.create.generate:
@@ -300,11 +302,22 @@ func (a *app) createWorktreeRows(wsName, name, repo, path, herdrWS string, opts 
 		GeneratedConfig: generated,
 		PersistState:    !opts.create.noPersistState,
 		AgentConfig:     agentConfig,
+		AllowPrivileged: opts.create.allowPrivileged,
+		// Always a repository: a worktree is a checkout of one.
+		GitGuard: true,
 	}
 	// A failure here is returned before the row exists, and the caller rolls
 	// the checkout back, the same as for a bad devcontainer config.
 	if err := markAgentConfig(&c); err != nil {
 		return err
+	}
+	// Before the row, so a refusal rolls the checkout back with nothing
+	// recorded. Skipped for --no-start for container create's reason: start
+	// checks on every call.
+	if !opts.create.noStart {
+		if err := a.guardNewContainer(ctx, wsName, &c, repo); err != nil {
+			return err
+		}
 	}
 	if err := st.CreateContainer(c); err != nil {
 		if errors.Is(err, store.ErrExists) {
@@ -329,6 +342,7 @@ func (a *app) createWorktreeRows(wsName, name, repo, path, herdrWS string, opts 
 		}
 		return err
 	}
+	a.recordCreate(wsName, c)
 	return nil
 }
 
@@ -519,6 +533,8 @@ func runWorktreeRemove(ctx context.Context, a *app, workspace, name string, forc
 	if err := st.DeleteContainer(wsName, name); err != nil {
 		return err
 	}
+	a.record("remove", wsName, name, map[string]any{"worktree": true})
+	removeHooksCopy(wsName, name)
 
 	// Herdr last and best-effort, for the same reason as on create.
 	if err := herdr.Close(ctx, w.HerdrWorkspace); err != nil {

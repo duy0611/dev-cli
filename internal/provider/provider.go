@@ -106,11 +106,30 @@ type ConfigOverrider interface {
 	OverridesConfig()
 }
 
+// ConfigReader is a provider that can report a container's configuration as
+// the devcontainer CLI will merge it: the project's document, every feature it
+// names, and the override dev passes alongside.
+//
+// Optional, and discovered by type assertion, for the reason ConfigOverrider
+// is: what it answers — privileged mode, mounts, runArgs — only reaches the
+// engine on a provider that hands the document to it. The Kubernetes provider
+// builds its own pod spec and ignores all three, so asking it would check a
+// document that never runs.
+type ConfigReader interface {
+	// MergedConfig returns the merged configuration as the CLI reports it, as
+	// raw JSON, and the compose files it names, resolved — empty unless the
+	// configuration uses docker compose.
+	MergedConfig(ctx context.Context, c model.Container) (merged []byte, composeFiles []string, err error)
+}
+
 // AgentSession is a live agent relay.
 type AgentSession interface {
 	// Socket is the path inside the container to put in SSH_AUTH_SOCK.
 	Socket() string
 	Close() error
+	// End reports how the session ended — clean, killed or unexpected — once
+	// Close has returned. For the audit log.
+	End() string
 }
 
 // Factory builds the Provider for a configured provider record.

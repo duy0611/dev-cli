@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/duy0611/dev-cli/internal/agent"
 	"github.com/duy0611/dev-cli/internal/model"
@@ -136,13 +137,24 @@ func runContainerStartAgent(ctx context.Context, a *app, workspace, name, agentI
 		return err
 	}
 
-	return t.provider.Exec(ctx, t.container, ag.Command(extra), provider.ExecOpts{
-		Env:    environ,
-		TTY:    true,
-		Stdin:  os.Stdin,
-		Stdout: os.Stdout,
-		Stderr: os.Stderr,
+	argv := ag.Command(extra)
+	started := time.Now()
+	err = a.guardedRun(t, func() error {
+		return t.provider.Exec(ctx, t.container, argv, provider.ExecOpts{
+			Env:    environ,
+			TTY:    true,
+			Stdin:  os.Stdin,
+			Stdout: os.Stdout,
+			Stderr: os.Stderr,
+		})
 	})
+	a.recordRun("start-agent", t, started, map[string]any{
+		"agent":      ag.ID,
+		"argv":       argv,
+		"ssh_agent":  agentForwarded(t, sshOverride),
+		"kube_token": kubeReq != nil,
+	}, err)
+	return err
 }
 
 // ensureAgentPresent checks the image actually has the agent, offering one

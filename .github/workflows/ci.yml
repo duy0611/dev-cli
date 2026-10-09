@@ -22,8 +22,65 @@ permissions:
   contents: read
 
 jobs:
-  check:
+  # Decides whether the change can affect what the checks below test, so a
+  # prose-only change does not spend twenty runner-minutes proving nothing.
+  #
+  # Not a `paths:` filter on the trigger: a required check whose workflow never
+  # starts never reports, and a docs-only PR would wait on it forever. The
+  # workflow always runs; the expensive jobs skip, and ci_success_check below
+  # counts a skip as a pass.
+  #
+  # An allowlist of what may be skipped rather than of what triggers: anything
+  # not named here runs the checks. The *.md and plan/spec prose is all that is
+  # safe — docs/agents.sample.yaml is test input (agentcfg_test loads it), and a
+  # non-Go file added later should not be able to dodge CI by default.
+  changes:
     runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Enough history to diff a pull request against its base, or a push
+          # against the commit before it.
+          fetch-depth: 0
+
+      - id: diff
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -eu
+          # A push that created the branch, or a history git cannot diff
+          # against, has no base worth trusting: run everything.
+          if [ -z "$BASE" ] || [ "$BASE" = 0000000000000000000000000000000000000000 ] \
+             || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "no usable base; running every check"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only "$BASE" HEAD)
+          echo "changed files:"; echo "$changed" | sed 's/^/  /'
+          code=$(echo "$changed" | grep -vE '\.md$|^docs/(plans|specs)/' || true)
+          if [ -n "$code" ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prose only; skipping the checks"
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # On both the operator's platforms: Linux on amd64, and macOS on Apple
+  # Silicon, which is where `dev` is mostly run. The keychain backend, path
+  # resolution (invariant 2) and the stub-executable harness all touch the host
+  # OS, so a pass on Linux says nothing about darwin.
+  check:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    strategy:
+      # One platform failing is no reason to stop learning about the other.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
 
@@ -66,8 +123,21 @@ jobs:
   #
   # The Kubernetes half skips here: it needs DEV_SMOKE_K8S_CONTEXT and
   # DEV_SMOKE_REGISTRY, and this workflow has no cluster or registry to name.
+  #
+  # Linux on both architectures, not macOS: GitHub's macOS runners are Apple
+  # Silicon VMs without nested virtualisation, so no container engine starts on
+  # them, and every smoke test would skip and go green having tested nothing.
+  # What an Apple Silicon laptop runs inside its engine's VM is linux/arm64, and
+  # that is what the arm runner exercises — arm64 images, features, and the
+  # arm64 build of the embedded relay.
   smoke:
-    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
     # Generous, because the first create pulls images and builds features over
     # the network; a hang should still end rather than hold a runner for six
     # hours.
@@ -80,7 +150,7 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # ubuntu-latest ships Docker with buildx and Node with npm, but not the
+      # Both Ubuntu images ship Docker with buildx and Node with npm, but not the
       # devcontainer CLI. Without it every smoke test skips and the job goes
       # green having tested nothing.
       - name: Install the devcontainer CLI
@@ -93,3 +163,29 @@ jobs:
 
       - name: Smoke
         run: make smoke
+
+  # The one check to mark Required in branch protection, so the matrix can
+  # change shape without the protection rule naming jobs that no longer exist.
+  #
+  # always(), or it would be skipped whenever a job it needs failed — and a
+  # skipped required check counts as passing, which is the opposite of the
+  # point. Success and skipped pass (skipped is a prose-only change); failure
+  # and cancelled do not, nor does the change detection failing, since then
+  # nothing decided the checks could be skipped.
+  ci_success_check:
+    if: always()
+    needs: [changes, check, smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          bad=$(echo "$RESULTS" | jq -r '[to_entries[]
+            | select(.key == "changes" and .value.result != "success"
+                  or .key != "changes" and (.value.result | IN("success", "skipped") | not))
+            | .key] | join(", ")')
+          if [ -n "$bad" ]; then
+            echo "::error::not passed: $bad"
+            exit 1
+          fi

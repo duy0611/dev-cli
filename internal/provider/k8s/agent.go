@@ -96,3 +96,4 @@ type agentSession struct{ s *relay.Session }
 
 func (a *agentSession) Socket() string { return a.s.Socket }
 func (a *agentSession) Close() error   { return a.s.Close() }
+func (a *agentSession) End() string    { return a.s.End() }

@@ -11,12 +11,15 @@ command. For what `dev` *is* and how it fits together, read the
   - [A project that ships no devcontainer config](#a-project-that-ships-no-devcontainer-config)
   - [Change what a generated container installs](#change-what-a-generated-container-installs)
   - [Add a secret and rotate it](#add-a-secret-and-rotate-it)
+  - [Which credentials to give a container](#which-credentials-to-give-a-container)
   - [Push to git from inside a container](#push-to-git-from-inside-a-container)
+  - [What a container can do to your git](#what-a-container-can-do-to-your-git)
   - [Keep an agent's plugins across a rebuild](#keep-an-agents-plugins-across-a-rebuild)
   - [Declare a project's agent setup](#declare-a-projects-agent-setup)
   - [Commit a devcontainer.json that also works under dev](#commit-a-devcontainerjson-that-also-works-under-dev)
   - [Query a cluster from inside a container](#query-a-cluster-from-inside-a-container)
   - [Run a workspace in Kubernetes](#run-a-workspace-in-kubernetes)
+  - [See what ran, and when](#see-what-ran-and-when)
   - [Clean up](#clean-up)
 - [Troubleshooting](#troubleshooting)
 - [Command reference](#command-reference)
@@ -321,6 +324,46 @@ Your git `user.name` and `user.email` are passed through automatically, so the
 first commit inside a container works. An explicit setting of the same name
 wins.
 
+### Which credentials to give a container
+
+Anything a container can read, an agent in it can send anywhere: assume a
+setting's value will leak one day, and choose settings that make that cheap.
+`dev` keeps values out of its database and its audit log, but inside the
+container they are ordinary environment variables — that is deliberate, and
+what follows is how to live with it.
+
+- **Model API keys:** one key per workspace, never your personal key or one
+  shared with anything else. Put a spend limit on it at the issuer — an
+  Anthropic workspace spend limit, an OpenRouter per-key `limit` — so a leaked
+  key costs a capped amount. Anthropic keys do not expire, so revocable and
+  capped is the most there is.
+- **GitHub:** prefer the ssh relay (see
+  [Push to git from inside a container](#push-to-git-from-inside-a-container)),
+  and feed it an ssh agent that holds only your GitHub key. The relay forwards
+  every key your agent holds, so a container could otherwise sign for any host
+  your personal key reaches:
+
+  ```sh
+  eval "$(ssh-agent -s)"          # a fresh agent, in this shell only
+  ssh-add ~/.ssh/github_ed25519   # the GitHub key and nothing else
+  dev container start-agent api --ssh-agent   # relays this agent, not your usual one
+  ```
+
+  When a token is needed instead, use a fine-grained personal access token
+  scoped to the one repository, with the shortest expiry that fits.
+- **Kubernetes:** `--kube-token`, minted for a ServiceAccount bound to the
+  narrowest role that does the job — never a copied kubeconfig. On the k8s
+  provider, leave the pod's own ServiceAccount unbound.
+- **Logging in inside the container:** `claude /login` and `opencode auth login`
+  store a long-lived token on the container's state volume. Prefer a workspace
+  setting: it is revocable at the issuer and resolved fresh on every command.
+
+When a key may have leaked, revoke it at the issuer first, then repoint the
+setting at its replacement — `dev workspace set NAME <new spec>`, or rotate the
+value behind the spec. Local containers pick it up on their next command; k8s
+containers need `dev container sync NAME`. `dev audit` says which containers
+ran with the workspace, and when.
+
 ### Push to git from inside a container
 
 A container has no credentials of its own, so `git fetch` in one fails with
@@ -374,6 +417,57 @@ dev container start-agent api --no-ssh-agent
 
 Both providers support this. On k8s the relay rides `kubectl exec` rather than a
 local socket, so it works the same way from a pod.
+
+### What a container can do to your git
+
+A container's workspace is your checkout, bind-mounted, so anything running in
+it can write anywhere in it — including `.git`. Host git runs programs named
+there: `core.fsmonitor` in `.git/config` runs on every `git status`, which your
+editor runs every few seconds, and hooks run on commit, checkout and push. So
+`dev` keeps the container from changing what host git runs:
+
+- `.git/config` is read-only inside the container.
+- `.git/hooks` is a copy only the container sees, seeded from your hooks at
+  create and reset to them at every `rebuild` — a hook an agent installs runs
+  in the container and never on your host.
+- `.git` itself cannot be renamed or replaced from inside.
+- For a worktree container, the same applies to the repository's config and
+  hooks, and to the checkout's `.git` file and its administration files.
+
+What still works inside: `fetch`, `pull`, `commit`, `push origin <branch>`,
+`checkout -b`, and `git config --global` (which writes the state volume, not
+your repository). What does not: `git config <key>` and `git remote add` fail,
+and `push -u` / `checkout -b x origin/y` succeed but print
+`could not write config file` instead of recording the upstream. Hook installers
+that set `core.hooksPath`, such as husky, fail inside — run them once on the
+host and the container sees the result.
+
+A project whose `devcontainer.json` names its own `workspaceMount` or
+`workspaceFolder` puts `.git` where `dev` cannot aim a mount. For those, `dev`
+fingerprints `.git` before each `exec`, `shell` and `start-agent` and compares
+it after, exiting 1 and naming what changed. That is detection, not prevention:
+between the change and the report, your editor's `git status` may already have
+run it. Do not run git in that checkout until you have restored what it names.
+
+Two routes no mount can close:
+
+- A `.git/commondir` file, which points git at another directory's config. `dev`
+  refuses to run any command while one is present, and reports one that appears
+  during a command.
+- A nested repository the agent adds to the index as a submodule entry: host
+  `git status` goes into it and runs its config. Turn that off on your host with
+  `git config --global diff.ignoreSubmodules all`, at the cost of submodule
+  status in your own repositories.
+
+And one the guard does not try to: hooks kept inside the working tree
+(`.husky/`, lefthook, pre-commit), `.envrc`, `.vscode/tasks.json`, a `Makefile`
+or `package.json` scripts. The agent edits those like any other file, and they
+run when you run them on the host. Review before running workspace code there.
+
+The guard is set at create for a folder that is a git repository; `container
+list` and the audit log record it. Containers created before it existed are not
+guarded until recreated. The local provider only: a k8s pod has no host bind
+mount, and its workspace is a copy host git never reads.
 
 ### Keep an agent's plugins across a rebuild
 
@@ -597,7 +691,10 @@ account can do. Pick the same account when you refresh.
 
 Only commands run with the flag get `KUBECONFIG`. A plain `shell` afterwards
 does not, though the file is still there; on a k8s-provider pod that keeps it on
-the pod's own in-cluster credentials.
+the pod's own in-cluster credentials. Those are the token of the provider's
+`serviceAccount` — the namespace's `default` account when unset, which holds no
+permissions unless someone has bound some to it. Leave that account unbound,
+and `--kube-token` stays the only way a container gains cluster access.
 
 ### Run a workspace in Kubernetes
 
@@ -631,6 +728,41 @@ dev container exec api -- git pull
 
 `dev container sync api` pushes your workspace *settings*, not your files. See
 [Add a secret and rotate it](#add-a-secret-and-rotate-it).
+
+### See what ran, and when
+
+Every container `dev` creates, rebuilds, starts, stops or removes, every command
+it runs in one, every kube token it mints and every ssh agent relay it opens is
+written to an audit log on the host, beside the database. No container can
+reach it, so an agent cannot edit the record of what it did.
+
+```sh
+dev audit                                # everything, oldest first
+dev audit --container api --since 24h    # one container, the last day
+dev audit --event exec,start-agent       # only commands that ran
+dev audit --json | jq 'select(.exit_code != 0)'
+```
+
+```
+2026-10-08 14:02:11  personal/api  create       folder
+2026-10-08 14:02:40  personal/api  start
+2026-10-08 14:03:05  personal/api  kube-token   sa reader in team-a (dev-cluster), expires 15:03
+2026-10-08 16:15:52  personal/api  start-agent  claude, exit 0, after 2h12m47s
+2026-10-08 16:15:52  personal/api  relay        clean after 2h12m47s
+```
+
+It records names, never values: the command you typed, setting names, the
+ServiceAccount a token was minted for — never a setting's value, an environment
+variable's value, or a token. It is the place to start when deciding what to
+revoke after a container has had something it should not.
+
+A removed container's history stays: the log outlives `container remove` and
+`workspace remove`, and `dev audit --container NAME` reads it for a container
+that no longer exists. A command that runs for a long time is recorded once it
+ends, so a session cut off by the host going down leaves no record of itself.
+
+What the log cannot see is what an agent did *inside* a session — that is the
+agent's own transcript.
 
 ### Clean up
 
@@ -831,6 +963,7 @@ Removing the active workspace leaves none active rather than a dangling pointer.
 ```
 dev container create NAME --folder PATH [--generate] [--tools LIST] [--no-persist-state]
                          [--agent-config PATH | --no-agent-config] [--no-start]
+                         [--allow-privileged]
 dev container create NAME --no-folder [--tools LIST] [--no-persist-state]
                          [--agent-config PATH | --no-agent-config] [--no-start]
 dev container create NAME --from SOURCE (--folder PATH | --no-folder) [--tools +ID,-ID]
@@ -839,7 +972,7 @@ dev container list [--all] [--timeout DURATION]
 dev container start NAME
 dev container stop NAME
 dev container remove NAME [--force]
-dev container rebuild NAME [--no-cache] [--tools LIST]
+dev container rebuild NAME [--no-cache] [--tools LIST] [--accept-config]
 dev container logs NAME [-f]
 dev container shell NAME [--kube-token] [--ssh-agent|--no-ssh-agent]
 dev container exec NAME [--kube-token] [--ssh-agent|--no-ssh-agent] -- CMD [ARGS...]
@@ -898,6 +1031,22 @@ running, and again on every `rebuild`; see
 file is exit 2 before anything is created; an `--agent-config` file that does
 not exist is exit 3, at create or at a later rebuild.
 
+A project-owned configuration that asks its engine for the host is refused,
+exit 2, before anything is created: privileged mode (from the project or from a
+feature such as `docker-in-docker`), a mount of the engine socket, a host
+namespace (`--pid=host`, `--network=host`, `--ipc=host`, `--userns=host`,
+`--uts=host`), a `--device`, or a bind mount of `/` or your home directory or
+anything above it. For a compose project, every service in its compose files is
+checked the same way. The refusal names each finding and where it came from.
+`--allow-privileged` lets it through; it is the operator's decision, fixed at
+create, and nothing in the project can grant it. `start` and `rebuild` check
+again, so a configuration edited to ask for the host later is refused then,
+while the old container still exists — recreate it with the flag if you mean
+it. `capAdd` and `securityOpt` are not refused: they widen what root can do
+inside the container, not the way out of it. Generated configurations are
+never checked, since they hold nothing privileged. The local provider only: the
+experimental k8s provider builds its own pod spec and ignores all of these.
+
 **`list`** reads live status from the engine every time; a stored copy would be
 wrong the moment anything happened outside `dev`. A `?` means the engine could
 not be reached, or did not answer within `--timeout` (default `10s`, any Go
@@ -905,8 +1054,14 @@ duration such as `30s` or `2m`). The timeout is per workspace, so one
 unreachable cluster costs one wait, not one per container, and leaves the other
 workspaces' statuses alone. Either way the list still prints and exits 0. The SOURCE column is `-` for a folderless container, CONFIG
 is `generated` when `dev` rendered the configuration (`--generate` or
-`--no-folder`) and `project` when the folder ships its own, and STATE says
-whether its agents' configuration is on a volume.
+`--no-folder`) and `project` when the folder ships its own, STATE says
+whether its agents' configuration is on a volume, and HOST says whether the
+container may ask its engine for the host — `allowed` for one created with
+`--allow-privileged` or before that check existed, `refused` otherwise. GIT is
+`guarded` when host git is shielded from what the container writes under
+`.git` (see [What a container can do to your git](#what-a-container-can-do-to-your-git)),
+`off` for a repository folder created before that existed, and `-` when there
+is no host `.git`.
 
 **`start`** creates the container if the engine has none, which is what makes
 `create --no-start` followed by `start` work.
@@ -924,6 +1079,18 @@ only to a container `dev` generated.
 
 A rebuild keeps the volume on both providers. To start from an empty workspace,
 `remove` and `create` — which is explicit about destroying the contents.
+
+A rebuild of a project-owned container first compares its configuration with
+the one the container was last built from — the merged configuration, its
+Dockerfile when it builds one, and its compose files — and refuses, exit 2, when
+it changed, naming the fields and files that did. `initializeCommand` runs on
+your host and a Dockerfile `RUN` line runs at build, so a change you did not
+make is worth reading before it runs. `--accept-config` rebuilds with it and
+records it as the new baseline; the next rebuild of the same configuration needs
+no flag. A container with no recorded configuration — one created before this
+check, or with `--no-start` and never started — records one at its next start or
+rebuild rather than refusing. Generated configurations are `dev`'s own and are
+never compared. The local provider only.
 
 **`exec`** needs the `--`; everything after it belongs to the command being run,
 not to `dev`.
@@ -963,7 +1130,7 @@ path it came from on stderr.
 dev worktree create NAME --branch B --path P [--repo R] [--base REF]
                          [--include-file PATH] [--generate] [--tools LIST] [--from SOURCE]
                          [--no-persist-state] [--agent-config PATH | --no-agent-config]
-                         [--no-start] [--no-herdr] [--workspace W]
+                         [--no-start] [--no-herdr] [--allow-privileged] [--workspace W]
 dev worktree list [--all] [--workspace W]
 dev worktree remove NAME [--force] [--workspace W]
 ```
@@ -1052,11 +1219,42 @@ deleted — the checkout is scaffolding, the branch is the work.
 the container and warns that the checkout at its path was left behind, naming
 `dev worktree remove` as what would have taken both.
 
+### audit
+
+```
+dev audit [--workspace W] [--container C] [--event E]... [--since D] [--json]
+```
+
+Prints the audit log oldest first, one record per line: time, workspace and
+container, event, and a summary. See
+[See what ran, and when](#see-what-ran-and-when).
+
+| Flag | |
+|---|---|
+| `--workspace W` | only records for this workspace. Does **not** default to the active workspace: the log is the view across everything |
+| `--container C` | only records for this container |
+| `--event E` | only these events; repeatable or comma-separated |
+| `--since D` | a duration back from now (`24h`, `30m`) or an RFC 3339 time |
+| `--json` | the matching records as raw JSON lines, for `jq` |
+
+Events: `create`, `rebuild`, `start`, `stop`, `remove`, `exec`, `shell`,
+`start-agent`, `kube-token`, `relay`, `sync`, `refused` for a command a guard
+stopped (with the reason — `escape`, `drift` or `git` — and what it found), and `accept-config` for a rebuild
+told to take a changed configuration (with what changed).
+
+Names are not looked up: a workspace or container that no longer exists still
+has history, so an unknown name prints nothing and exits `0` rather than `3`.
+No log yet also prints nothing. A damaged line is skipped with a warning naming
+its line number. `--since` that is neither form exits `2`.
+
+The file is `audit.jsonl` in the state directory, mode `0600`. A record that
+cannot be written warns once and never fails the command it belongs to.
+
 ### Environment
 
 | Variable | Meaning |
 |---|---|
-| `DEV_STATE` | where the SQLite database lives; default `~/.local/state/dev/dev.db` |
+| `DEV_STATE` | the state directory: the SQLite database `dev.db` and the audit log `audit.jsonl`; default `~/.local/state/dev/` |
 | `DOCKER_HOST` | read by `docker`, which `dev` shells out to; how you point at Podman |
 | `SSH_AUTH_SOCK` | your ssh agent, read on the host when a workspace uses `--ssh-forward`. Inside the container it names the relay instead |
 | `KUBECONFIG` | set inside the container, for a command run with `--kube-token`, to the kubeconfig holding the minted token |

@@ -4,8 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os/exec"
+	"path/filepath"
 	"text/tabwriter"
+	"time"
 
+	"github.com/duy0611/dev-cli/internal/audit"
+	"github.com/duy0611/dev-cli/internal/model"
 	"github.com/duy0611/dev-cli/internal/store"
 )
 
@@ -20,6 +25,76 @@ type app struct {
 	st       *store.Store
 	openErr  error
 	isOpened bool
+
+	// version is dev's own, stamped into every audit record.
+	version string
+	// auditLog is built on first use, like the store, so that `dev --help`
+	// writes nothing. Tests leave it nil, which records nothing.
+	auditLog *audit.Log
+	auditOff bool
+}
+
+// audit returns the log every command records to, beside the database.
+//
+// A nil Log records nothing, so a state directory that cannot be located only
+// costs the record, never the command — see internal/audit.
+func (a *app) audit() *audit.Log {
+	if a.auditLog == nil && !a.auditOff {
+		path, err := store.DefaultPath()
+		if err != nil {
+			a.auditOff = true
+			return nil
+		}
+		a.auditLog = audit.Open(filepath.Dir(path), a.version, func(err error) {
+			warnf(a, "%v", err)
+		})
+	}
+	return a.auditLog
+}
+
+// record appends one event to the audit log. Never fails the command.
+func (a *app) record(event, workspace, container string, fields map[string]any) {
+	a.audit().Record(event, workspace, container, fields)
+}
+
+// recordCreate appends the record for a container row just written. The guard
+// columns join it as they land, so the log says what each container was
+// allowed from the moment it existed.
+func (a *app) recordCreate(workspace string, c model.Container) {
+	a.record("create", workspace, c.Name, map[string]any{
+		"source_kind":      string(c.SourceKind),
+		"generated":        c.GeneratedConfig != "",
+		"persist_state":    c.PersistState,
+		"allow_privileged": c.AllowPrivileged,
+		"git_guard":        c.GitGuard,
+	})
+}
+
+// recordRun appends one record for a command that ran in a container, once it
+// has finished: start, end and how it ended in a single line. One record at the
+// end rather than one at each side, so a session killed with the host leaves
+// nothing — accepted, against doubling the file for the rare case.
+func (a *app) recordRun(event string, t *target, started time.Time, fields map[string]any, err error) {
+	if fields == nil {
+		fields = map[string]any{}
+	}
+	fields["started"] = started.UTC().Format(time.RFC3339Nano)
+	fields["ended"] = time.Now().UTC().Format(time.RFC3339Nano)
+	fields["exit_code"] = exitCodeOfRun(err)
+	a.record(event, t.workspace.Name, t.container.Name, fields)
+}
+
+// exitCodeOfRun is the exit status of whatever ran in the container: the
+// command's own code when it exited non-zero, 1 for any other failure.
+func exitCodeOfRun(err error) int {
+	if err == nil {
+		return 0
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() > 0 {
+		return exit.ExitCode()
+	}
+	return exitCodeOf(err)
 }
 
 func (a *app) store() (*store.Store, error) {

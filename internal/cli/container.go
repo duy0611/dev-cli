@@ -66,6 +66,9 @@ type createOpts struct {
 	// from is --from: an existing generated container in the same workspace
 	// whose tools and persisted choices this one starts from. See applyFrom.
 	from string
+	// allowPrivileged is --allow-privileged: let the configuration ask its
+	// engine for the host. See checkEscape.
+	allowPrivileged bool
 }
 
 func newContainerCreateCmd(a *app) *cobra.Command {
@@ -124,6 +127,8 @@ func newContainerCreateCmd(a *app) *cobra.Command {
 		"apply no agents.yaml, even if the project has one")
 	cmd.Flags().StringVar(&opts.from, "from", "",
 		"start from another generated container's tools and settings")
+	cmd.Flags().BoolVar(&opts.allowPrivileged, "allow-privileged", false,
+		"let the configuration ask for privileged mode, the engine socket, host namespaces or a mount of / or your home")
 	return cmd
 }
 
@@ -230,11 +235,26 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 		// re-renders a generated one from scratch.
 		PersistState: !opts.noPersistState,
 		AgentConfig:  agentConfig,
+		// The operator's choice, by flag, and nothing else's: a project file
+		// the agent can edit must not be able to grant it.
+		AllowPrivileged: opts.allowPrivileged,
+		// A folder that is a git repository today. Fixed at create, like the
+		// other guards; a folderless container has no host .git at all.
+		GitGuard: !opts.noFolder && isGitCheckout(source),
 	}
 	// After the source is known, since the default file lives in it, and
 	// before the row is written, so a malformed agents.yaml creates nothing.
 	if err := markAgentConfig(&c); err != nil {
 		return err
+	}
+	// Before the row, for the same reason: a configuration that reaches the
+	// host must create nothing. Only when starting now — start checks again on
+	// every call, so `--no-start` defers it there, and recording a container
+	// still needs no engine.
+	if !opts.noStart {
+		if err := a.guardNewContainer(ctx, wsName, &c); err != nil {
+			return err
+		}
 	}
 	err = st.CreateContainer(c)
 	if errors.Is(err, store.ErrExists) {
@@ -243,6 +263,7 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 	if err != nil {
 		return err
 	}
+	a.recordCreate(wsName, c)
 	if opts.noFolder {
 		a.printf("container %s (workspace %s) with no folder\n", name, wsName)
 	} else {
@@ -450,9 +471,10 @@ func runContainerList(ctx context.Context, a *app, workspace string, all bool, t
 	// and invisible otherwise, so the list is the only place to find out
 	// without reading the generated document.
 	return a.table(func(w io.Writer) {
-		header(w, "WORKSPACE", "NAME", "STATUS", "SOURCE", "CONFIG", "STATE")
+		header(w, "WORKSPACE", "NAME", "STATUS", "SOURCE", "CONFIG", "STATE", "HOST", "GIT")
 		for _, c := range containers {
-			row(w, c.WorkspaceName, c.Name, statusOf(c), sourceOf(c), configOf(c), onOff(c.PersistState))
+			row(w, c.WorkspaceName, c.Name, statusOf(c), sourceOf(c), configOf(c), onOff(c.PersistState),
+				hostAccessOf(c), gitGuardOf(c))
 		}
 	})
 }
@@ -533,15 +555,50 @@ func (a *app) start(ctx context.Context, workspace string, c model.Container) er
 	// container, and starting it without the merged document would leave the
 	// state volume silently unmounted.
 	c.WorktreeRepo = a.worktreeRepo(workspace, c.Name)
+	// Seeded here: start is where a container that does not exist yet is
+	// created — after create, after `create --no-start`, or after a remove
+	// outside dev — and that is when the hooks copy should match the project.
+	// Re-seeding a stopped container's copy on start would only discard what
+	// the container installed, which rebuild already does deliberately.
+	plan, err := a.planGitGuard(c, c.WorktreeRepo, true)
+	if err != nil {
+		return err
+	}
+	if overridesConfig(p) {
+		c.GitGuardMounts = plan.mounts
+	}
 	c, cleanup, err := materialise(c, overridesConfig(p))
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
+	// Every start, not only create's: `create --no-start` defers the check
+	// to here, and up applies a project's edited configuration to a container
+	// that does not exist yet just as rebuild does. A start of an existing,
+	// stopped container re-reads nothing, but telling the two apart would
+	// need the engine's answer first — and the check is the cheaper question.
+	cc, err := readConfig(ctx, p, c)
+	if err != nil {
+		return err
+	}
+	if err := a.escape(cc); err != nil {
+		return err
+	}
 	if err := p.Up(ctx, c, environ); err != nil {
 		return err
 	}
+	// A row with no digest — created with --no-start, or before the drift
+	// check existed — gets the one it just started from, so the next rebuild
+	// has something to compare against. Never overwritten here: start does not
+	// apply an existing container's edited configuration, so a changed
+	// document is still rebuild's to catch.
+	if cc != nil && c.ConfigDigest == "" {
+		if err := a.recordFirstDigest(cc); err != nil {
+			return err
+		}
+	}
+	a.record("start", workspace, c.Name, nil)
 	a.printf("container %s is running\n", c.Name)
 
 	// Only when owed: at create, after `create --no-start`, or after an apply
@@ -573,6 +630,7 @@ func newContainerStopCmd(a *app) *cobra.Command {
 			if err := t.provider.Stop(cmd.Context(), t.container); err != nil {
 				return err
 			}
+			a.record("stop", t.workspace.Name, t.container.Name, nil)
 			a.printf("container %s stopped\n", t.container.Name)
 			return nil
 		},
@@ -640,6 +698,8 @@ func runContainerRemove(ctx context.Context, a *app, workspace, name string, for
 	if err := st.DeleteContainer(t.workspace.Name, name); err != nil {
 		return err
 	}
+	removeHooksCopy(t.workspace.Name, name)
+	a.record("remove", t.workspace.Name, name, nil)
 	a.printf("container %s removed\n", name)
 	return nil
 }
@@ -649,6 +709,9 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 		workspace string
 		noCache   bool
 		toolList  string
+		// acceptConfig is --accept-config: rebuild with a configuration that
+		// changed since the container was last built. See checkDrift.
+		acceptConfig bool
 	)
 
 	cmd := &cobra.Command{
@@ -684,9 +747,47 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// Before the rebuild, for agents.yaml's reason: a configuration
+			// that changed since it was last built, or has come to ask for the
+			// host, is refused while the old container still exists. Drift
+			// first: a changed configuration is the more general answer, and
+			// --accept-config is the operator's review of exactly that.
+			// Only create can grant --allow-privileged, so an escape refusal
+			// means recreate — the moment to think about it.
+			cc, err := readConfig(cmd.Context(), t.provider, t.container)
+			if err != nil {
+				return err
+			}
+			digest, err := a.checkDrift(cc, acceptConfig)
+			if err != nil {
+				return err
+			}
+			if err := a.escape(cc); err != nil {
+				return err
+			}
+			// Re-seeded after every refusal, so a refused rebuild leaves the
+			// container exactly as it was: the reset discards whatever hooks
+			// the container installed, which is the point of a rebuild.
+			if _, err := a.planGitGuard(t.container, t.container.WorktreeRepo, true); err != nil {
+				return err
+			}
 			if err := t.provider.Rebuild(cmd.Context(), t.container, environ, noCache); err != nil {
 				return err
 			}
+			// After the rebuild succeeded, never before: a failed rebuild
+			// leaves the container on its old configuration, and the digest
+			// must go on describing that one.
+			if cc != nil && digest.Sum != t.container.ConfigDigest {
+				st, err := a.store()
+				if err != nil {
+					return err
+				}
+				if err := st.SetConfigDigest(t.workspace.Name, t.container.Name, digest.Sum, digest.Record()); err != nil {
+					return err
+				}
+			}
+			a.record("rebuild", t.workspace.Name, t.container.Name, map[string]any{"config_digest": digest.Sum})
+
 			a.printf("container %s rebuilt\n", t.container.Name)
 			// Every rebuild re-reads the file: it is the moment an edit takes
 			// effect, and a container without the state volume has just lost
@@ -698,6 +799,8 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 	cmd.Flags().BoolVar(&noCache, "no-cache", false, "rebuild the image without the layer cache")
 	cmd.Flags().StringVar(&toolList, "tools", "",
 		"change a generated container's tools, e.g. +yq,-helm (see: dev container tools)")
+	cmd.Flags().BoolVar(&acceptConfig, "accept-config", false,
+		"rebuild with a project configuration that changed since the container was last built")
 	return cmd
 }
 
@@ -781,6 +884,7 @@ func runContainerSync(ctx context.Context, a *app, workspace, name string) error
 		keys = append(keys, e.Key)
 	}
 	slices.Sort(keys)
+	a.record("sync", t.workspace.Name, t.container.Name, map[string]any{"settings": keys})
 	// What is true afterwards, rather than what was done — the same postcondition
 	// Syncer promises. "Synced N settings" would contradict the local provider's
 	// own line a moment earlier saying it had nothing to push.
@@ -846,13 +950,22 @@ func runContainerShell(ctx context.Context, a *app, workspace, name string, kube
 	defer stopAgent()
 
 	shell := detectShell(ctx, t)
-	return t.provider.Exec(ctx, t.container, []string{shell}, provider.ExecOpts{
-		Env:    environ,
-		TTY:    true,
-		Stdin:  os.Stdin,
-		Stdout: os.Stdout,
-		Stderr: os.Stderr,
+	started := time.Now()
+	err = a.guardedRun(t, func() error {
+		return t.provider.Exec(ctx, t.container, []string{shell}, provider.ExecOpts{
+			Env:    environ,
+			TTY:    true,
+			Stdin:  os.Stdin,
+			Stdout: os.Stdout,
+			Stderr: os.Stderr,
+		})
 	})
+	a.recordRun("shell", t, started, map[string]any{
+		"argv":       []string{shell},
+		"ssh_agent":  agentForwarded(t, sshOverride),
+		"kube_token": kubeToken,
+	}, err)
+	return err
 }
 
 // detectShell picks the best shell the image actually has.
@@ -945,10 +1058,21 @@ func runContainerExec(ctx context.Context, a *app, workspace, name string, comma
 	}
 	defer stopAgent()
 
-	return t.provider.Exec(ctx, t.container, command, provider.ExecOpts{
-		Env:    environ,
-		Stdin:  os.Stdin,
-		Stdout: os.Stdout,
-		Stderr: os.Stderr,
+	started := time.Now()
+	err = a.guardedRun(t, func() error {
+		return t.provider.Exec(ctx, t.container, command, provider.ExecOpts{
+			Env:    environ,
+			Stdin:  os.Stdin,
+			Stdout: os.Stdout,
+			Stderr: os.Stderr,
+		})
 	})
+	// argv only: the command the operator typed. environ holds resolved
+	// settings and never reaches the log.
+	a.recordRun("exec", t, started, map[string]any{
+		"argv":       command,
+		"ssh_agent":  agentForwarded(t, sshOverride),
+		"kube_token": kubeToken,
+	}, err)
+	return err
 }

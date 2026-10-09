@@ -273,6 +273,12 @@ func TestSessionWarnsOnUnexpectedExit(t *testing.T) {
 
 	waitFor(t, func() bool { return strings.Contains(stderr(), "stopped unexpectedly") },
 		"the warning was never printed")
+	// The audit log's account must agree with the warning, and survive the
+	// Close every caller defers afterwards.
+	_ = s.Close()
+	if got := s.End(); got != EndUnexpected {
+		t.Errorf("End() = %q, want %q", got, EndUnexpected)
+	}
 }
 
 // TestSessionClosePrintsNoWarning is the other half, and the reason the flag
@@ -290,5 +296,8 @@ func TestSessionClosePrintsNoWarning(t *testing.T) {
 
 	if got := stderr(); strings.Contains(got, "stopped unexpectedly") {
 		t.Errorf("a clean close warned: %q", got)
+	}
+	if got := s.End(); got != EndClean {
+		t.Errorf("End() = %q, want %q", got, EndClean)
 	}
 }

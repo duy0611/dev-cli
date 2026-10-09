@@ -99,7 +99,10 @@ func stubDevcontainer(t *testing.T, failOn string) string {
 	t.Helper()
 	dir := t.TempDir()
 	log := filepath.Join(dir, "calls")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + log + "'\n"
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + log + "'\n" +
+		// The escape guard reads the merged configuration before every start;
+		// a plain project merges to nothing that reaches the host.
+		"case \"$1\" in read-configuration) echo '{\"mergedConfiguration\":{}}'; exit 0;; esac\n"
 	if failOn != "" {
 		script += "case \"$*\" in *'" + failOn + "'*) echo boom >&2; exit 1;; esac\n"
 	}
