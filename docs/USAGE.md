@@ -12,6 +12,7 @@ command. For what `dev` *is* and how it fits together, read the
   - [Change what a generated container installs](#change-what-a-generated-container-installs)
   - [Add a secret and rotate it](#add-a-secret-and-rotate-it)
   - [Push to git from inside a container](#push-to-git-from-inside-a-container)
+  - [What a container can do to your git](#what-a-container-can-do-to-your-git)
   - [Keep an agent's plugins across a rebuild](#keep-an-agents-plugins-across-a-rebuild)
   - [Declare a project's agent setup](#declare-a-projects-agent-setup)
   - [Commit a devcontainer.json that also works under dev](#commit-a-devcontainerjson-that-also-works-under-dev)
@@ -375,6 +376,57 @@ dev container start-agent api --no-ssh-agent
 
 Both providers support this. On k8s the relay rides `kubectl exec` rather than a
 local socket, so it works the same way from a pod.
+
+### What a container can do to your git
+
+A container's workspace is your checkout, bind-mounted, so anything running in
+it can write anywhere in it — including `.git`. Host git runs programs named
+there: `core.fsmonitor` in `.git/config` runs on every `git status`, which your
+editor runs every few seconds, and hooks run on commit, checkout and push. So
+`dev` keeps the container from changing what host git runs:
+
+- `.git/config` is read-only inside the container.
+- `.git/hooks` is a copy only the container sees, seeded from your hooks at
+  create and reset to them at every `rebuild` — a hook an agent installs runs
+  in the container and never on your host.
+- `.git` itself cannot be renamed or replaced from inside.
+- For a worktree container, the same applies to the repository's config and
+  hooks, and to the checkout's `.git` file and its administration files.
+
+What still works inside: `fetch`, `pull`, `commit`, `push origin <branch>`,
+`checkout -b`, and `git config --global` (which writes the state volume, not
+your repository). What does not: `git config <key>` and `git remote add` fail,
+and `push -u` / `checkout -b x origin/y` succeed but print
+`could not write config file` instead of recording the upstream. Hook installers
+that set `core.hooksPath`, such as husky, fail inside — run them once on the
+host and the container sees the result.
+
+A project whose `devcontainer.json` names its own `workspaceMount` or
+`workspaceFolder` puts `.git` where `dev` cannot aim a mount. For those, `dev`
+fingerprints `.git` before each `exec`, `shell` and `start-agent` and compares
+it after, exiting 1 and naming what changed. That is detection, not prevention:
+between the change and the report, your editor's `git status` may already have
+run it. Do not run git in that checkout until you have restored what it names.
+
+Two routes no mount can close:
+
+- A `.git/commondir` file, which points git at another directory's config. `dev`
+  refuses to run any command while one is present, and reports one that appears
+  during a command.
+- A nested repository the agent adds to the index as a submodule entry: host
+  `git status` goes into it and runs its config. Turn that off on your host with
+  `git config --global diff.ignoreSubmodules all`, at the cost of submodule
+  status in your own repositories.
+
+And one the guard does not try to: hooks kept inside the working tree
+(`.husky/`, lefthook, pre-commit), `.envrc`, `.vscode/tasks.json`, a `Makefile`
+or `package.json` scripts. The agent edits those like any other file, and they
+run when you run them on the host. Review before running workspace code there.
+
+The guard is set at create for a folder that is a git repository; `container
+list` and the audit log record it. Containers created before it existed are not
+guarded until recreated. The local provider only: a k8s pod has no host bind
+mount, and its workspace is a copy host git never reads.
 
 ### Keep an agent's plugins across a rebuild
 
@@ -964,7 +1016,11 @@ is `generated` when `dev` rendered the configuration (`--generate` or
 `--no-folder`) and `project` when the folder ships its own, STATE says
 whether its agents' configuration is on a volume, and HOST says whether the
 container may ask its engine for the host — `allowed` for one created with
-`--allow-privileged` or before that check existed, `refused` otherwise.
+`--allow-privileged` or before that check existed, `refused` otherwise. GIT is
+`guarded` when host git is shielded from what the container writes under
+`.git` (see [What a container can do to your git](#what-a-container-can-do-to-your-git)),
+`off` for a repository folder created before that existed, and `-` when there
+is no host `.git`.
 
 **`start`** creates the container if the engine has none, which is what makes
 `create --no-start` followed by `start` work.
@@ -1142,7 +1198,7 @@ container, event, and a summary. See
 
 Events: `create`, `rebuild`, `start`, `stop`, `remove`, `exec`, `shell`,
 `start-agent`, `kube-token`, `relay`, `sync`, `refused` for a command a guard
-stopped (with the reason and what it found), and `accept-config` for a rebuild
+stopped (with the reason — `escape`, `drift` or `git` — and what it found), and `accept-config` for a rebuild
 told to take a changed configuration (with what changed).
 
 Names are not looked up: a workspace or container that no longer exists still

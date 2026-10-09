@@ -128,6 +128,16 @@ func (a *app) guardNewContainer(ctx context.Context, workspace string, c *model.
 	if len(worktreeRepo) > 0 {
 		probe.WorktreeRepo = worktreeRepo[0]
 	}
+	// With the git guard's mounts, so the digest recorded here matches what
+	// the first start materialises. Not seeded: start does that, once the row
+	// exists and the container is about to be created.
+	plan, err := a.planGitGuard(probe, probe.WorktreeRepo, false)
+	if err != nil {
+		return err
+	}
+	if overridesConfig(p) {
+		probe.GitGuardMounts = plan.mounts
+	}
 	probe, cleanup, err := materialise(probe, overridesConfig(p))
 	if err != nil {
 		return err

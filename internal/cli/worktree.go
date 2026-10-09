@@ -303,6 +303,8 @@ func (a *app) createWorktreeRows(ctx context.Context, wsName, name, repo, path, 
 		PersistState:    !opts.create.noPersistState,
 		AgentConfig:     agentConfig,
 		AllowPrivileged: opts.create.allowPrivileged,
+		// Always a repository: a worktree is a checkout of one.
+		GitGuard: true,
 	}
 	// A failure here is returned before the row exists, and the caller rolls
 	// the checkout back, the same as for a bad devcontainer config.
@@ -532,6 +534,7 @@ func runWorktreeRemove(ctx context.Context, a *app, workspace, name string, forc
 		return err
 	}
 	a.record("remove", wsName, name, map[string]any{"worktree": true})
+	removeHooksCopy(wsName, name)
 
 	// Herdr last and best-effort, for the same reason as on create.
 	if err := herdr.Close(ctx, w.HerdrWorkspace); err != nil {

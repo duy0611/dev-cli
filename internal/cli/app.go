@@ -66,6 +66,7 @@ func (a *app) recordCreate(workspace string, c model.Container) {
 		"generated":        c.GeneratedConfig != "",
 		"persist_state":    c.PersistState,
 		"allow_privileged": c.AllowPrivileged,
+		"git_guard":        c.GitGuard,
 	})
 }
 

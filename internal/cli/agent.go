@@ -139,12 +139,14 @@ func runContainerStartAgent(ctx context.Context, a *app, workspace, name, agentI
 
 	argv := ag.Command(extra)
 	started := time.Now()
-	err = t.provider.Exec(ctx, t.container, argv, provider.ExecOpts{
-		Env:    environ,
-		TTY:    true,
-		Stdin:  os.Stdin,
-		Stdout: os.Stdout,
-		Stderr: os.Stderr,
+	err = a.guardedRun(t, func() error {
+		return t.provider.Exec(ctx, t.container, argv, provider.ExecOpts{
+			Env:    environ,
+			TTY:    true,
+			Stdin:  os.Stdin,
+			Stdout: os.Stdout,
+			Stderr: os.Stderr,
+		})
 	})
 	a.recordRun("start-agent", t, started, map[string]any{
 		"agent":      ag.ID,

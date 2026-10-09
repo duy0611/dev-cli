@@ -2,6 +2,7 @@ package dcgen
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -300,5 +301,48 @@ func TestUsesCompose(t *testing.T) {
 				t.Errorf("UsesCompose = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestOverlayMountsReplacesAProjectMountAtTheSameTarget(t *testing.T) {
+	project := []byte(`{
+  // a comment, as VS Code templates ship
+  "image": "ubuntu",
+  "mounts": ["source=mine,target=/keep,type=volume", "source=/x,target=/g/.git/config,type=bind"]
+}`)
+	out, err := OverlayMounts(project, []string{
+		"source=/h/.git,target=/g/.git,type=bind",
+		"source=/h/.git/config,target=/g/.git/config,type=bind,readonly",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Image  string   `json:"image"`
+		Mounts []string `json:"mounts"`
+	}
+	if err := json.Unmarshal(out, &doc); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"source=mine,target=/keep,type=volume",
+		"source=/h/.git,target=/g/.git,type=bind",
+		"source=/h/.git/config,target=/g/.git/config,type=bind,readonly",
+	}
+	if doc.Image != "ubuntu" || !slices.Equal(doc.Mounts, want) {
+		t.Errorf("got image %q mounts %v, want %v", doc.Image, doc.Mounts, want)
+	}
+}
+
+func TestNamesWorkspaceMount(t *testing.T) {
+	for doc, want := range map[string]bool{
+		`{"image":"x"}`:              false,
+		`{"workspaceFolder":"/src"}`: true,
+		`{"workspaceMount":"source=.,target=/src,type=bind"}`: true,
+	} {
+		got, err := NamesWorkspaceMount([]byte(doc))
+		if err != nil || got != want {
+			t.Errorf("%s: got %v, %v; want %v", doc, got, err, want)
+		}
 	}
 }

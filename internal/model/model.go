@@ -127,7 +127,13 @@ type Container struct {
 	// mount. A generated document needs no such field — its two mounts are
 	// baked in at render time from the stored row instead.
 	WorktreeRepo string
-	CreatedAt    time.Time
+	// GitGuardMounts are the mounts entries that keep host git from running
+	// what this container writes under .git, for the length of one invocation.
+	// Not persisted, for WorktreeRepo's reason: they depend on where the
+	// project's .git is today, so they are derived per invocation by whatever
+	// resolves the container and merged in by materialise.
+	GitGuardMounts []string
+	CreatedAt      time.Time
 }
 
 // Status is a container's liveness as the engine reports it.

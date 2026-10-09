@@ -73,6 +73,61 @@ func OverlayWorktree(projectConfig []byte, repo, path string) ([]byte, error) {
 	return marshalConfig(doc)
 }
 
+// OverlayMounts merges mounts entries dev owns into a project's own
+// devcontainer.json, each in the string form. Used for the git guard's mounts,
+// which arrive the same way the state and worktree mounts do: merged at
+// invocation time and passed through --override-config, never written into the
+// project (invariant 9).
+//
+// dev owns each target while it drives, for Overlay's reason: a project mount
+// at the same target is replaced rather than kept beside it, since docker
+// refuses the whole run with "duplicate mount destination".
+func OverlayMounts(projectConfig []byte, entries []string) ([]byte, error) {
+	doc, err := parseConfig(projectConfig)
+	if err != nil {
+		return nil, err
+	}
+	if err := mergeMounts(doc, ownMounts(entries)...); err != nil {
+		return nil, err
+	}
+	return marshalConfig(doc)
+}
+
+// AppendMounts adds mounts entries to a generated document — dev's own, so
+// nothing in it needs round-tripping, only the entries added after whatever is
+// there. Used per invocation for the git guard's mounts, which depend on where
+// the project's .git is today and so are not baked into the stored document.
+func AppendMounts(generated []byte, entries []string) ([]byte, error) {
+	return OverlayMounts(generated, entries)
+}
+
+// NamesWorkspaceMount reports whether a project's document says where its
+// workspace goes — workspaceMount or workspaceFolder — which replaces the
+// devcontainer CLI's default layout, so dev cannot know where .git lands.
+func NamesWorkspaceMount(projectConfig []byte) (bool, error) {
+	doc, err := parseConfig(projectConfig)
+	if err != nil {
+		return false, err
+	}
+	_, mount := doc["workspaceMount"]
+	_, folder := doc["workspaceFolder"]
+	return mount || folder, nil
+}
+
+func ownMounts(entries []string) []ownMount {
+	out := make([]ownMount, 0, len(entries))
+	for _, e := range entries {
+		target, _ := mountTarget(json.RawMessage(strconvQuote(e)))
+		out = append(out, ownMount{target: target, entry: e})
+	}
+	return out
+}
+
+func strconvQuote(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
 // ownMount is one mounts entry dev owns for the length of one invocation:
 // where it lands in the container, and the full devcontainer.json spelling.
 type ownMount struct {

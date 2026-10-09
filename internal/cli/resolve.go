@@ -31,6 +31,9 @@ type target struct {
 	// through requireOverride; the ones that do not need it carry on, so a
 	// project file that does not parse never strands a container in the engine.
 	overrideErr error
+	// gitGuard is how this invocation keeps host git from running what the
+	// container writes; see planGitGuard. Zero for an unguarded container.
+	gitGuard gitGuardPlan
 }
 
 // release removes anything resolve wrote for this container. Safe on a nil
@@ -90,10 +93,22 @@ func (a *app) resolve(workspace, name string) (*target, error) {
 	// container is not worktree-backed, which is true of most containers.
 	c.WorktreeRepo = a.worktreeRepo(wsName, name)
 
+	// Before materialise too, for the same reason: the git guard's mounts are
+	// merged in there. Not seeded — the hooks copy is reset at create and
+	// rebuild only, so an exec does not throw away what the container did.
+	// Deferred like an overlay failure: stop, remove and logs never need it.
+	plan, planErr := a.planGitGuard(c, c.WorktreeRepo, false)
+	if planErr == nil && overridesConfig(p) {
+		c.GitGuardMounts = plan.mounts
+	}
+
 	// Done here rather than in each command: every provider call needs a
 	// container whose ConfigPath a child process can open, and a command that
 	// forgot would fail only for generated containers.
 	c, cleanup, err := materialise(c, overridesConfig(p))
+	if err == nil {
+		err = planErr
+	}
 	if err != nil {
 		if !isOverlayError(err) {
 			return nil, err
@@ -102,7 +117,7 @@ func (a *app) resolve(workspace, name string) (*target, error) {
 		return &target{container: c, workspace: ws, provider: p, cleanup: cleanup,
 			overrideErr: err}, nil
 	}
-	return &target{container: c, workspace: ws, provider: p, cleanup: cleanup}, nil
+	return &target{container: c, workspace: ws, provider: p, cleanup: cleanup, gitGuard: plan}, nil
 }
 
 // materialise gives a container a config path a child process can open.
@@ -142,7 +157,19 @@ func materialise(c model.Container, overrides bool) (model.Container, func(), er
 		return c, func() {}, fmt.Errorf("preparing the generated config: %w", err)
 	}
 	path := filepath.Join(nested, "devcontainer.json")
-	if err := os.WriteFile(path, []byte(c.GeneratedConfig), 0o600); err != nil {
+	doc := []byte(c.GeneratedConfig)
+	// The git guard's mounts depend on where the project's .git is today, so
+	// they are added per invocation rather than baked into the stored copy —
+	// which rewriteGeneratedTools would otherwise have to re-derive (invariant
+	// 10's trap).
+	if len(c.GitGuardMounts) > 0 {
+		var err error
+		if doc, err = dcgen.AppendMounts(doc, c.GitGuardMounts); err != nil {
+			cleanup()
+			return c, func() {}, fmt.Errorf("adding the git guard's mounts: %w", err)
+		}
+	}
+	if err := os.WriteFile(path, doc, 0o600); err != nil {
 		cleanup()
 		return c, func() {}, fmt.Errorf("writing the generated config: %w", err)
 	}
@@ -176,7 +203,8 @@ func materialise(c model.Container, overrides bool) (model.Container, func(), er
 // ignores a document's mounts.
 func overlayProjectConfig(c model.Container, overrides bool) (model.Container, func(), error) {
 	needsWorktree := c.WorktreeRepo != ""
-	if !overrides || c.ConfigPath == "" || (!c.PersistState && !needsWorktree) {
+	needsGuard := len(c.GitGuardMounts) > 0
+	if !overrides || c.ConfigPath == "" || (!c.PersistState && !needsWorktree && !needsGuard) {
 		return c, func() {}, nil
 	}
 
@@ -200,6 +228,14 @@ func overlayProjectConfig(c model.Container, overrides bool) (model.Container, f
 		merged, err = dcgen.Overlay(merged, dcgen.State{
 			Volume: local.StateVolumeName(c.WorkspaceName, c.Name),
 		})
+		if err != nil {
+			return c, func() {}, &overlayError{fmt.Errorf("merging %s: %w", c.ConfigPath, err)}
+		}
+	}
+	// Last, and after the worktree binds: the guard's mounts sit inside the
+	// .git directory those binds bring in, and docker applies mounts in order.
+	if needsGuard {
+		merged, err = dcgen.OverlayMounts(merged, c.GitGuardMounts)
 		if err != nil {
 			return c, func() {}, &overlayError{fmt.Errorf("merging %s: %w", c.ConfigPath, err)}
 		}

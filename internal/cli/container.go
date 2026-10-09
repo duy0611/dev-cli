@@ -238,6 +238,9 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 		// The operator's choice, by flag, and nothing else's: a project file
 		// the agent can edit must not be able to grant it.
 		AllowPrivileged: opts.allowPrivileged,
+		// A folder that is a git repository today. Fixed at create, like the
+		// other guards; a folderless container has no host .git at all.
+		GitGuard: !opts.noFolder && isGitCheckout(source),
 	}
 	// After the source is known, since the default file lives in it, and
 	// before the row is written, so a malformed agents.yaml creates nothing.
@@ -468,10 +471,10 @@ func runContainerList(ctx context.Context, a *app, workspace string, all bool, t
 	// and invisible otherwise, so the list is the only place to find out
 	// without reading the generated document.
 	return a.table(func(w io.Writer) {
-		header(w, "WORKSPACE", "NAME", "STATUS", "SOURCE", "CONFIG", "STATE", "HOST")
+		header(w, "WORKSPACE", "NAME", "STATUS", "SOURCE", "CONFIG", "STATE", "HOST", "GIT")
 		for _, c := range containers {
 			row(w, c.WorkspaceName, c.Name, statusOf(c), sourceOf(c), configOf(c), onOff(c.PersistState),
-				hostAccessOf(c))
+				hostAccessOf(c), gitGuardOf(c))
 		}
 	})
 }
@@ -552,6 +555,18 @@ func (a *app) start(ctx context.Context, workspace string, c model.Container) er
 	// container, and starting it without the merged document would leave the
 	// state volume silently unmounted.
 	c.WorktreeRepo = a.worktreeRepo(workspace, c.Name)
+	// Seeded here: start is where a container that does not exist yet is
+	// created — after create, after `create --no-start`, or after a remove
+	// outside dev — and that is when the hooks copy should match the project.
+	// Re-seeding a stopped container's copy on start would only discard what
+	// the container installed, which rebuild already does deliberately.
+	plan, err := a.planGitGuard(c, c.WorktreeRepo, true)
+	if err != nil {
+		return err
+	}
+	if overridesConfig(p) {
+		c.GitGuardMounts = plan.mounts
+	}
 	c, cleanup, err := materialise(c, overridesConfig(p))
 	if err != nil {
 		return err
@@ -683,6 +698,7 @@ func runContainerRemove(ctx context.Context, a *app, workspace, name string, for
 	if err := st.DeleteContainer(t.workspace.Name, name); err != nil {
 		return err
 	}
+	removeHooksCopy(t.workspace.Name, name)
 	a.record("remove", t.workspace.Name, name, nil)
 	a.printf("container %s removed\n", name)
 	return nil
@@ -747,6 +763,12 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 				return err
 			}
 			if err := a.escape(cc); err != nil {
+				return err
+			}
+			// Re-seeded after every refusal, so a refused rebuild leaves the
+			// container exactly as it was: the reset discards whatever hooks
+			// the container installed, which is the point of a rebuild.
+			if _, err := a.planGitGuard(t.container, t.container.WorktreeRepo, true); err != nil {
 				return err
 			}
 			if err := t.provider.Rebuild(cmd.Context(), t.container, environ, noCache); err != nil {
@@ -929,12 +951,14 @@ func runContainerShell(ctx context.Context, a *app, workspace, name string, kube
 
 	shell := detectShell(ctx, t)
 	started := time.Now()
-	err = t.provider.Exec(ctx, t.container, []string{shell}, provider.ExecOpts{
-		Env:    environ,
-		TTY:    true,
-		Stdin:  os.Stdin,
-		Stdout: os.Stdout,
-		Stderr: os.Stderr,
+	err = a.guardedRun(t, func() error {
+		return t.provider.Exec(ctx, t.container, []string{shell}, provider.ExecOpts{
+			Env:    environ,
+			TTY:    true,
+			Stdin:  os.Stdin,
+			Stdout: os.Stdout,
+			Stderr: os.Stderr,
+		})
 	})
 	a.recordRun("shell", t, started, map[string]any{
 		"argv":       []string{shell},
@@ -1035,11 +1059,13 @@ func runContainerExec(ctx context.Context, a *app, workspace, name string, comma
 	defer stopAgent()
 
 	started := time.Now()
-	err = t.provider.Exec(ctx, t.container, command, provider.ExecOpts{
-		Env:    environ,
-		Stdin:  os.Stdin,
-		Stdout: os.Stdout,
-		Stderr: os.Stderr,
+	err = a.guardedRun(t, func() error {
+		return t.provider.Exec(ctx, t.container, command, provider.ExecOpts{
+			Env:    environ,
+			Stdin:  os.Stdin,
+			Stdout: os.Stdout,
+			Stderr: os.Stderr,
+		})
 	})
 	// argv only: the command the operator typed. environ holds resolved
 	// settings and never reaches the log.
