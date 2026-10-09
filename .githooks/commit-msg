@@ -5,8 +5,15 @@
 # authorship — but a rule only a reader enforces is one an agent can follow the
 # wrong default past. This is the copy git enforces, whatever wrote the message.
 #
-# Enabled by `git config core.hooksPath .githooks`, which is per-clone: a fresh
-# clone needs it run again. `make hooks` does that.
+# Installed by `make hooks`, which copies it into .git/hooks: per-clone, so a
+# fresh clone needs it run again. A copy rather than core.hooksPath, so host git
+# never runs a hook straight from the working tree a container can write.
+
+# The tracked file is compared, never run: a change to it is reviewed and then
+# installed by hand, and this only says when that is owed.
+if [ -f .githooks/commit-msg ] && ! cmp -s "$0" .githooks/commit-msg; then
+	echo "commit-msg: .githooks/commit-msg differs from the installed hook; review it, then run make hooks" >&2
+fi
 
 if grep -qiE '^[[:space:]]*(Co-Authored-By:.*(Claude|Anthropic|Copilot|Cursor)|(🤖[[:space:]]*)?Generated with .*(Claude|Claude Code))' "$1"; then
 	# To stderr and non-zero: git prints this and keeps the message in

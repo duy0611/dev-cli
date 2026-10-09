@@ -234,13 +234,14 @@ make test       # go test ./...
 make lint       # gofmt, go vet, golangci-lint
 make smoke      # end-to-end against a real engine (needs one)
 make install    # build, then copy to ~/.local/bin
-make hooks      # enable .githooks (once per clone)
+make hooks      # install .githooks (once per clone)
 make clean
 ```
 
-Run `make hooks` after cloning. `core.hooksPath` is per-clone configuration that
-nothing inherits, so until it runs the repository's hooks are simply not
-installed.
+Run `make hooks` after cloning, and again after a change to `.githooks`. It
+copies the hooks into `.git/hooks`, which no clone inherits, so until it runs
+they are simply not installed. A copy rather than `core.hooksPath`, so host git
+never runs a hook from the working tree a container can write.
 
 `make test` never touches a container engine. `make smoke` does, and skips
 rather than fails when there is none. The Kubernetes half of the smoke test is
