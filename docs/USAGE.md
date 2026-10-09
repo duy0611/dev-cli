@@ -11,6 +11,7 @@ command. For what `dev` *is* and how it fits together, read the
   - [A project that ships no devcontainer config](#a-project-that-ships-no-devcontainer-config)
   - [Change what a generated container installs](#change-what-a-generated-container-installs)
   - [Add a secret and rotate it](#add-a-secret-and-rotate-it)
+  - [Which credentials to give a container](#which-credentials-to-give-a-container)
   - [Push to git from inside a container](#push-to-git-from-inside-a-container)
   - [What a container can do to your git](#what-a-container-can-do-to-your-git)
   - [Keep an agent's plugins across a rebuild](#keep-an-agents-plugins-across-a-rebuild)
@@ -322,6 +323,46 @@ dev workspace unset API_URL
 Your git `user.name` and `user.email` are passed through automatically, so the
 first commit inside a container works. An explicit setting of the same name
 wins.
+
+### Which credentials to give a container
+
+Anything a container can read, an agent in it can send anywhere: assume a
+setting's value will leak one day, and choose settings that make that cheap.
+`dev` keeps values out of its database and its audit log, but inside the
+container they are ordinary environment variables — that is deliberate, and
+what follows is how to live with it.
+
+- **Model API keys:** one key per workspace, never your personal key or one
+  shared with anything else. Put a spend limit on it at the issuer — an
+  Anthropic workspace spend limit, an OpenRouter per-key `limit` — so a leaked
+  key costs a capped amount. Anthropic keys do not expire, so revocable and
+  capped is the most there is.
+- **GitHub:** prefer the ssh relay (see
+  [Push to git from inside a container](#push-to-git-from-inside-a-container)),
+  and feed it an ssh agent that holds only your GitHub key. The relay forwards
+  every key your agent holds, so a container could otherwise sign for any host
+  your personal key reaches:
+
+  ```sh
+  eval "$(ssh-agent -s)"          # a fresh agent, in this shell only
+  ssh-add ~/.ssh/github_ed25519   # the GitHub key and nothing else
+  dev container start-agent api --ssh-agent   # relays this agent, not your usual one
+  ```
+
+  When a token is needed instead, use a fine-grained personal access token
+  scoped to the one repository, with the shortest expiry that fits.
+- **Kubernetes:** `--kube-token`, minted for a ServiceAccount bound to the
+  narrowest role that does the job — never a copied kubeconfig. On the k8s
+  provider, leave the pod's own ServiceAccount unbound.
+- **Logging in inside the container:** `claude /login` and `opencode auth login`
+  store a long-lived token on the container's state volume. Prefer a workspace
+  setting: it is revocable at the issuer and resolved fresh on every command.
+
+When a key may have leaked, revoke it at the issuer first, then repoint the
+setting at its replacement — `dev workspace set NAME <new spec>`, or rotate the
+value behind the spec. Local containers pick it up on their next command; k8s
+containers need `dev container sync NAME`. `dev audit` says which containers
+ran with the workspace, and when.
 
 ### Push to git from inside a container
 
