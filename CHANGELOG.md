@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.10.0](https://github.com/duy0611/dev-cli/compare/v0.9.0...v0.10.0) (2026-10-09)
+
+
+### Features
+
+* **cli:** keep host git from running what a container writes under .git ([5943ae5](https://github.com/duy0611/dev-cli/commit/5943ae579c33c113527505859109c089c77346cf))
+* **cli:** record what dev does to containers in an audit log, read with dev audit ([bbcd5e1](https://github.com/duy0611/dev-cli/commit/bbcd5e14d7b1d43ad9ed0a283f06717f7faa7ad8))
+* **cli:** refuse a configuration that asks its engine for the host unless --allow-privileged ([8eeb6f2](https://github.com/duy0611/dev-cli/commit/8eeb6f2a46b6f8c522b67fd9e23a032e0ca08aa8))
+* **cli:** refuse a rebuild whose project configuration changed unless --accept-config ([b19c307](https://github.com/duy0611/dev-cli/commit/b19c307caf10c4257b59eff65f494870a71e4bdf))
+* **k8s:** apply the default seccomp profile to the pod ([78cb2b3](https://github.com/duy0611/dev-cli/commit/78cb2b3b22c7a6d63facb5802297b0acc07b27a8))
+
 ## [0.9.0](https://github.com/duy0611/dev-cli/compare/v0.8.0...v0.9.0) (2026-10-08)
 
 
