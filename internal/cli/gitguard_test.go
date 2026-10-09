@@ -23,9 +23,12 @@ func stubCapturingDevcontainer(t *testing.T) (calls, captured string) {
 	if err := os.MkdirAll(captured, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// The call number names each captured file, so it must be a bare number:
+	// BSD wc on macOS pads its count with spaces, which made the captured
+	// names never match the line they were looked up by. Hence the tr.
 	script := `#!/bin/sh
 printf '%s\n' "$*" >> '` + calls + `'
-n=$(wc -l < '` + calls + `')
+n=$(wc -l < '` + calls + `' | tr -d ' ')
 prev=""
 for a in "$@"; do
   case "$prev" in --override-config|--config) cp "$a" '` + captured + `'/"$n-$(basename "$(dirname "$a")")-$(basename "$a")" 2>/dev/null ;; esac
