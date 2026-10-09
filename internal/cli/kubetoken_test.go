@@ -382,7 +382,7 @@ func TestStartAgentAsksBeforeUp(t *testing.T) {
 // command's environment gains KUBECONFIG, without one it is untouched.
 func TestApplyKubeToken(t *testing.T) {
 	a := seedFake(t, model.StatusRunning)
-	tg, err := a.resolve("", "api")
+	tg, err := a.resolve(t.Context(), "", "api")
 	if err != nil {
 		t.Fatal(err)
 	}

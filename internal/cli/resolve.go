@@ -44,13 +44,14 @@ func (t *target) release() {
 	}
 }
 
-// requireOverride reports a deferred overlay failure.
+// requireOverride reports a deferred overlay failure, recording it in the
+// audit log when it is the git guard refusing.
 //
 // Called by every path that drives up or exec, and by no other: those are the
 // commands that need the merged document, and starting a container without it
 // would silently leave the agents' state volume unmounted.
-func (t *target) requireOverride() error {
-	return t.overrideErr
+func (t *target) requireOverride(a *app) error {
+	return a.recordRefusal(t.container, t.overrideErr)
 }
 
 // overridesConfig reports whether this provider consumes a merged config.
@@ -61,7 +62,7 @@ func overridesConfig(p provider.Provider) bool {
 
 // resolve looks up a container by name in the given workspace (or the active
 // one) and builds its provider.
-func (a *app) resolve(workspace, name string) (*target, error) {
+func (a *app) resolve(ctx context.Context, workspace, name string) (*target, error) {
 	wsName, err := a.workspaceName(workspace)
 	if err != nil {
 		return nil, err
@@ -97,7 +98,7 @@ func (a *app) resolve(workspace, name string) (*target, error) {
 	// merged in there. Not seeded — the hooks copy is reset at create and
 	// rebuild only, so an exec does not throw away what the container did.
 	// Deferred like an overlay failure: stop, remove and logs never need it.
-	plan, planErr := a.planGitGuard(c, c.WorktreeRepo, false)
+	plan, planErr := a.planGitGuard(ctx, c, c.WorktreeRepo, false, overridesConfig(p))
 	if planErr == nil && overridesConfig(p) {
 		c.GitGuardMounts = plan.mounts
 	}

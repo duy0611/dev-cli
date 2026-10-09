@@ -323,6 +323,28 @@ func TestStatusFiltersOnBothLabels(t *testing.T) {
 	}
 }
 
+// Mounts reads docker's own report: RW false is read-only, and a container
+// the engine does not have is not an error.
+func TestMounts(t *testing.T) {
+	f := newFakePath(t)
+	// Every docker call prints the same thing, so ps sees an id and inspect
+	// the mounts; first() takes the first line for the id, the JSON is one.
+	f.install(t, dockerBin, `[{"Destination":"/workspaces/r","RW":true},{"Destination":"/workspaces/r/.githooks","RW":false}]`+"\n", 0)
+	got, exists, err := (&Provider{}).Mounts(context.Background(), testContainer())
+	if err != nil || !exists {
+		t.Fatalf("Mounts: %v, exists %v", err, exists)
+	}
+	want := []provider.Mount{{Destination: "/workspaces/r"}, {Destination: "/workspaces/r/.githooks", ReadOnly: true}}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("Mounts = %+v, want %+v", got, want)
+	}
+
+	f.install(t, dockerBin, "", 0)
+	if _, exists, err := (&Provider{}).Mounts(context.Background(), testContainer()); err != nil || exists {
+		t.Errorf("absent container: exists %v, err %v", exists, err)
+	}
+}
+
 func TestStopAndRemoveAreNoOpsWhenAbsent(t *testing.T) {
 	f := newFakePath(t)
 	f.install(t, dockerBin, "", 0) // no container id

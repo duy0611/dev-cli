@@ -138,3 +138,25 @@ func TestParseRecordOfNothingDiffsAsAllNew(t *testing.T) {
 		t.Errorf("Diff = %v", got)
 	}
 }
+
+// The git guard's tree mounts follow the operator's git config, so a digest
+// that leaves them out stays the same when `make hooks` runs on the host.
+func TestWithoutMountsDropsOnlyTheNamedTargets(t *testing.T) {
+	merged := `{"image":"x","mounts":["source=/h/r/.githooks,target=/workspaces/r/.githooks,type=bind,readonly",` +
+		`{"source":"/h/r/tools","target":"/workspaces/r/tools","type":"bind"},"source=v,target=/var/dev-state,type=volume"]}`
+	out, err := WithoutMounts([]byte(merged), []string{"/workspaces/r/.githooks", "/workspaces/r/tools"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	with, err := DigestOf(out, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	without, err := DigestOf([]byte(`{"image":"x","mounts":["source=v,target=/var/dev-state,type=volume"]}`), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if with.Sum != without.Sum {
+		t.Errorf("digest still sees the tree mounts: %s", out)
+	}
+}

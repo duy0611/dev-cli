@@ -442,10 +442,40 @@ and `push -u` / `checkout -b x origin/y` succeed but print
 that set `core.hooksPath`, such as husky, fail inside — run them once on the
 host and the container sees the result.
 
+Host git can also be pointed *into* the working tree: a `core.hooksPath` such as
+`.githooks` or `.husky`, or an `include.path` naming a file in the checkout.
+Those are ordinary files the container can edit, and host git runs them. So
+before every `start`, `exec`, `shell`, `start-agent` and `rebuild`, `dev` asks
+your host git what it would run from inside the workspace — your global config
+counts too — and:
+
+- mounts each one read-only inside the container, with every directory between
+  it and the workspace root pinned so it cannot be renamed away. The agent can
+  still read and run the hooks, and commit, but not change them.
+- refuses a path no mount can hold, naming it and the setting: one that does
+  not exist yet (`core.hooksPath .husky` before husky has created it), or one
+  reached through a symlink inside the workspace, which the container could
+  repoint. Create the directory, or point the setting at the real path.
+- refuses a running or stopped container created before the setting appeared —
+  you ran `make hooks` on the host after `create` — because mounts are fixed
+  when a container is created. `dev container rebuild <name>` gives it them.
+
+None of this is decided at create, since the setting usually arrives later.
+Nor does it count as a configuration change for `rebuild`'s drift check: the
+mounts follow your host git config, not the project. A hooks directory edited
+on the host is seen inside at once, as any file in the workspace is; the
+container just cannot write it.
+
+Setting `core.hooksPath` to a directory in the checkout still means your host
+runs whatever the branch you check out puts there. Copying hooks into
+`.git/hooks` instead — this repository's `make hooks` does — makes installing a
+changed hook a step you take after reading it.
+
 A project whose `devcontainer.json` names its own `workspaceMount` or
 `workspaceFolder` puts `.git` where `dev` cannot aim a mount. For those, `dev`
-fingerprints `.git` before each `exec`, `shell` and `start-agent` and compares
-it after, exiting 1 and naming what changed. That is detection, not prevention:
+fingerprints `.git`, and whatever host git runs from the working tree, before
+each `exec`, `shell` and `start-agent` and compares it after, exiting 1 and
+naming what changed. That is detection, not prevention:
 between the change and the report, your editor's `git status` may already have
 run it. Do not run git in that checkout until you have restored what it names.
 
@@ -459,10 +489,13 @@ Two routes no mount can close:
   `git config --global diff.ignoreSubmodules all`, at the cost of submodule
   status in your own repositories.
 
-And one the guard does not try to: hooks kept inside the working tree
-(`.husky/`, lefthook, pre-commit), `.envrc`, `.vscode/tasks.json`, a `Makefile`
-or `package.json` scripts. The agent edits those like any other file, and they
-run when you run them on the host. Review before running workspace code there.
+And what the guard does not try to cover: workspace files that run only when
+*you* run them, not because git does — `.envrc`, `.vscode/tasks.json`, a
+`Makefile`, `package.json` scripts, and hook managers that dispatch from a
+config file in the tree (lefthook's `lefthook.yml`, pre-commit's
+`.pre-commit-config.yaml`), whose installed hook is guarded but whose config is
+not. The agent edits those like any other file. Review before running workspace
+code there.
 
 The guard is set at create for a folder that is a git repository; `container
 list` and the audit log record it. Containers created before it existed are not

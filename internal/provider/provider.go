@@ -153,3 +153,20 @@ func New(p model.Provider) (Provider, error) {
 	}
 	return f(p)
 }
+
+// Mount is one mount of an existing container, as its engine reports it.
+type Mount struct {
+	Destination string
+	ReadOnly    bool
+}
+
+// MountReader is a provider that can report what an existing container was
+// started with — which is fixed at create, so a mount dev would add today is
+// absent from a container created before it was needed.
+//
+// Optional for ConfigOverrider's reason: only a provider that hands the
+// document's mounts to its engine has them to report. exists is false when the
+// engine has no such container.
+type MountReader interface {
+	Mounts(ctx context.Context, c model.Container) (mounts []Mount, exists bool, err error)
+}

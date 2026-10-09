@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -51,7 +52,7 @@ func newContainerConfigCmd(a *app) *cobra.Command {
 		Short: "Print the devcontainer config a container is built from",
 		Args:  exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runContainerConfigShow(a, workspace, args[0])
+			return runContainerConfigShow(cmd.Context(), a, workspace, args[0])
 		},
 	}
 	addWorkspaceFlag(show, &workspace)
@@ -60,8 +61,8 @@ func newContainerConfigCmd(a *app) *cobra.Command {
 	return cmd
 }
 
-func runContainerConfigShow(a *app, workspace, name string) error {
-	t, err := a.resolve(workspace, name)
+func runContainerConfigShow(ctx context.Context, a *app, workspace, name string) error {
+	t, err := a.resolve(ctx, workspace, name)
 	if err != nil {
 		return err
 	}
@@ -82,7 +83,7 @@ func runContainerConfigShow(a *app, workspace, name string) error {
 	// this command exists to answer "what was this built from", and the honest
 	// answer when the project's file will not parse is the error, not the file
 	// that dev could not use.
-	if err := t.requireOverride(); err != nil {
+	if err := t.requireOverride(a); err != nil {
 		return err
 	}
 

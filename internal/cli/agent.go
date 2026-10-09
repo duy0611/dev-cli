@@ -60,12 +60,12 @@ func runContainerStartAgent(ctx context.Context, a *app, workspace, name, agentI
 		return usageError(err)
 	}
 
-	t, err := a.resolve(workspace, name)
+	t, err := a.resolve(ctx, workspace, name)
 	if err != nil {
 		return err
 	}
 	defer t.release()
-	if err := t.requireOverride(); err != nil {
+	if err := t.requireOverride(a); err != nil {
 		return err
 	}
 
@@ -139,7 +139,7 @@ func runContainerStartAgent(ctx context.Context, a *app, workspace, name, agentI
 
 	argv := ag.Command(extra)
 	started := time.Now()
-	err = a.guardedRun(t, func() error {
+	err = a.guardedRun(ctx, t, func() error {
 		return t.provider.Exec(ctx, t.container, argv, provider.ExecOpts{
 			Env:    environ,
 			TTY:    true,

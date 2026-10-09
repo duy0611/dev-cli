@@ -21,6 +21,9 @@ type configCheck struct {
 	c       model.Container
 	merged  []byte
 	compose []string
+	// treeTargets are the git guard's working tree mounts, left out of the
+	// digest: they follow the operator's host git config, not the project's.
+	treeTargets []string
 }
 
 // readConfig reads c's merged configuration, or returns nil when there is
@@ -28,7 +31,7 @@ type configCheck struct {
 // catalog with nothing privileged in it; and a provider that is not a
 // ConfigReader builds its own spec — the Kubernetes provider ignores a
 // document's privileged mode, mounts and runArgs entirely.
-func readConfig(ctx context.Context, p provider.Provider, c model.Container) (*configCheck, error) {
+func readConfig(ctx context.Context, p provider.Provider, c model.Container, plan gitGuardPlan) (*configCheck, error) {
 	if c.GeneratedConfig != "" {
 		return nil, nil
 	}
@@ -40,7 +43,7 @@ func readConfig(ctx context.Context, p provider.Provider, c model.Container) (*c
 	if err != nil {
 		return nil, err
 	}
-	return &configCheck{c: c, merged: merged, compose: compose}, nil
+	return &configCheck{c: c, merged: merged, compose: compose, treeTargets: plan.treeTargets()}, nil
 }
 
 // escape refuses a configuration that asks its engine for the host, unless the
@@ -96,7 +99,11 @@ func (cc *configCheck) digest() (guard.Digest, error) {
 	if cc == nil {
 		return guard.Digest{}, nil
 	}
-	return guard.DigestOf(cc.merged, cc.c.ConfigPath, cc.compose)
+	merged, err := guard.WithoutMounts(cc.merged, cc.treeTargets)
+	if err != nil {
+		return guard.Digest{}, err
+	}
+	return guard.DigestOf(merged, cc.c.ConfigPath, cc.compose)
 }
 
 // guardNewContainer runs the create-time guards on a container whose row is
@@ -131,9 +138,9 @@ func (a *app) guardNewContainer(ctx context.Context, workspace string, c *model.
 	// With the git guard's mounts, so the digest recorded here matches what
 	// the first start materialises. Not seeded: start does that, once the row
 	// exists and the container is about to be created.
-	plan, err := a.planGitGuard(probe, probe.WorktreeRepo, false)
+	plan, err := a.planGitGuard(ctx, probe, probe.WorktreeRepo, false, overridesConfig(p))
 	if err != nil {
-		return err
+		return a.recordRefusal(*c, err)
 	}
 	if overridesConfig(p) {
 		probe.GitGuardMounts = plan.mounts
@@ -144,7 +151,7 @@ func (a *app) guardNewContainer(ctx context.Context, workspace string, c *model.
 	}
 	defer cleanup()
 
-	cc, err := readConfig(ctx, p, probe)
+	cc, err := readConfig(ctx, p, probe, plan)
 	if err != nil {
 		return err
 	}
