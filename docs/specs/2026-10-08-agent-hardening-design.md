@@ -77,7 +77,7 @@ the host:
 
 ### Mounts
 
-All bind mounts, at the identical path inside the container, through the
+All bind mounts, through the
 routes the state and worktree mounts already use: `mounts` in a generated
 document, the merged `--override-config` for a project-owned one, on `up` and
 `exec` alike (invariants 10 and 11).
@@ -93,10 +93,23 @@ document, the merged `--override-config` for a project-owned one, on `up` and
 
 `<gitdir>` is the folder's `.git` for an ordinary checkout and the common
 directory for a worktree container (whose `config` and `hooks` live there).
-A folderless container has no host `.git` and gets none of this. A folder that
-is not a git repository gets none of it either, and is re-checked at
-`rebuild`: a repository initialised afterwards is guarded from the next
-`rebuild`.
+A folderless container has no host `.git` and gets none of this, nor does a
+folder that was not a git repository at create.
+
+**Where `.git` lands.** A worktree container mounts the checkout and the
+common directory at their own host paths (invariant 11), so every target is
+the host path. Every other container gets the devcontainer CLI's default
+layout, which `gitguard.LayoutOf` mirrors: the CLI mounts the repository's
+root rather than the folder it was handed (`mount-workspace-git-root`, default
+on), found by walking up to the first `.git/config`, at
+`/workspaces/<basename of the root>` — so the targets are under that path. A
+project whose `devcontainer.json` names its own `workspaceMount` or
+`workspaceFolder` replaces that rule, and `.git` lands somewhere dev cannot
+predict; it gets no mounts, and instead `.git` is fingerprinted (config, every
+hook, `commondir`, `config.worktree`) before each `exec`, `shell` and
+`start-agent` and compared after, with a change reported as exit 1 and a
+`refused` audit record. That is detection with a gap, like `commondir`'s, and
+`USAGE.md` says so.
 
 ### What mounts cannot close
 
@@ -165,9 +178,11 @@ mounts from it, as it does the state and worktree mounts (invariant 10).
 
 ## 2. Escape guard
 
-At `create` and at `rebuild`, read the merged configuration
-(`read-configuration --include-merged-configuration`, the call k8s already
-makes in `internal/provider/k8s/build.go`) and refuse, unless the row has
+At `create`, at every `start`, and at `rebuild`, read the merged
+configuration (`read-configuration --include-merged-configuration`, the call
+k8s already makes in `internal/provider/k8s/build.go`; no `--id-label`, so the
+CLI resolves features afresh rather than reading the image being replaced) and
+refuse, unless the row has
 `allow_privileged`, when it asks for any of:
 
 | Asks for | Seen in |
@@ -236,8 +251,12 @@ exempt: its digest is `''` and never checked.
 - A row whose digest is `''` (existing rows) records the digest at its first
   `rebuild` without refusing. That is the "new rows only" rule: an existing
   container is guarded from its next rebuild on.
-- `start` does not check. Starting an existing container does not apply its
-  configuration; only `rebuild` and the first `up` do.
+- `start` does not compare. Starting an existing container does not apply its
+  configuration; only `rebuild` and the first `up` do. It does record a digest
+  for a row with none, which is how `create --no-start` gets one.
+- `create --no-start` reads nothing and records no digest: recording a container
+  needs no engine. The escape check and the digest both happen at its first
+  `start`.
 
 ### Interaction
 
@@ -290,7 +309,8 @@ One JSON object per line. Common fields:
 | `kube-token` | `context`, `namespace`, `service_account`, `requested`, `expires` |
 | `relay` | `started`, `ended`, `end` (`clean`, `killed`, `unexpected`) |
 | `sync` | `settings` — names only |
-| `refused` | `reason` (`escape`, `drift`, `commondir`), `findings` |
+| `refused` | `reason` (`escape`, `drift`, `git`), `findings` |
+| `accept-config` | `previous_digest`, `config_digest`, `changed` |
 
 `argv` is the command the operator gave, which may contain anything they
 typed. Never environment values, never resolved settings, never a token.
@@ -337,13 +357,18 @@ dev audit [--workspace W] [--container C] [--event E]... [--since D] [--json]
 -- (invariant 10's reason). The defaults speak for rows that already exist:
 -- they were created unguarded and keep behaving as they did until recreated.
 -- config_digest '' means "not yet recorded": generated containers, and
--- existing rows until their next rebuild.
+-- existing rows until their next rebuild. config_digest_fields holds a hash
+-- per field and per file of the same configuration, so a refusal can name
+-- what changed without dev keeping a copy of the document.
 ALTER TABLE containers ADD COLUMN git_guard INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE containers ADD COLUMN allow_privileged INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE containers ADD COLUMN config_digest TEXT NOT NULL DEFAULT '';
+ALTER TABLE containers ADD COLUMN config_digest_fields TEXT NOT NULL DEFAULT '';
 ```
 
-`model.Container` gains `GitGuard`, `AllowPrivileged` and `ConfigDigest`.
+`model.Container` gains `GitGuard`, `AllowPrivileged`, `ConfigDigest` and
+`ConfigDigestFields`, plus `GitGuardMounts`, derived per invocation and never
+stored.
 
 ## Command surface
 
@@ -351,17 +376,17 @@ ALTER TABLE containers ADD COLUMN config_digest TEXT NOT NULL DEFAULT '';
 |---|---|
 | `container create`, `worktree create` | `--allow-privileged`; refuses per §2; records `git_guard`, `config_digest` |
 | `container rebuild` | `--accept-config`; refuses per §2 and §3; re-seeds hooks |
-| `container show` | shows `git guard`, `allow privileged`, `config digest` (short) |
-| `container remove`, `workspace remove` | remove the hooks copy |
-| every command that drives a container | `commondir` check before and after (§1), and an audit record |
+| `container list` | `HOST` and `GIT` columns (there is no `container show`) |
+| `container start` | re-checks §2; records a digest for a row with none; seeds the hooks copy |
+| `container remove`, `worktree remove` | remove the hooks copy (a workspace cannot be removed while it holds containers) |
+| `exec`, `shell`, `start-agent` | `commondir` check before and after, and the fingerprint fallback (§1); an audit record |
 | `audit` | new (§5) |
 
 `create --from` copies neither flag from its source: each is the operator's
 decision for the container in front of them.
 
-`docs/USAGE.md` gains a "Hardening" section — what each guard does, what it
-costs the agent, the escape hatches, the residual routes, the credential model
-from the plan's item 4 — and every changed command's reference entry.
+`docs/USAGE.md` gains walkthroughs for the git guard, the credential model and
+the audit log, and every changed command's reference entry.
 
 ## Testing
 
@@ -422,3 +447,26 @@ Each its own branch and PR; together they make the plan's build list.
    enough. `dev` neither detects nor refuses them.
 2. **`commondir` detection:** checked before and after each command only; no
    session-long file watch.
+
+## Changed during implementation
+
+Where building it turned up something this spec had wrong:
+
+- **The ServiceAccount token stays mounted on k8s.** Dropped in review: the
+  token is the provider's `serviceAccount`, the namespace `default` when unset,
+  which holds no permissions unless bound. `USAGE.md` says to leave it unbound.
+- **Where `.git` lands is the CLI's git-root rule, not the folder.** See §1,
+  "Where `.git` lands". Projects that name their own workspace mount get the
+  fingerprint fallback instead of mounts.
+- **The escape check also runs at `start`.** `create --no-start` records a
+  container without an engine, so the first `start` is where its configuration
+  is first read; and checking every start costs one CLI call while telling a
+  first start from a later one would need the engine's answer first.
+- **`config_digest_fields`.** The stored digest alone could say that a
+  configuration changed but not what; a hash per field lets the refusal name
+  the fields without dev keeping a copy of the document.
+- **No `container show`.** It does not exist; `container list` gained `HOST`
+  and `GIT` columns instead.
+- **Git guard mounts are added per invocation, not stored**, even in a
+  generated document — they depend on where `.git` is today, and storing them
+  would give `rewriteGeneratedTools` one more thing to re-derive.
