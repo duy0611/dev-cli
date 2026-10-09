@@ -12,7 +12,10 @@ current version is in `.release-please-manifest.json`.
 
 CI runs `make lint && make test` on push and pull request, on Linux amd64 and
 macOS arm64, with `make smoke` as a second job beside it on Linux amd64 and
-arm64 — macOS runners have no nested virtualisation, so no engine starts there. Releases are cut by release-please: every push to main
+arm64 — macOS runners have no nested virtualisation, so no engine starts there.
+A change touching only Markdown or `docs/plans`, `docs/specs` skips both, and
+`ci_success_check` is the one job branch protection requires: it passes when
+they passed or were skipped, and fails otherwise. Releases are cut by release-please: every push to main
 updates an open release PR from the Conventional Commit subjects since the last
 tag, and merging that PR tags the release, publishes it with the changelog, and
 builds `dev` for darwin and linux on both architectures into it. Nobody tags or
