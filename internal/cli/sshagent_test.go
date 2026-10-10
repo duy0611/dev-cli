@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -364,5 +365,27 @@ func TestOperatorGitConfigSuppressesSigning(t *testing.T) {
 		if !hasGitConfigEnv([]provider.EnvVar{{Key: key, Value: "x"}}) {
 			t.Errorf("%s was not read as the operator configuring git themselves", key)
 		}
+	}
+}
+
+// TestRelayDropsFields covers the record a drop leaves. No drops must mean no
+// key at all, so a session that never dropped writes the record it always has.
+func TestRelayDropsFields(t *testing.T) {
+	if got := relayDrops(nil); got != nil {
+		t.Errorf("no drops = %v, want nil", got)
+	}
+
+	at := time.Date(2026, 10, 9, 20, 14, 0, 0, time.UTC)
+	back := at.Add(3 * time.Second)
+	got := relayDrops([]provider.AgentDrop{
+		{At: at, Restored: back},
+		{At: at.Add(time.Hour), Err: "read |0: file already closed"},
+	})
+	want := []map[string]any{
+		{"at": "2026-10-09T20:14:00Z", "restored": "2026-10-09T20:14:03Z"},
+		{"at": "2026-10-09T21:14:00Z", "error": "read |0: file already closed"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("relayDrops = %v, want %v", got, want)
 	}
 }

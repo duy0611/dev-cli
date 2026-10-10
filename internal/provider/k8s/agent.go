@@ -97,3 +97,11 @@ type agentSession struct{ s *relay.Session }
 func (a *agentSession) Socket() string { return a.s.Socket }
 func (a *agentSession) Close() error   { return a.s.Close() }
 func (a *agentSession) End() string    { return a.s.End() }
+
+func (a *agentSession) Drops() []provider.AgentDrop {
+	var out []provider.AgentDrop
+	for _, d := range a.s.Drops() {
+		out = append(out, provider.AgentDrop{At: d.At, Err: d.Err, Restored: d.Restored})
+	}
+	return out
+}

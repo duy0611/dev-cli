@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/duy0611/dev-cli/internal/model"
 )
@@ -124,12 +125,25 @@ type ConfigReader interface {
 
 // AgentSession is a live agent relay.
 type AgentSession interface {
-	// Socket is the path inside the container to put in SSH_AUTH_SOCK.
+	// Socket is the path inside the container to put in SSH_AUTH_SOCK. Fixed
+	// for the session's life, across any respawn of the relay behind it.
 	Socket() string
 	Close() error
 	// End reports how the session ended — clean, killed or unexpected — once
 	// Close has returned. For the audit log.
 	End() string
+	// Drops reports each time the relay's exec channel collapsed, oldest
+	// first. For the audit log.
+	Drops() []AgentDrop
+}
+
+// AgentDrop is one collapse of a relay's exec channel. A mirror of relay.Drop,
+// because this package cannot name the relay package without every provider
+// importing it.
+type AgentDrop struct {
+	At       time.Time
+	Err      string    // empty when the channel simply closed
+	Restored time.Time // zero when no replacement came up before the session ended
 }
 
 // Factory builds the Provider for a configured provider record.

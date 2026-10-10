@@ -142,7 +142,7 @@ func summarise(e audit.Entry) string {
 		if d := elapsed(str("started"), str("ended")); d != "" {
 			s += " after " + d
 		}
-		return s
+		return s + dropSummary(e.Fields["drops"])
 	case "sync":
 		return joinArgv(e.Fields["settings"])
 	case "refused":
@@ -171,4 +171,26 @@ func elapsed(start, end string) string {
 		return ""
 	}
 	return e.Sub(s).Round(time.Second).String()
+}
+
+// dropSummary is the tail of a relay line: nothing for a relay that never
+// dropped, how often it came back, or — the fact the session's duration hides —
+// when it went down for good.
+func dropSummary(v any) string {
+	drops, _ := v.([]any)
+	if len(drops) == 0 {
+		return ""
+	}
+	last, _ := drops[len(drops)-1].(map[string]any)
+	if restored, _ := last["restored"].(string); restored == "" {
+		at, _ := last["at"].(string)
+		if t, err := time.Parse(time.RFC3339Nano, at); err == nil {
+			return ", down since " + t.Local().Format("2006-01-02 15:04")
+		}
+		return ", down at the end"
+	}
+	if len(drops) == 1 {
+		return ", recovered from 1 drop"
+	}
+	return fmt.Sprintf(", recovered from %d drops", len(drops))
 }
