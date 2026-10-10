@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.13.0](https://github.com/duy0611/dev-cli/compare/v0.12.0...v0.13.0) (2026-10-10)
+
+
+### Features
+
+* **cli:** workspace init --from copies a workspace's settings ([9c0d402](https://github.com/duy0611/dev-cli/commit/9c0d402027ab8f496706b2d8783e2d3ca556fe34))
+* **k8s:** default PVC size to 1Gi ([40956ba](https://github.com/duy0611/dev-cli/commit/40956ba6853a35dc95221417ff1e08324132242a))
+
 ## [0.12.0](https://github.com/duy0611/dev-cli/compare/v0.11.0...v0.12.0) (2026-10-10)
 
 
