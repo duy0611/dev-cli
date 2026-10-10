@@ -966,6 +966,7 @@ what makes that route safe.
 
 ```
 dev workspace init NAME --provider NAME [--ssh-forward]
+dev workspace init NAME --from WORKSPACE [--provider NAME] [--ssh-forward]
 dev workspace use NAME
 dev workspace list
 dev workspace set KEY SPEC
@@ -980,6 +981,20 @@ length of each `dev` command, and signs commits with its first key. See
 It is fixed at `init`: there is no flag to change it afterwards. A single
 command can override it with `--ssh-agent` or `--no-ssh-agent`; a workspace that
 needs the other default for good is a new workspace.
+
+`--from` starts a workspace as a copy of another: the same provider, the same
+`--ssh-forward` choice, and every setting. `--provider` and `--ssh-forward`
+given alongside it override what is copied, which is how to put one set of
+settings on a second provider:
+
+```sh
+dev workspace init staging --from personal --provider prod
+```
+
+The provider is shared, not duplicated — a later `provider configure` changes
+it for both workspaces. Settings are copied as specs, never resolved, and after
+the copy each workspace's settings change independently. Containers are not
+copied.
 
 | Spec | Resolved by |
 |---|---|

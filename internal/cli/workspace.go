@@ -93,18 +93,33 @@ func runWorkspaceRemove(a *app, name string) error {
 }
 
 func newWorkspaceInitCmd(a *app) *cobra.Command {
-	var provider string
+	var provider, from string
 	var sshForward bool
 
 	cmd := &cobra.Command{
 		Use:   "init NAME",
 		Short: "Create a workspace",
-		Args:  exactArgs(1),
+		Long: "Create a workspace.\n\n" +
+			"--from copies another workspace's provider, ssh agent forwarding and\n" +
+			"settings, so --provider is no longer required. --provider and\n" +
+			"--ssh-forward given alongside it override what is copied. Settings are\n" +
+			"copied as specs and never resolved; containers are not copied.",
+		Args: exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if from != "" {
+				// A pointer rather than the bool, so that an absent flag inherits
+				// the source's choice instead of quietly turning it off.
+				var ssh *bool
+				if cmd.Flags().Changed("ssh-forward") {
+					ssh = &sshForward
+				}
+				return runWorkspaceInitFrom(a, args[0], from, provider, ssh)
+			}
 			return runWorkspaceInit(a, args[0], provider, sshForward)
 		},
 	}
-	cmd.Flags().StringVar(&provider, "provider", "", "provider this workspace runs on (required)")
+	cmd.Flags().StringVar(&provider, "provider", "", "provider this workspace runs on (required unless --from)")
+	cmd.Flags().StringVar(&from, "from", "", "workspace to copy the provider and settings from")
 	cmd.Flags().BoolVar(&sshForward, "ssh-forward", false,
 		"reach the host's ssh agent from containers, for the length of each command")
 	return cmd
@@ -115,7 +130,7 @@ func runWorkspaceInit(a *app, name, provider string, sshForward bool) error {
 		return usageError(err)
 	}
 	if provider == "" {
-		return usageErrorf("--provider is required")
+		return usageErrorf("--provider or --from is required")
 	}
 
 	st, err := a.store()
@@ -141,9 +156,60 @@ func runWorkspaceInit(a *app, name, provider string, sshForward bool) error {
 	if sshForward {
 		a.printf("ssh agent forwarding is on\n")
 	}
+	return activateIfNone(a, st, name)
+}
 
-	// The first workspace becomes active, so that a fresh install does not
-	// demand a `workspace use` before anything else works.
+// runWorkspaceInitFrom creates a workspace bound to the same provider as from,
+// carrying its settings. The provider is shared, not copied: providers are
+// global rows several workspaces already point at, and a copy would be a
+// second record of one cluster free to drift from the first.
+func runWorkspaceInitFrom(a *app, name, from, provider string, sshForward *bool) error {
+	if err := xpath.ValidateName(name); err != nil {
+		return usageError(err)
+	}
+
+	st, err := a.store()
+	if err != nil {
+		return err
+	}
+	src, err := st.GetWorkspace(from)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return notFoundErrorf("no such workspace: %s", from)
+		}
+		return err
+	}
+	if provider == "" {
+		provider = src.ProviderName
+	}
+	if err := providerExists(st, provider); err != nil {
+		return err
+	}
+	ws := model.Workspace{Name: name, ProviderName: provider, SSHForward: src.SSHForward}
+	if sshForward != nil {
+		ws.SSHForward = *sshForward
+	}
+
+	n, err := st.CloneWorkspace(from, ws)
+	switch {
+	case errors.Is(err, store.ErrExists):
+		return usageErrorf("workspace %s already exists", name)
+	case errors.Is(err, store.ErrNotFound):
+		// Removed between the read above and the copy.
+		return notFoundErrorf("no such workspace: %s", from)
+	case err != nil:
+		return err
+	}
+	a.printf("workspace %s (provider %s), %d setting(s) copied from %s\n", name, provider, n, from)
+	if ws.SSHForward {
+		a.printf("ssh agent forwarding is on\n")
+	}
+	return activateIfNone(a, st, name)
+}
+
+// activateIfNone makes name the active workspace when none is, so that a fresh
+// install does not demand a `workspace use` before anything else works.
+func activateIfNone(a *app, st *store.Store, name string) error {
 	active, err := st.ActiveWorkspace()
 	if err != nil {
 		return err
