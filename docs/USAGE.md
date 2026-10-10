@@ -933,7 +933,7 @@ Exit codes: `0` success, `1` the work failed, `2` the request was malformed,
 dev provider configure NAME --kind local
 dev provider configure NAME --kind k8s [--context CTX] [--namespace NS]
                                        [--registry PREFIX] [--platform linux/amd64]
-                                       [--storage-size 20Gi] [--storage-class SC]
+                                       [--storage-size 1Gi] [--storage-class SC]
                                        [--service-account SA] [--image-pull-secret NAME]
 dev provider list
 dev provider remove NAME
@@ -946,7 +946,7 @@ dev provider remove NAME
 | `--namespace` | k8s | must already exist; `dev` creates no namespaces |
 | `--registry` | k8s | prefix images are pushed to and pulled from; required |
 | `--platform` | k8s | what to build for; default `linux/amd64` |
-| `--storage-size` | k8s | PVC size per container; default `20Gi` |
+| `--storage-size` | k8s | PVC size per container; default `1Gi` |
 | `--storage-class` | k8s | optional; default is the cluster's |
 | `--service-account` | k8s | optional; default is the namespace's |
 | `--image-pull-secret` | k8s | optional; needed when the image is private |

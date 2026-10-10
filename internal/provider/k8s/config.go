@@ -13,7 +13,7 @@ const (
 	// the pod crash-loops with "exec format error" — which reads like anything
 	// but a build problem.
 	defaultPlatform    = "linux/amd64"
-	defaultStorageSize = "20Gi"
+	defaultStorageSize = "1Gi"
 	defaultNamespace   = "default"
 )
 

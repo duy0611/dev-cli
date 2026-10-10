@@ -100,7 +100,7 @@ func newProviderConfigureCmd(a *app) *cobra.Command {
 	f.StringVar(&k8s.Namespace, "namespace", "", "k8s: namespace, which must already exist")
 	f.StringVar(&k8s.Registry, "registry", "", "k8s: registry prefix images are pushed to")
 	f.StringVar(&k8s.Platform, "platform", "", "k8s: platform to build for (default linux/amd64)")
-	f.StringVar(&k8s.StorageSize, "storage-size", "", "k8s: PVC size per container (default 20Gi)")
+	f.StringVar(&k8s.StorageSize, "storage-size", "", "k8s: PVC size per container (default 1Gi)")
 	f.StringVar(&k8s.StorageClass, "storage-class", "", "k8s: storage class (default: the cluster's)")
 	f.StringVar(&k8s.ServiceAccount, "service-account", "", "k8s: service account for the pod")
 	f.StringVar(&k8s.ImagePullSecret, "image-pull-secret", "", "k8s: secret for pulling the built image")
@@ -230,7 +230,7 @@ func k8sSettings(cfg *k8s.Config, stored k8s.Config, kubeContext, kubeNamespace 
 		// No default worth guessing, and nothing works without it.
 		{&cfg.Registry, stored.Registry, "registry prefix to push images to", "", true},
 		{&cfg.Platform, stored.Platform, "platform to build for", "linux/amd64", true},
-		{&cfg.StorageSize, stored.StorageSize, "volume size per container", "20Gi", true},
+		{&cfg.StorageSize, stored.StorageSize, "volume size per container", "1Gi", true},
 		{&cfg.StorageClass, stored.StorageClass, "storage class (blank for the cluster default)", "", false},
 		{&cfg.ServiceAccount, stored.ServiceAccount, "service account (blank for the namespace default)", "", false},
 		{&cfg.ImagePullSecret, stored.ImagePullSecret, "image pull secret (blank if the nodes can pull)", "", false},
@@ -262,7 +262,7 @@ func mergeK8s(flags, stored k8s.Config) k8s.Config {
 // and asking again would make the flags pointless. Defaults come from the
 // stored provider first and the kubeconfig second, so re-running configure to
 // change one setting and pressing return through the rest is a no-op rather
-// than a reset to linux/amd64 and 20Gi.
+// than a reset to linux/amd64 and 1Gi.
 func promptK8s(ctx context.Context, p *prompter, flags, stored k8s.Config) (k8s.Config, error) {
 	kubeContext, kubeNamespace := k8s.KubeconfigDefaults(ctx)
 	cfg := flags
