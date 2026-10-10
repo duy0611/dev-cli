@@ -191,7 +191,7 @@ func TestConfigShowPrintsTheStoredConfig(t *testing.T) {
 	}
 	out.Reset()
 
-	if err := runContainerConfigShow(a, "", "demo"); err != nil {
+	if err := runContainerConfigShow(t.Context(), a, "", "demo"); err != nil {
 		t.Fatalf("config show: %v", err)
 	}
 	if !strings.Contains(out.String(), "apt-get-packages") {
@@ -212,7 +212,7 @@ func TestConfigShowPrintsTheMergedConfig(t *testing.T) {
 	}
 	out.Reset()
 
-	if err := runContainerConfigShow(a, "", "owned"); err != nil {
+	if err := runContainerConfigShow(t.Context(), a, "", "owned"); err != nil {
 		t.Fatalf("config show: %v", err)
 	}
 	// The mount dev added is the whole point: it is the one thing that is in
@@ -238,7 +238,7 @@ func TestConfigShowPrintsTheProjectFileWhenStateIsOff(t *testing.T) {
 	}
 	out.Reset()
 
-	if err := runContainerConfigShow(a, "", "plain"); err != nil {
+	if err := runContainerConfigShow(t.Context(), a, "", "plain"); err != nil {
 		t.Fatalf("config show: %v", err)
 	}
 	if strings.Contains(out.String(), dcgen.StateDir) {
@@ -262,7 +262,7 @@ func TestConfigShowPrintsOnlyJSONToStdout(t *testing.T) {
 	}
 	out.Reset()
 
-	if err := runContainerConfigShow(a, "", "owned"); err != nil {
+	if err := runContainerConfigShow(t.Context(), a, "", "owned"); err != nil {
 		t.Fatalf("config show: %v", err)
 	}
 	var doc map[string]any
@@ -284,7 +284,7 @@ func TestConfigShowReportsAnUnparseableProjectFile(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	err := runContainerConfigShow(a, "", "broken")
+	err := runContainerConfigShow(t.Context(), a, "", "broken")
 	if err == nil {
 		t.Fatal("config show printed a document for a file that does not parse")
 	}
@@ -390,7 +390,7 @@ func TestRebuildToolsRewritesTheStoredConfig(t *testing.T) {
 
 	// The rebuild itself needs an engine; this asserts the rewrite, which is
 	// the part that belongs to dev.
-	if err := rewriteGeneratedTools(a, "", "demo", []string{"+python"}); err != nil {
+	if err := rewriteGeneratedTools(t.Context(), a, "", "demo", []string{"+python"}); err != nil {
 		t.Fatalf("rewrite: %v", err)
 	}
 
@@ -421,7 +421,7 @@ func TestRebuildToolsRefusesAProjectOwnedContainer(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	err := rewriteGeneratedTools(a, "", "owned", []string{"+yq"})
+	err := rewriteGeneratedTools(t.Context(), a, "", "owned", []string{"+yq"})
 	if err == nil {
 		t.Fatal("--tools rewrote a project-owned container")
 	}
@@ -544,7 +544,7 @@ func TestRebuildToolsKeepsTheVolumeMount(t *testing.T) {
 	if err := runContainerCreate(t.Context(), a, "", "scratch", "", opts); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if err := rewriteGeneratedTools(a, "", "scratch", []string{"+node"}); err != nil {
+	if err := rewriteGeneratedTools(t.Context(), a, "", "scratch", []string{"+node"}); err != nil {
 		t.Fatalf("rewriteGeneratedTools: %v", err)
 	}
 
@@ -679,7 +679,7 @@ func TestRebuildToolsKeepsTheStateMount(t *testing.T) {
 	if err := runContainerCreate(t.Context(), a, "", "scratch", "", opts); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if err := rewriteGeneratedTools(a, "", "scratch", []string{"+node"}); err != nil {
+	if err := rewriteGeneratedTools(t.Context(), a, "", "scratch", []string{"+node"}); err != nil {
 		t.Fatalf("rewriteGeneratedTools: %v", err)
 	}
 
@@ -712,7 +712,7 @@ func TestRebuildToolsAddsNoStateMountWhenOff(t *testing.T) {
 	if err := runContainerCreate(t.Context(), a, "", "scratch", "", opts); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if err := rewriteGeneratedTools(a, "", "scratch", []string{"+node"}); err != nil {
+	if err := rewriteGeneratedTools(t.Context(), a, "", "scratch", []string{"+node"}); err != nil {
 		t.Fatalf("rewriteGeneratedTools: %v", err)
 	}
 

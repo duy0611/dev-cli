@@ -104,6 +104,29 @@ func TestSmokeGitGuard(t *testing.T) {
 	}
 	_ = os.Remove(filepath.Join(project, ".git", "commondir"))
 
+	// A core.hooksPath set on the host after create — `make hooks`, husky —
+	// points host git into the workspace. The running container predates it,
+	// so it is refused until a rebuild gives it the read-only mount.
+	hooksDir := filepath.Join(project, ".githooks")
+	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hooksDir, "commit-msg"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitHost := exec.Command("git", "config", "core.hooksPath", ".githooks")
+	gitHost.Dir = project
+	if out, err := gitHost.CombinedOutput(); err != nil {
+		t.Fatalf("git config: %v\n%s", err, out)
+	}
+	if out := runExpectFail(t, bin, "container", "exec", name, "--", "true"); !strings.Contains(out, "rebuild") {
+		t.Errorf("a container predating core.hooksPath was not refused:\n%s", out)
+	}
+	dev("container", "rebuild", name)
+	tree := "/workspaces/" + filepath.Base(project) + "/.githooks"
+	sh("if echo pwned >> " + tree + "/commit-msg 2>/dev/null; then echo WROTE; else echo refused; fi | grep -q refused")
+	sh("if mv " + tree + " " + tree + ".old 2>/dev/null; then echo MOVED; else echo refused; fi | grep -q refused")
+
 	// The audit log holds the run, and no setting value.
 	if out := dev("audit", "--container", name); !strings.Contains(out, "create") || !strings.Contains(out, "exec") {
 		t.Errorf("audit log incomplete:\n%s", out)

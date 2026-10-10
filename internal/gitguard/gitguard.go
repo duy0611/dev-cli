@@ -15,8 +15,13 @@
 // a project that names its own workspace mount — a fingerprint taken before
 // a command is compared after it.
 //
-// This package reads and copies; it never runs git and never writes into a
-// project's folder. The CLI decides when.
+// The working tree is the third place host git runs from, when its config
+// points there: a core.hooksPath into the checkout, an include naming a file in
+// it. FindTree asks host git for those — read-only queries, with fsmonitor
+// forced off — and TreeBinds holds them read-only the same way.
+//
+// This package reads, copies and asks git; it never changes a repository and
+// never writes into a project's folder. The CLI decides when.
 package gitguard
 
 import (

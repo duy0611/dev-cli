@@ -516,7 +516,7 @@ func newContainerStartCmd(a *app) *cobra.Command {
 		Short: "Start a container, creating it if the engine has none",
 		Args:  exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			t, err := a.resolve(workspace, args[0])
+			t, err := a.resolve(cmd.Context(), workspace, args[0])
 			if err != nil {
 				return err
 			}
@@ -560,12 +560,17 @@ func (a *app) start(ctx context.Context, workspace string, c model.Container) er
 	// outside dev — and that is when the hooks copy should match the project.
 	// Re-seeding a stopped container's copy on start would only discard what
 	// the container installed, which rebuild already does deliberately.
-	plan, err := a.planGitGuard(c, c.WorktreeRepo, true)
+	plan, err := a.planGitGuard(ctx, c, c.WorktreeRepo, true, overridesConfig(p))
 	if err != nil {
-		return err
+		return a.recordRefusal(c, err)
 	}
 	if overridesConfig(p) {
 		c.GitGuardMounts = plan.mounts
+	}
+	// A stopped container keeps the mounts it was created with, and start
+	// only restarts it.
+	if err := a.checkTreeMounts(ctx, p, c, plan); err != nil {
+		return err
 	}
 	c, cleanup, err := materialise(c, overridesConfig(p))
 	if err != nil {
@@ -578,7 +583,7 @@ func (a *app) start(ctx context.Context, workspace string, c model.Container) er
 	// that does not exist yet just as rebuild does. A start of an existing,
 	// stopped container re-reads nothing, but telling the two apart would
 	// need the engine's answer first — and the check is the cheaper question.
-	cc, err := readConfig(ctx, p, c)
+	cc, err := readConfig(ctx, p, c, plan)
 	if err != nil {
 		return err
 	}
@@ -622,7 +627,7 @@ func newContainerStopCmd(a *app) *cobra.Command {
 		Short: "Stop a running container",
 		Args:  exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			t, err := a.resolve(workspace, args[0])
+			t, err := a.resolve(cmd.Context(), workspace, args[0])
 			if err != nil {
 				return err
 			}
@@ -664,7 +669,7 @@ func newContainerRemoveCmd(a *app) *cobra.Command {
 }
 
 func runContainerRemove(ctx context.Context, a *app, workspace, name string, force bool) error {
-	t, err := a.resolve(workspace, name)
+	t, err := a.resolve(ctx, workspace, name)
 	if err != nil {
 		return err
 	}
@@ -722,17 +727,17 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 			if tools := parseToolList(toolList); len(tools) > 0 {
 				// Before resolve, so the rebuild materialises the new
 				// configuration rather than the one being replaced.
-				if err := rewriteGeneratedTools(a, workspace, args[0], tools); err != nil {
+				if err := rewriteGeneratedTools(cmd.Context(), a, workspace, args[0], tools); err != nil {
 					return err
 				}
 			}
 
-			t, err := a.resolve(workspace, args[0])
+			t, err := a.resolve(cmd.Context(), workspace, args[0])
 			if err != nil {
 				return err
 			}
 			defer t.release()
-			if err := t.requireOverride(); err != nil {
+			if err := t.requireOverride(a); err != nil {
 				return err
 			}
 			environ, err := a.containerEnv(cmd.Context(), t.container)
@@ -754,7 +759,7 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 			// --accept-config is the operator's review of exactly that.
 			// Only create can grant --allow-privileged, so an escape refusal
 			// means recreate — the moment to think about it.
-			cc, err := readConfig(cmd.Context(), t.provider, t.container)
+			cc, err := readConfig(cmd.Context(), t.provider, t.container, t.gitGuard)
 			if err != nil {
 				return err
 			}
@@ -768,7 +773,9 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 			// Re-seeded after every refusal, so a refused rebuild leaves the
 			// container exactly as it was: the reset discards whatever hooks
 			// the container installed, which is the point of a rebuild.
-			if _, err := a.planGitGuard(t.container, t.container.WorktreeRepo, true); err != nil {
+			// Unseeded, resolve already planned the mounts the rebuilt
+			// container gets; this only resets the hooks copy.
+			if _, _, err := a.planGitDir(t.container, t.container.WorktreeRepo, true); err != nil {
 				return err
 			}
 			if err := t.provider.Rebuild(cmd.Context(), t.container, environ, noCache); err != nil {
@@ -815,7 +822,7 @@ func newContainerLogsCmd(a *app) *cobra.Command {
 		Short: "Show a container's logs",
 		Args:  exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			t, err := a.resolve(workspace, args[0])
+			t, err := a.resolve(cmd.Context(), workspace, args[0])
 			if err != nil {
 				return err
 			}
@@ -853,7 +860,7 @@ func newContainerSyncCmd(a *app) *cobra.Command {
 }
 
 func runContainerSync(ctx context.Context, a *app, workspace, name string) error {
-	t, err := a.resolve(workspace, name)
+	t, err := a.resolve(ctx, workspace, name)
 	if err != nil {
 		return err
 	}
@@ -920,12 +927,12 @@ func newContainerShellCmd(a *app) *cobra.Command {
 }
 
 func runContainerShell(ctx context.Context, a *app, workspace, name string, kubeToken bool, sshOverride *bool) error {
-	t, err := a.resolve(workspace, name)
+	t, err := a.resolve(ctx, workspace, name)
 	if err != nil {
 		return err
 	}
 	defer t.release()
-	if err := t.requireOverride(); err != nil {
+	if err := t.requireOverride(a); err != nil {
 		return err
 	}
 	if err := a.requireRunning(ctx, t); err != nil {
@@ -951,7 +958,7 @@ func runContainerShell(ctx context.Context, a *app, workspace, name string, kube
 
 	shell := detectShell(ctx, t)
 	started := time.Now()
-	err = a.guardedRun(t, func() error {
+	err = a.guardedRun(ctx, t, func() error {
 		return t.provider.Exec(ctx, t.container, []string{shell}, provider.ExecOpts{
 			Env:    environ,
 			TTY:    true,
@@ -1029,12 +1036,12 @@ func runContainerExec(ctx context.Context, a *app, workspace, name string, comma
 		return usageErrorf("no command given; use: dev container exec %s -- CMD [ARGS...]", name)
 	}
 
-	t, err := a.resolve(workspace, name)
+	t, err := a.resolve(ctx, workspace, name)
 	if err != nil {
 		return err
 	}
 	defer t.release()
-	if err := t.requireOverride(); err != nil {
+	if err := t.requireOverride(a); err != nil {
 		return err
 	}
 	if err := a.requireRunning(ctx, t); err != nil {
@@ -1059,7 +1066,7 @@ func runContainerExec(ctx context.Context, a *app, workspace, name string, comma
 	defer stopAgent()
 
 	started := time.Now()
-	err = a.guardedRun(t, func() error {
+	err = a.guardedRun(ctx, t, func() error {
 		return t.provider.Exec(ctx, t.container, command, provider.ExecOpts{
 			Env:    environ,
 			Stdin:  os.Stdin,

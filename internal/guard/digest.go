@@ -125,6 +125,48 @@ func DigestOf(merged []byte, configPath string, composeFiles []string) (Digest, 
 	return d, nil
 }
 
+// WithoutMounts returns merged with every mounts entry whose target is in
+// targets removed, in either spelling the CLI accepts. For mounts that follow
+// the host rather than the project — the git tree guard's, which come and go
+// with the operator's own git config — so a digest does not call a host-side
+// `git config` a changed configuration. Unchanged when nothing matches.
+func WithoutMounts(merged []byte, targets []string) ([]byte, error) {
+	if len(targets) == 0 {
+		return merged, nil
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(merged, &doc); err != nil {
+		return nil, fmt.Errorf("reading the merged configuration: %w", err)
+	}
+	raw, ok := doc["mounts"]
+	if !ok {
+		return merged, nil
+	}
+	var mounts []json.RawMessage
+	if err := json.Unmarshal(raw, &mounts); err != nil {
+		return nil, fmt.Errorf("reading the merged configuration's mounts: %w", err)
+	}
+	kept := mounts[:0]
+	for _, m := range mounts {
+		parsed, err := parseMount(m)
+		if err != nil {
+			return nil, err
+		}
+		if !slices.Contains(targets, parsed.target) {
+			kept = append(kept, m)
+		}
+	}
+	if len(kept) == len(mounts) {
+		return merged, nil
+	}
+	b, err := json.Marshal(kept)
+	if err != nil {
+		return nil, err
+	}
+	doc["mounts"] = b
+	return json.Marshal(doc)
+}
+
 // Diff names what differs between two digests: the top-level fields of the
 // merged configuration that changed, appeared or went, and the files whose
 // content changed. Sorted, so the list reads the same every time.

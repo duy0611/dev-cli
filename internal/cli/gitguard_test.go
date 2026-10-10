@@ -309,3 +309,124 @@ func stubTamperingExec(t *testing.T, path string) {
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
+
+// isolateGit keeps the operator's own git config out of a test: what host git
+// reports as running from the tree has to be only what the test set.
+func isolateGit(t *testing.T) {
+	t.Helper()
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+}
+
+// stubEngineWithMounts is stubEngineDocker whose container reports mounts,
+// as `docker inspect --format '{{json .Mounts}}'` prints them. Empty mounts is
+// an engine with no container at all.
+func stubEngineWithMounts(t *testing.T, mounts string) {
+	t.Helper()
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "mounts.json"), mounts)
+	writeFile(t, filepath.Join(dir, "docker"),
+		"#!/bin/sh\n[ -s '"+filepath.Join(dir, "mounts.json")+"' ] || exit 0\ncase \"$*\" in\n  *State*) echo running ;;\n  inspect*) cat '"+filepath.Join(dir, "mounts.json")+"' ;;\n  ps*) echo abc123 ;;\nesac\nexit 0\n")
+	if err := os.Chmod(filepath.Join(dir, "docker"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// A core.hooksPath pointed into the checkout — what `make hooks` used to do
+// here, and what husky does — is mounted read-only, with its parents pinned.
+func TestHooksPathInTheCheckoutIsMountedReadOnly(t *testing.T) {
+	isolateGit(t)
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	calls, captured := stubCapturingDevcontainer(t)
+	root := gitRepoWithConfig(t, `{"image":"ubuntu"}`)
+	writeFile(t, filepath.Join(root, "tools", "hooks", "commit-msg"), "#!/bin/sh\n")
+	gitIn(t, root, "config", "core.hooksPath", "tools/hooks")
+	// No container yet, so start creates one rather than checking its mounts.
+	stubEngineWithMounts(t, "")
+
+	if err := runContainerCreate(t.Context(), a, "", "api", root, createOpts{}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	ws := "/workspaces/" + filepath.Base(root)
+	mounts := mountsUsedForUp(t, calls, captured)
+	if !hasMount(mounts, ws+"/tools/hooks", true) || !hasMount(mounts, ws+"/tools", false) {
+		t.Errorf("tree mounts missing:\n  %s", strings.Join(mounts, "\n  "))
+	}
+}
+
+// A hooksPath that does not exist yet cannot be mounted, and the container
+// creating it would be the same as editing it: refused, and recorded.
+func TestMissingHooksPathInTheCheckoutIsRefused(t *testing.T) {
+	isolateGit(t)
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	stubCapturingDevcontainer(t)
+	root := gitRepoWithConfig(t, `{"image":"ubuntu"}`)
+	gitIn(t, root, "config", "core.hooksPath", ".husky")
+
+	err := runContainerCreate(t.Context(), a, "", "api", root, createOpts{})
+	if err == nil || !strings.Contains(err.Error(), ".husky") || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("create = %v", err)
+	}
+	refused := auditEntries(t, audit.Filter{Events: []string{"refused"}})
+	if len(refused) != 1 || refused[0].Fields["reason"] != "git" {
+		t.Errorf("refused records = %+v", refused)
+	}
+}
+
+// The setting usually arrives after the container: `make hooks` run on the
+// host later. A running container without the mount is refused, naming
+// rebuild, since mounts are fixed at create.
+func TestContainerPredatingTheHooksPathIsRefused(t *testing.T) {
+	isolateGit(t)
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	stubCapturingDevcontainer(t)
+	root := gitRepoWithConfig(t, `{"image":"ubuntu"}`)
+	if err := runContainerCreate(t.Context(), a, "", "api", root, createOpts{}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	ws := "/workspaces/" + filepath.Base(root)
+	stubEngineWithMounts(t, `[{"Destination":"`+ws+`","RW":true}]`)
+	if err := runContainerExec(t.Context(), a, "", "api", []string{"true"}, false, nil); err != nil {
+		t.Fatalf("exec before the setting: %v", err)
+	}
+
+	writeFile(t, filepath.Join(root, ".githooks", "commit-msg"), "#!/bin/sh\n")
+	gitIn(t, root, "config", "core.hooksPath", ".githooks")
+	err := runContainerExec(t.Context(), a, "", "api", []string{"true"}, false, nil)
+	if err == nil || !strings.Contains(err.Error(), "rebuild") || !strings.Contains(err.Error(), ws+"/.githooks") {
+		t.Fatalf("exec = %v", err)
+	}
+
+	// Rebuilt with it, the same exec runs.
+	stubEngineWithMounts(t, `[{"Destination":"`+ws+`","RW":true},{"Destination":"`+ws+`/.githooks","RW":false}]`)
+	if err := runContainerExec(t.Context(), a, "", "api", []string{"true"}, false, nil); err != nil {
+		t.Fatalf("exec with the mount: %v", err)
+	}
+}
+
+// Where .git lands is unknown, so nothing can be mounted: the tree's hooks are
+// fingerprinted around the command with the rest.
+func TestCustomWorkspaceMountFingerprintsTheTreeHooks(t *testing.T) {
+	isolateGit(t)
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	stubCapturingDevcontainer(t)
+	root := gitRepoWithConfig(t, `{"image":"ubuntu","workspaceFolder":"/src"}`)
+	hook := filepath.Join(root, ".githooks", "commit-msg")
+	writeFile(t, hook, "#!/bin/sh\n")
+	gitIn(t, root, "config", "core.hooksPath", ".githooks")
+	stubEngineDocker(t)
+	if err := runContainerCreate(t.Context(), a, "", "api", root, createOpts{}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	stubTamperingExec(t, hook)
+	err := runContainerExec(t.Context(), a, "", "api", []string{"tamper"}, false, nil)
+	if err == nil || !strings.Contains(err.Error(), "commit-msg") {
+		t.Fatalf("tampering not reported: %v", err)
+	}
+}

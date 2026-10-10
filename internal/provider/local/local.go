@@ -5,6 +5,7 @@ package local
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -270,6 +271,34 @@ func (p *Provider) Logs(ctx context.Context, c model.Container, follow bool, out
 	cmd.Stdout = out
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// Mounts reports the mounts an existing container was created with.
+func (p *Provider) Mounts(ctx context.Context, c model.Container) ([]provider.Mount, bool, error) {
+	id, err := p.containerID(ctx, c)
+	if err != nil || id == "" {
+		return nil, false, err
+	}
+	out, err := output(ctx, dockerBin, "inspect", "--format", "{{json .Mounts}}", id)
+	if err != nil {
+		return nil, true, err
+	}
+	var raw []struct {
+		Destination string
+		RW          bool
+	}
+	// Empty output is a container with no mounts as far as the caller is
+	// concerned; an engine that answers in some other shape is not.
+	if line := first(out); line != "" && line != "null" {
+		if err := json.Unmarshal([]byte(line), &raw); err != nil {
+			return nil, true, fmt.Errorf("reading the mounts of container %s: %w", c.Name, err)
+		}
+	}
+	mounts := make([]provider.Mount, len(raw))
+	for i, m := range raw {
+		mounts[i] = provider.Mount{Destination: m.Destination, ReadOnly: !m.RW}
+	}
+	return mounts, true, nil
 }
 
 // containerID returns the engine's id for a container, or "" when there is

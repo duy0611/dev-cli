@@ -494,7 +494,7 @@ func TestRebuildToolsKeepsTheWorktreeMount(t *testing.T) {
 		baseOpts(repo, filepath.Join(t.TempDir(), "wt"))); err != nil {
 		t.Fatal(err)
 	}
-	if err := rewriteGeneratedTools(a, "", "feat", []string{"+node"}); err != nil {
+	if err := rewriteGeneratedTools(t.Context(), a, "", "feat", []string{"+node"}); err != nil {
 		t.Fatalf("rebuild --tools: %v", err)
 	}
 
@@ -532,7 +532,7 @@ func TestRebuildToolsInventsNoWorktreeMount(t *testing.T) {
 		createOpts{generate: true, noStart: true, tools: []string{"yq"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := rewriteGeneratedTools(a, "", "plain", []string{"+node"}); err != nil {
+	if err := rewriteGeneratedTools(t.Context(), a, "", "plain", []string{"+node"}); err != nil {
 		t.Fatalf("rebuild --tools: %v", err)
 	}
 

@@ -506,7 +506,7 @@ func runWorktreeRemove(ctx context.Context, a *app, workspace, name string, forc
 
 	// The container from the engine first, so a --force removal of a dirty
 	// checkout is not racing an agent still writing into it.
-	t, err := a.resolve(workspace, name)
+	t, err := a.resolve(ctx, workspace, name)
 	if err != nil {
 		return err
 	}

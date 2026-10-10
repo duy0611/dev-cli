@@ -92,7 +92,7 @@ func (f *findings) add(what, from string) {
 
 // mount is the part of a mounts entry that matters here.
 type mount struct {
-	kind, source string
+	kind, source, target string
 }
 
 // parseMount reads either spelling the CLI accepts: the string
@@ -105,11 +105,12 @@ func parseMount(raw json.RawMessage) (mount, error) {
 	var obj struct {
 		Type   string `json:"type"`
 		Source string `json:"source"`
+		Target string `json:"target"`
 	}
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		return mount{}, fmt.Errorf("reading a mounts entry %s: %w", raw, err)
 	}
-	return mount{kind: obj.Type, source: obj.Source}, nil
+	return mount{kind: obj.Type, source: obj.Source, target: obj.Target}, nil
 }
 
 // parseMountString reads docker's --mount syntax, which is also
@@ -124,6 +125,8 @@ func parseMountString(s string) mount {
 			m.kind = v
 		case "source", "src":
 			m.source = v
+		case "target", "dst", "destination":
+			m.target = v
 		}
 	}
 	return m

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -239,8 +240,8 @@ func applyFrom(a *app, wsName string, opts *createOpts) error {
 // Reads the current set back out of the stored document rather than from a
 // column of its own, so a configuration edited by hand is still something this
 // can reason about.
-func rewriteGeneratedTools(a *app, workspace, name string, spec []string) error {
-	t, err := a.resolve(workspace, name)
+func rewriteGeneratedTools(ctx context.Context, a *app, workspace, name string, spec []string) error {
+	t, err := a.resolve(ctx, workspace, name)
 	if err != nil {
 		return err
 	}

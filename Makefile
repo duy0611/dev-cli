@@ -97,13 +97,21 @@ install: build
 	install -m 0755 $(BIN) $(PREFIX)/bin/dev
 	@echo "installed $(PREFIX)/bin/dev"
 
-# Point git at the hooks this repository tracks. core.hooksPath lives in
-# .git/config, which no clone inherits, so a fresh checkout has to run this or
-# the hooks are simply not there — and a hook that is quietly absent is worse
-# than none, since the rule it enforces looks handled.
+# Install the hooks this repository tracks. Nothing under .git travels with a
+# clone, so a fresh checkout has to run this or the hooks are simply not there —
+# and a hook that is quietly absent is worse than none, since the rule it
+# enforces looks handled.
+#
+# Copied into .git/hooks rather than named by core.hooksPath: host git would
+# then run .githooks straight from the working tree, which a container's agent
+# can edit, and dev guards .git/hooks but not the tree. Re-run this after
+# reviewing a change to .githooks; the hook warns when its copy is stale. The
+# path is the common directory's, never --git-path hooks, which follows a
+# hooksPath and would copy the files onto themselves.
 hooks:
-	git config core.hooksPath .githooks
-	@echo "git hooks enabled from .githooks"
+	@if git config --local --get core.hooksPath >/dev/null; then git config --local --unset core.hooksPath; fi
+	install -m 0755 .githooks/* "$$(git rev-parse --git-common-dir)/hooks/"
+	@echo "git hooks installed from .githooks"
 
 # The relay binaries go too — they are build output, and gitignored. The README
 # beside them stays: the embed names the directory, and one that matches nothing
