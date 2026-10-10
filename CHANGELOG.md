@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/duy0611/dev-cli/compare/v0.10.0...v0.11.0) (2026-10-10)
+
+
+### Features
+
+* **cli:** hold read-only what host git runs from the working tree ([721cec1](https://github.com/duy0611/dev-cli/commit/721cec15d2665dc2b89ea9ea23908ed352c67b72))
+
 ## [0.10.0](https://github.com/duy0611/dev-cli/compare/v0.9.0...v0.10.0) (2026-10-09)
 
 
