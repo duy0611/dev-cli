@@ -25,6 +25,56 @@ func (s *Store) CreateWorkspace(w model.Workspace) error {
 	return nil
 }
 
+// CloneWorkspace inserts w and copies every setting of the workspace src onto
+// it, returning how many were copied. One transaction, so a failure part-way
+// leaves no workspace rather than one holding half its settings — which would
+// launch containers missing a token with nothing to say so. Specs are copied
+// as specs; nothing is resolved here or anywhere in this layer.
+func (s *Store) CloneWorkspace(src string, w model.Workspace) (int, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("cloning workspace %s: %w", src, err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op once the commit below succeeds
+
+	// Checked inside the transaction: the copy below selects by name, and a
+	// missing source would otherwise copy nothing and succeed.
+	var one int
+	if err := tx.QueryRow(`SELECT 1 FROM workspaces WHERE name = ?`, src).Scan(&one); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, ErrNotFound
+		}
+		return 0, fmt.Errorf("cloning workspace %s: %w", src, err)
+	}
+
+	if _, err := tx.Exec(
+		`INSERT INTO workspaces (name, provider_name, ssh_forward, created_at)
+		 VALUES (?, ?, ?, ?)`,
+		w.Name, w.ProviderName, boolToInt(w.SSHForward), nowString()); err != nil {
+		if isUniqueViolation(err) {
+			return 0, ErrExists
+		}
+		return 0, fmt.Errorf("creating workspace %s: %w", w.Name, err)
+	}
+
+	res, err := tx.Exec(
+		`INSERT INTO workspace_settings (workspace_name, key, spec)
+		 SELECT ?, key, spec FROM workspace_settings WHERE workspace_name = ?`,
+		w.Name, src)
+	if err != nil {
+		return 0, fmt.Errorf("copying settings from workspace %s: %w", src, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("copying settings from workspace %s: %w", src, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("cloning workspace %s: %w", src, err)
+	}
+	return int(n), nil
+}
+
 func (s *Store) GetWorkspace(name string) (model.Workspace, error) {
 	row := s.db.QueryRow(
 		`SELECT name, provider_name, ssh_forward, created_at

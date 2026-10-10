@@ -933,7 +933,7 @@ Exit codes: `0` success, `1` the work failed, `2` the request was malformed,
 dev provider configure NAME --kind local
 dev provider configure NAME --kind k8s [--context CTX] [--namespace NS]
                                        [--registry PREFIX] [--platform linux/amd64]
-                                       [--storage-size 20Gi] [--storage-class SC]
+                                       [--storage-size 1Gi] [--storage-class SC]
                                        [--service-account SA] [--image-pull-secret NAME]
 dev provider list
 dev provider remove NAME
@@ -946,7 +946,7 @@ dev provider remove NAME
 | `--namespace` | k8s | must already exist; `dev` creates no namespaces |
 | `--registry` | k8s | prefix images are pushed to and pulled from; required |
 | `--platform` | k8s | what to build for; default `linux/amd64` |
-| `--storage-size` | k8s | PVC size per container; default `20Gi` |
+| `--storage-size` | k8s | PVC size per container; default `1Gi` |
 | `--storage-class` | k8s | optional; default is the cluster's |
 | `--service-account` | k8s | optional; default is the namespace's |
 | `--image-pull-secret` | k8s | optional; needed when the image is private |
@@ -966,6 +966,7 @@ what makes that route safe.
 
 ```
 dev workspace init NAME --provider NAME [--ssh-forward]
+dev workspace init NAME --from WORKSPACE [--provider NAME] [--ssh-forward]
 dev workspace use NAME
 dev workspace list
 dev workspace set KEY SPEC
@@ -980,6 +981,20 @@ length of each `dev` command, and signs commits with its first key. See
 It is fixed at `init`: there is no flag to change it afterwards. A single
 command can override it with `--ssh-agent` or `--no-ssh-agent`; a workspace that
 needs the other default for good is a new workspace.
+
+`--from` starts a workspace as a copy of another: the same provider, the same
+`--ssh-forward` choice, and every setting. `--provider` and `--ssh-forward`
+given alongside it override what is copied, which is how to put one set of
+settings on a second provider:
+
+```sh
+dev workspace init staging --from personal --provider prod
+```
+
+The provider is shared, not duplicated — a later `provider configure` changes
+it for both workspaces. Settings are copied as specs, never resolved, and after
+the copy each workspace's settings change independently. Containers are not
+copied.
 
 | Spec | Resolved by |
 |---|---|

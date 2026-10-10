@@ -245,6 +245,66 @@ func TestSettingsUpsertAndOrder(t *testing.T) {
 	}
 }
 
+func TestCloneWorkspaceCopiesSettings(t *testing.T) {
+	s := openTest(t)
+	seed(t, s)
+	for k, v := range map[string]string{"A_KEY": "literal:a", "B_KEY": "op://v/i/f"} {
+		if err := s.SetSetting("ws", k, v); err != nil {
+			t.Fatalf("SetSetting: %v", err)
+		}
+	}
+
+	n, err := s.CloneWorkspace("ws", model.Workspace{Name: "copy", ProviderName: "local", SSHForward: true})
+	if err != nil {
+		t.Fatalf("CloneWorkspace: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("copied %d settings, want 2", n)
+	}
+
+	w, err := s.GetWorkspace("copy")
+	if err != nil {
+		t.Fatalf("GetWorkspace: %v", err)
+	}
+	if w.ProviderName != "local" || !w.SSHForward {
+		t.Errorf("clone = %+v, want provider local with ssh forwarding", w)
+	}
+	got, err := s.ListSettings("copy")
+	if err != nil {
+		t.Fatalf("ListSettings: %v", err)
+	}
+	want := []model.Setting{{Key: "A_KEY", Spec: "literal:a"}, {Key: "B_KEY", Spec: "op://v/i/f"}}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("clone settings = %v, want %v", got, want)
+	}
+
+	// The copies are independent rows: changing one side leaves the other.
+	if err := s.UnsetSetting("copy", "A_KEY"); err != nil {
+		t.Fatalf("UnsetSetting: %v", err)
+	}
+	if src, _ := s.ListSettings("ws"); len(src) != 2 {
+		t.Errorf("source lost a setting to its clone: %v", src)
+	}
+}
+
+func TestCloneWorkspaceRefusesAndLeavesNothing(t *testing.T) {
+	s := openTest(t)
+	seed(t, s)
+	if err := s.SetSetting("ws", "A_KEY", "literal:a"); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+
+	if _, err := s.CloneWorkspace("ws", model.Workspace{Name: "ws", ProviderName: "local"}); !errors.Is(err, ErrExists) {
+		t.Errorf("clone onto an existing name: err = %v, want ErrExists", err)
+	}
+	if _, err := s.CloneWorkspace("nope", model.Workspace{Name: "copy", ProviderName: "local"}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("clone of a missing source: err = %v, want ErrNotFound", err)
+	}
+	if _, err := s.GetWorkspace("copy"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("a refused clone left a workspace behind: err = %v", err)
+	}
+}
+
 func TestActiveWorkspace(t *testing.T) {
 	s := openTest(t)
 	seed(t, s)
