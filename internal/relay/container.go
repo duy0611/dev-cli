@@ -8,7 +8,13 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"time"
 )
+
+// ownershipInterval is how often a relay checks that its socket path still
+// leads to it. A var so tests can shorten it; ten seconds is quick enough
+// that a stale relay does not linger, and a stat that often costs nothing.
+var ownershipInterval = 10 * time.Second
 
 // Serve runs the in-container half: it listens on socketPath and forwards every
 // connection over the framed stream to the host, which holds the real agent.
@@ -30,16 +36,28 @@ func Serve(socketPath string, in io.Reader, out io.Writer) error {
 	// safe and is what lets a session start after a crash.
 	_ = os.Remove(socketPath)
 
-	ln, err := net.Listen("unix", socketPath)
+	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
 	if err != nil {
 		return fmt.Errorf("listening on %s: %w", socketPath, err)
 	}
+	// Go unlinks a listener's path when it closes, whoever the path belongs to
+	// by then. After the host respawns a relay it belongs to the replacement,
+	// and this one closing late would pull the live socket out from under the
+	// session. removeIfMine does the removal instead, and only of our own.
+	ln.SetUnlinkOnClose(false)
 	defer func() { _ = ln.Close() }()
-	defer func() { _ = os.Remove(socketPath) }()
 
 	if err := os.Chmod(socketPath, 0o600); err != nil {
 		return fmt.Errorf("securing %s: %w", socketPath, err)
 	}
+
+	// The socket as created, so it can be told apart from a replacement at the
+	// same path later. The path alone cannot: both relays use it.
+	mine, err := os.Stat(socketPath)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", socketPath, err)
+	}
+	defer removeIfMine(socketPath, mine)
 
 	m := newMux(out)
 
@@ -80,7 +98,20 @@ func Serve(socketPath string, in io.Reader, out io.Writer) error {
 		}
 	}()
 
-	err = <-readerDone
+	// The interval is read here, not in the goroutine, so a test restoring it
+	// cannot race a watcher that has not been scheduled yet.
+	superseded := make(chan struct{})
+	go watchOwnership(socketPath, mine, ownershipInterval, done, superseded)
+
+	select {
+	case err = <-readerDone:
+	case <-superseded:
+		// The path leads to another relay now, or to nothing. No client can
+		// reach this one again, and its stream may never end — a host whose
+		// exec channel broke does not always close the far side — so standing
+		// down is the only way it stops before the container does.
+		err = nil
+	}
 	close(done)
 	m.shutdown()
 	wg.Wait()
@@ -131,6 +162,37 @@ func serveConn(m *mux, id uint32, p *pipe, conn net.Conn) {
 		if err != nil {
 			return
 		}
+	}
+}
+
+// watchOwnership closes superseded once path no longer leads to mine.
+func watchOwnership(path string, mine os.FileInfo, every time.Duration,
+	done <-chan struct{}, superseded chan<- struct{}) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-t.C:
+			if !isMine(path, mine) {
+				close(superseded)
+				return
+			}
+		}
+	}
+}
+
+// isMine reports whether path still names the socket this relay created.
+func isMine(path string, mine os.FileInfo) bool {
+	fi, err := os.Stat(path)
+	return err == nil && os.SameFile(fi, mine)
+}
+
+// removeIfMine removes path only if it is still this relay's socket.
+func removeIfMine(path string, mine os.FileInfo) {
+	if isMine(path, mine) {
+		_ = os.Remove(path)
 	}
 }
 
