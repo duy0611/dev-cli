@@ -174,3 +174,69 @@ func TestSmokeEscapeGuardAndDrift(t *testing.T) {
 	}
 	dev("container", "rebuild", name, "--accept-config")
 }
+
+// TestSmokeGitGuardSurvivesAHostConfigWrite checks that the read-only bind
+// over .git/config outlives host git rewriting the file.
+//
+// Host git writes config by lock-and-rename, so the path the bind was made on
+// ends up naming a new file. On a VM-backed engine sharing the folder over
+// virtiofs, that is suspected to drop the bind silently — leaving a container
+// recorded as guarded with a writable config. The IDE on the host writes this
+// file unprompted (branch.*.vscode-merge-base), so this is the ordinary case,
+// not a contrived one.
+func TestSmokeGitGuardSurvivesAHostConfigWrite(t *testing.T) {
+	requireBinaries(t, "devcontainer", "docker", "git")
+	t.Setenv("DEV_STATE", t.TempDir())
+	bin := buildBinary(t)
+	project := gitFixture(t)
+	const name = "dev-smoke-gitguard-rename"
+	dev := func(args ...string) string { t.Helper(); return run(t, bin, args...) }
+	t.Cleanup(func() { _ = exec.Command(bin, "container", "remove", name, "--force").Run() })
+
+	dev("provider", "configure", providerName, "--kind", "local")
+	dev("workspace", "init", workspaceName, "--provider", providerName)
+	t.Log("creating a guarded container; the first run pulls an image")
+	dev("container", "create", name, "--folder", project)
+
+	config := "/workspaces/" + filepath.Base(project) + "/.git/config"
+	// Both the mount table and a real write, because either alone could
+	// mislead: a bind can be listed and not enforce, or be gone and the write
+	// fail for some other reason.
+	probe := func() (mounted, writable bool, seen string) {
+		t.Helper()
+		out := dev("container", "exec", name, "--", "sh", "-c",
+			"if grep -q ' "+config+" ' /proc/self/mountinfo; then echo mounted=yes; else echo mounted=no; fi; "+
+				"if echo '# probe' >> "+config+" 2>/dev/null; then echo writable=yes; else echo writable=no; fi; "+
+				"grep -c smokemarker "+config+" || true")
+		t.Logf("probe:\n%s", out)
+		lines := strings.Fields(out)
+		return strings.Contains(out, "mounted=yes"), strings.Contains(out, "writable=yes"), lines[len(lines)-1]
+	}
+
+	mounted, writable, _ := probe()
+	if !mounted || writable {
+		t.Fatalf("before any host write: mounted=%v writable=%v; the guard never took hold", mounted, writable)
+	}
+
+	// What VS Code, or `git push -u` on the host, does to the file.
+	gitHost := exec.Command("git", "config", "dev.smokemarker", "1")
+	gitHost.Dir = project
+	if out, err := gitHost.CombinedOutput(); err != nil {
+		t.Fatalf("git config on the host: %v\n%s", err, out)
+	}
+
+	mounted, writable, seen := probe()
+	// Reported whichever way it goes: a bind that holds but pins the old
+	// inode shows the container a stale config, which is a finding too.
+	t.Logf("after a host write: mounted=%v writable=%v, container sees the host's change: %v", mounted, writable, seen != "0")
+	if !mounted || writable {
+		t.Errorf("a host write to .git/config dropped the guard: mounted=%v writable=%v", mounted, writable)
+	}
+	host, err := os.ReadFile(filepath.Join(project, ".git", "config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(host), "# probe") {
+		t.Errorf("a write from inside the container reached the host's .git/config:\n%s", host)
+	}
+}
