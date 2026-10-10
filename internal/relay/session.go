@@ -191,7 +191,7 @@ func open(ctx context.Context, run RunFunc, start StartFunc, binPath string, bin
 		retry:       retry,
 		pumpDone:    make(chan struct{}),
 	}
-	p, err := s.launch()
+	p, err := s.launch(ctx)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -204,8 +204,14 @@ func open(ctx context.Context, run RunFunc, start StartFunc, binPath string, bin
 // launch installs the relay if it is missing and starts it on the session's
 // socket. Install runs on every respawn, not just the first: a container that
 // restarted has an empty /tmp, and `test -x` makes the common case one exec.
-func (s *Session) launch() (*Pipes, error) {
-	if err := install(s.ctx, s.run, s.binPath, s.bin); err != nil {
+//
+// installCtx bounds the install alone. It is where a wedged engine hangs — an
+// exec it accepts and never answers — and a respawn stuck there would never
+// reach the budget, so the warning would never print. start keeps s.ctx: the
+// process it starts runs for the rest of the session, CommandContext would
+// kill it at any deadline, and starting it only forks a local process.
+func (s *Session) launch(installCtx context.Context) (*Pipes, error) {
+	if err := install(installCtx, s.run, s.binPath, s.bin); err != nil {
 		return nil, err
 	}
 	p, err := s.start(s.ctx, []string{s.binPath, s.Socket})
@@ -241,6 +247,16 @@ func (s *Session) pump() {
 			if s.closing.Load() {
 				s.mu.Unlock()
 				return // an ordinary shutdown; Close owns the pipes
+			}
+			if s.ctx.Err() != nil {
+				// The operator's command was cancelled — Ctrl-C, SIGTERM — and
+				// CommandContext killed the relay before the deferred Close
+				// arrived. That is the session ending, not the channel
+				// collapsing; recorded as a drop it would write a false
+				// "down since" into the audit log of every interrupted command.
+				// Left in place for Close, so the pipes are reaped exactly once.
+				s.mu.Unlock()
+				return
 			}
 			now := time.Now()
 			s.pipes = nil
@@ -288,7 +304,9 @@ func (s *Session) respawn(downSince time.Time, delay *time.Duration) bool {
 		}
 		*delay = min(*delay*2, s.retry.max)
 
-		p, err := s.launch()
+		attempt, cancel := context.WithDeadline(s.ctx, downSince.Add(s.retry.budget))
+		p, err := s.launch(attempt)
+		cancel()
 		if err != nil {
 			continue // engine still unreachable; the budget decides when to stop
 		}

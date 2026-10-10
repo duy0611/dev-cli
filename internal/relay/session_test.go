@@ -447,3 +447,68 @@ func TestSessionCancelledContextDoesNotWarn(t *testing.T) {
 		t.Errorf("a cancelled command warned: %q", got)
 	}
 }
+
+// TestSessionCancelledHealthyRecordsNoDrop: Ctrl-C cancels the command's
+// context, and exec.CommandContext kills the relay before the deferred Close
+// runs. That is the operator ending the session, not the channel collapsing,
+// and recording it as a drop would put a false "down since" in the audit log
+// of every interrupted session.
+func TestSessionCancelledHealthyRecordsNoDrop(t *testing.T) {
+	f := newFakeContainer(t)
+	captureStderr(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	suffix, _ := randomSuffix()
+	socket := "/tmp/.dev-agent-" + suffix + ".sock"
+	s, err := open(ctx, f.run, f.start, "/tmp/.dev-relay-test", buildRelay(t), socket, echoServer(t), testRetry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	waitForSocket(t, f.socketPath(socket))
+
+	cancel()
+	// Long enough for the killed relay's EOF to reach the pump before Close,
+	// which is the order a real interrupt produces.
+	time.Sleep(100 * time.Millisecond)
+	_ = s.Close()
+
+	if d := s.Drops(); len(d) != 0 {
+		t.Errorf("drops = %+v, want none for an interrupted session", d)
+	}
+	if got := s.End(); got == EndUnexpected {
+		t.Errorf("End() = %q for an interrupted session", got)
+	}
+}
+
+// TestSessionHungLaunchStillGivesUp: after a wake, a wedged engine can accept
+// an exec and never answer it. An attempt stuck there must still end at the
+// budget, or the warning — the only sign signing has broken — never prints.
+func TestSessionHungLaunchStillGivesUp(t *testing.T) {
+	f := newFakeContainer(t)
+	stderr := captureStderr(t)
+
+	var hang atomic.Bool
+	run := func(ctx context.Context, cmd []string, stdin io.Reader) (string, error) {
+		if hang.Load() {
+			<-ctx.Done() // the engine never answers; only the context ends it
+			return "", ctx.Err()
+		}
+		return f.run(ctx, cmd, stdin)
+	}
+	suffix, _ := randomSuffix()
+	socket := "/tmp/.dev-agent-" + suffix + ".sock"
+	s, err := open(context.Background(), run, f.start, "/tmp/.dev-relay-test", buildRelay(t),
+		socket, echoServer(t), testRetry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	waitForSocket(t, f.socketPath(socket))
+
+	hang.Store(true)
+	dropRelay(t, s)
+
+	waitFor(t, func() bool { return strings.Contains(stderr(), "could not be restarted") },
+		"a hung respawn attempt outlived the budget without a warning")
+}
