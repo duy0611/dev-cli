@@ -782,6 +782,7 @@ dev audit --json | jq 'select(.exit_code != 0)'
 2026-10-08 14:03:05  personal/api  kube-token   sa reader in team-a (dev-cluster), expires 15:03
 2026-10-08 16:15:52  personal/api  start-agent  claude, exit 0, after 2h12m47s
 2026-10-08 16:15:52  personal/api  relay        clean after 2h12m47s
+2026-10-09 10:13:09  personal/api  relay        clean after 22h41m32s, recovered from 1 drop
 ```
 
 It records names, never values: the command you typed, setting names, the
@@ -883,14 +884,17 @@ lists nothing, the agent on your machine is empty — `ssh-add` there first.
 The relay lives for the length of a `dev` command, so a shell started with
 `docker exec` or `kubectl exec` has no agent to reach. Use `dev container shell`.
 
-**`the ssh agent relay stopped unexpectedly; commits will not sign`** — the
-relay died while the command that started it was still running, so anything the
-container signs from here on fails. It is not recoverable in place: the agent
-was handed its `SSH_AUTH_SOCK` when it started and a new relay would listen on a
-different path, so restart the `dev` command. Reported when it happens rather
-than left for the next commit to discover, because the failure is otherwise
-silent — the relay and your agent are siblings, and neither notices the other
-going away.
+**`the ssh agent relay stopped unexpectedly and could not be restarted; commits
+will not sign`** — the relay's exec channel collapsed while the command was still
+running, and no replacement came up within five minutes. `dev` restarts a
+dropped relay by itself, on the same socket path, so the `SSH_AUTH_SOCK` your
+agent was started with keeps working and nothing needs restarting. A git command
+that runs in the gap fails, and the next one works. The usual cause is a laptop
+sleeping through a long session or Docker Desktop restarting, and both normally
+recover on the first retry. This message means the engine stayed unreachable:
+check that the container is still running, then restart the `dev` command.
+`dev audit --event relay` shows every drop, as `recovered from 1 drop` or
+`down since 2026-10-09 23:14`.
 
 **My commits arrive unverified** — signing uses the agent's *first* key, and an
 agent holding several gives no indication which you meant. Check with

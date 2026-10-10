@@ -29,24 +29,37 @@ func connect(t *testing.T, agentSocket string) string {
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	socket := filepath.Join(dir, "s")
 
+	serveAt(t, socket, agentSocket)
+	waitForSocket(t, socket)
+	return socket
+}
+
+// serveAt joins a container end listening on socket to a host end, with
+// in-memory pipes standing in for the exec channel. served closes when Serve
+// returns; stop ends the session the way the host really does, by closing the
+// container's input. Safe to call twice, and called at cleanup regardless.
+func serveAt(t *testing.T, socket, agentSocket string) (served <-chan struct{}, stop func()) {
+	t.Helper()
 	toHost, hostIn := io.Pipe()       // container stdout -> host
 	hostOut, toContainer := io.Pipe() // host stdout -> container
 
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() { defer wg.Done(); _ = Serve(socket, hostOut, hostIn) }()
-	go func() { defer wg.Done(); _ = Host(agentSocket, toHost, toContainer) }()
+	done := make(chan struct{})
+	var host sync.WaitGroup
+	host.Add(1)
+	go func() { defer close(done); _ = Serve(socket, hostOut, hostIn) }()
+	go func() { defer host.Done(); _ = Host(agentSocket, toHost, toContainer) }()
 
-	t.Cleanup(func() {
-		// Closing the container's inbound pipe ends its read loop, which is
-		// how a session is stopped for real.
-		_ = toContainer.Close()
-		_ = hostIn.Close()
-		wg.Wait()
-	})
-
-	waitForSocket(t, socket)
-	return socket
+	var once sync.Once
+	stop = func() {
+		once.Do(func() {
+			_ = toContainer.Close()
+			_ = hostIn.Close()
+			<-done
+			host.Wait()
+		})
+	}
+	t.Cleanup(stop)
+	return done, stop
 }
 
 func waitForSocket(t *testing.T, path string) {
@@ -224,5 +237,95 @@ func TestRelayWithRealAgent(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "relay-test") {
 		t.Errorf("relayed agent did not list the key; got:\n%s", out)
+	}
+}
+
+// TestServeLeavesAReplacementInPlace is the hazard respawning creates: the old
+// relay can outlive its stream, and when it finally exits it must not take the
+// replacement's socket with it — Go's listener unlinks its path on close by
+// default, whoever that path belongs to by then.
+func TestServeLeavesAReplacementInPlace(t *testing.T) {
+	dir, err := os.MkdirTemp("", "rly")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "s")
+	agent := echoServer(t)
+
+	_, stopOld := serveAt(t, socket, agent)
+	waitForSocket(t, socket)
+	first, err := os.Stat(socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	serveAt(t, socket, agent)
+	waitFor(t, func() bool {
+		fi, err := os.Stat(socket)
+		return err == nil && !os.SameFile(fi, first)
+	}, "the replacement never took the path")
+
+	stopOld()
+
+	if err := roundTrip(socket, "still reachable"); err != nil {
+		t.Fatalf("the old relay's exit broke the replacement: %v", err)
+	}
+}
+
+// TestServeStandsDownWhenReplaced covers the other half: a relay whose path
+// now leads elsewhere can never be reached again, and without this it would
+// wait on a dead stream for the life of the container.
+func TestServeStandsDownWhenReplaced(t *testing.T) {
+	old := ownershipInterval
+	ownershipInterval = 10 * time.Millisecond
+	t.Cleanup(func() { ownershipInterval = old })
+
+	dir, err := os.MkdirTemp("", "rly")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "s")
+	agent := echoServer(t)
+
+	servedOld, _ := serveAt(t, socket, agent)
+	waitForSocket(t, socket)
+	serveAt(t, socket, agent)
+
+	select {
+	case <-servedOld:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the replaced relay kept running")
+	}
+	if err := roundTrip(socket, "the replacement answers"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestServeStandsDownWhenSocketDeleted: a relay whose socket was removed is
+// unreachable, and exiting is what lets the host notice and put a new one up.
+func TestServeStandsDownWhenSocketDeleted(t *testing.T) {
+	old := ownershipInterval
+	ownershipInterval = 10 * time.Millisecond
+	t.Cleanup(func() { ownershipInterval = old })
+
+	dir, err := os.MkdirTemp("", "rly")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "s")
+
+	served, _ := serveAt(t, socket, echoServer(t))
+	waitForSocket(t, socket)
+	if err := os.Remove(socket); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-served:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a relay with no socket kept running")
 	}
 }

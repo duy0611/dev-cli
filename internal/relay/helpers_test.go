@@ -1,6 +1,8 @@
 package relay
 
 import (
+	"fmt"
+	"io"
 	"net"
 	"os"
 	"sync"
@@ -99,4 +101,28 @@ func waitForGone(t *testing.T, path string) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Errorf("%s still exists after close", path)
+}
+
+// roundTrip sends msg through the socket at path and checks it comes back
+// intact. An error rather than a failure, so a caller can poll it while a
+// relay is coming up.
+func roundTrip(path, msg string) error {
+	conn, err := net.DialTimeout("unix", path, time.Second)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+
+	if _, err := conn.Write([]byte(msg)); err != nil {
+		return err
+	}
+	buf := make([]byte, len(msg))
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		return err
+	}
+	if string(buf) != msg {
+		return fmt.Errorf("round trip = %q, want %q", buf, msg)
+	}
+	return nil
 }

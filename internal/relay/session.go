@@ -41,25 +41,69 @@ type RunFunc func(ctx context.Context, command []string, stdin io.Reader) (strin
 // noticeably.
 const closeGrace = 2 * time.Second
 
+// retryPolicy is how hard a session tries to bring a dropped relay back.
+type retryPolicy struct {
+	first, max time.Duration // backoff between attempts, doubling from first up to max
+	budget     time.Duration // how long one outage may last before the session gives up
+	stable     time.Duration // how long a replacement must live before a later drop is a new outage
+}
+
+// defaultRetry is sized for the failure that motivated it: a laptop waking
+// from sleep, where the engine's exec streams break and Docker Desktop may take
+// a minute or more to settle. The clock is monotonic, which on macOS stops
+// while the machine sleeps, so sleeping through a backoff spends no budget.
+var defaultRetry = retryPolicy{
+	first:  time.Second,
+	max:    15 * time.Second,
+	budget: 5 * time.Minute,
+	stable: time.Minute,
+}
+
+// Drop is one time the relay's exec channel collapsed under a session.
+type Drop struct {
+	At       time.Time
+	Err      string    // empty when the channel simply closed, which is the usual shape
+	Restored time.Time // when the replacement started; zero if none did
+}
+
 // Session is a running relay. The agent is reachable inside the container at
-// Socket for as long as it is open.
+// Socket for as long as it is open, across any number of respawns: the path
+// never changes, because the agent was handed it once and cannot be told again.
 type Session struct {
 	// Socket is the path inside the container to put in SSH_AUTH_SOCK.
 	Socket string
 
-	pipes    *Pipes
+	// What a respawn needs to put the same relay back. ctx is the session's
+	// own, cancelled by Close, so an attempt stuck on a hung engine ends too.
+	ctx         context.Context
+	cancel      context.CancelFunc
+	run         RunFunc
+	start       StartFunc
+	binPath     string
+	bin         []byte
+	agentSocket string
+	retry       retryPolicy
+
+	// mu guards pipes and drops, and orders closing against the pump's handover
+	// of the pipes: whichever of Close and the pump takes them under mu is the
+	// one that stops them, so a process is never reaped twice.
+	mu    sync.Mutex
+	pipes *Pipes // nil while the pump is between relays
+	drops []Drop
+
+	pumpDone chan struct{} // closed when the pump goroutine returns
+
 	closeOne sync.Once
 	closeErr error
 
-	// closing records that Close was called, so the goroutine running Host can
-	// tell an ordinary shutdown from the exec channel collapsing underneath it.
-	// Set before Close touches the pipes, or the race would be the wrong way
-	// round: Host can return before Close has finished, and a warning would be
-	// printed for a session the operator ended themselves.
+	// closing records that Close was called. Set under mu, so the pump cannot
+	// read it as false and then adopt a relay Close has already moved past.
 	closing atomic.Bool
 
-	// unexpected records that the channel collapsed before Close, and killed
-	// that Close had to kill a wedged relay. Read by End, for the audit log.
+	// unexpected records that the relay is down: set at a drop, cleared when a
+	// replacement is adopted. Read by End once Close has returned, so it says
+	// whether the session ended with signing broken. killed records that Close
+	// had to kill a wedged relay.
 	unexpected atomic.Bool
 	killed     atomic.Bool
 }
@@ -68,14 +112,14 @@ type Session struct {
 const (
 	EndClean      = "clean"      // told to stop, and stopped
 	EndKilled     = "killed"     // told to stop, and had to be killed
-	EndUnexpected = "unexpected" // stopped before anyone told it to
+	EndUnexpected = "unexpected" // the relay was down when the session ended
 )
 
 // End reports how the session ended. Meaningful once Close has returned.
 //
-// Unexpected wins over killed: a relay that died mid-session and was then
-// reaped is a session whose commits stopped signing, and that is the fact
-// worth having on record.
+// Unexpected wins over killed: a session that ended with its relay down is one
+// whose commits stopped signing, and that is the fact worth having on record.
+// A session that dropped and recovered ends clean; Drops says what happened.
 func (s *Session) End() string {
 	switch {
 	case s.unexpected.Load():
@@ -87,8 +131,17 @@ func (s *Session) End() string {
 	}
 }
 
+// Drops returns every drop so far, oldest first. A copy, so it is safe to call
+// while the pump is still recording.
+func (s *Session) Drops() []Drop {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]Drop(nil), s.drops...)
+}
+
 // Start installs the relay into the container and runs it, then pumps agent
-// traffic between it and the host's agent until the session is closed.
+// traffic between it and the host's agent until the session is closed —
+// respawning it on the same socket if its exec channel collapses.
 //
 // The caller must Close the session. Until then the container can ask the
 // operator's agent to sign, which is the whole point and also the reason the
@@ -108,9 +161,6 @@ func Start(ctx context.Context, run RunFunc, start StartFunc, agentSocket string
 	// already has this exact build skips the copy. Without it every `git fetch`
 	// would push megabytes through the exec channel before doing any work.
 	binPath := fmt.Sprintf("/tmp/.dev-relay-%s", contentTag(bin))
-	if err := install(ctx, run, binPath, bin); err != nil {
-		return nil, err
-	}
 
 	// The socket is per session, not per container: two shells attached to one
 	// container each run their own relay, and a shared path would mean whichever
@@ -121,30 +171,165 @@ func Start(ctx context.Context, run RunFunc, start StartFunc, agentSocket string
 	}
 	socket := fmt.Sprintf("/tmp/.dev-agent-%s.sock", suffix)
 
-	pipes, err := start(ctx, []string{binPath, socket})
-	if err != nil {
-		return nil, fmt.Errorf("starting the relay: %w", err)
-	}
+	return open(ctx, run, start, binPath, bin, socket, agentSocket, defaultRetry)
+}
 
-	s := &Session{Socket: socket, pipes: pipes}
-	s.pump(agentSocket)
+// open starts the first relay and the pump that keeps it running. Split from
+// Start so tests can supply the binary, the start function and the policy.
+func open(ctx context.Context, run RunFunc, start StartFunc, binPath string, bin []byte,
+	socket, agentSocket string, retry retryPolicy) (*Session, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	s := &Session{
+		Socket:      socket,
+		ctx:         ctx,
+		cancel:      cancel,
+		run:         run,
+		start:       start,
+		binPath:     binPath,
+		bin:         bin,
+		agentSocket: agentSocket,
+		retry:       retry,
+		pumpDone:    make(chan struct{}),
+	}
+	p, err := s.launch(ctx)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	s.pipes = p
+	s.pump()
 	return s, nil
 }
 
-// pump runs the host half in the background until the exec channel ends.
+// launch installs the relay if it is missing and starts it on the session's
+// socket. Install runs on every respawn, not just the first: a container that
+// restarted has an empty /tmp, and `test -x` makes the common case one exec.
 //
-// A method rather than an inline goroutine so that the warning and the thing
-// that triggers it cannot drift apart: every path that starts a session goes
-// through here, the tests included.
-func (s *Session) pump(agentSocket string) {
+// installCtx bounds the install alone. It is where a wedged engine hangs — an
+// exec it accepts and never answers — and a respawn stuck there would never
+// reach the budget, so the warning would never print. start keeps s.ctx: the
+// process it starts runs for the rest of the session, CommandContext would
+// kill it at any deadline, and starting it only forks a local process.
+func (s *Session) launch(installCtx context.Context) (*Pipes, error) {
+	if err := install(installCtx, s.run, s.binPath, s.bin); err != nil {
+		return nil, err
+	}
+	p, err := s.start(s.ctx, []string{s.binPath, s.Socket})
+	if err != nil {
+		return nil, fmt.Errorf("starting the relay: %w", err)
+	}
+	return p, nil
+}
+
+// pump runs the host half in the background, and puts a new relay up each
+// time the exec channel collapses, until Close or the retry budget ends it.
+//
+// A method rather than an inline goroutine so that the respawn, the warning
+// and the thing that triggers them cannot drift apart: every path that starts a
+// session goes through here, the tests included.
+func (s *Session) pump() {
 	go func() {
-		// Runs until the container half's stdout closes, which happens when the
-		// relay exits or the session is closed.
-		s.warnIfUnexpected(Host(agentSocket, s.pipes.Stdout, s.pipes.Stdin))
+		defer close(s.pumpDone)
+
+		var downSince time.Time // start of the current outage
+		delay := s.retry.first
+		for {
+			s.mu.Lock()
+			p := s.pipes
+			s.mu.Unlock()
+
+			up := time.Now()
+			// Runs until the container half's stdout closes, which happens when
+			// the relay exits or the session is closed.
+			err := Host(s.agentSocket, p.Stdout, p.Stdin)
+
+			s.mu.Lock()
+			if s.closing.Load() {
+				s.mu.Unlock()
+				return // an ordinary shutdown; Close owns the pipes
+			}
+			if s.ctx.Err() != nil {
+				// The operator's command was cancelled — Ctrl-C, SIGTERM — and
+				// CommandContext killed the relay before the deferred Close
+				// arrived. That is the session ending, not the channel
+				// collapsing; recorded as a drop it would write a false
+				// "down since" into the audit log of every interrupted command.
+				// Left in place for Close, so the pipes are reaped exactly once.
+				s.mu.Unlock()
+				return
+			}
+			now := time.Now()
+			s.pipes = nil
+			s.unexpected.Store(true)
+			d := Drop{At: now}
+			// Host returns nil on a clean EOF, which is exactly the shape a
+			// collapsed channel takes, so a drop is not conditional on err.
+			if err != nil {
+				d.Err = err.Error()
+			}
+			s.drops = append(s.drops, d)
+			s.mu.Unlock()
+
+			// Reaped before the next one starts: the old devcontainer exec may
+			// outlive its stream, and left alone it holds a process per drop.
+			stopPipes(p)
+
+			// A relay that held for a while was a real recovery, so this is a
+			// new outage with a fresh budget. One that died at once is the same
+			// outage continuing — otherwise a start that succeeds and exits
+			// immediately would be retried forever.
+			if downSince.IsZero() || now.Sub(up) >= s.retry.stable {
+				downSince, delay = now, s.retry.first
+			}
+			if !s.respawn(downSince, &delay) {
+				s.giveUp(err)
+				return
+			}
+		}
 	}()
 }
 
-// warnIfUnexpected reports a relay that stopped without being told to.
+// respawn retries until a replacement is adopted, the outage outlasts the
+// budget, or the session ends. delay carries across calls within one outage,
+// so a flapping relay backs off instead of restarting every second.
+func (s *Session) respawn(downSince time.Time, delay *time.Duration) bool {
+	for {
+		if time.Since(downSince) >= s.retry.budget {
+			return false
+		}
+		select {
+		case <-s.ctx.Done():
+			return false // Close, or the operator's command was cancelled
+		case <-time.After(*delay):
+		}
+		*delay = min(*delay*2, s.retry.max)
+
+		attempt, cancel := context.WithDeadline(s.ctx, downSince.Add(s.retry.budget))
+		p, err := s.launch(attempt)
+		cancel()
+		if err != nil {
+			continue // engine still unreachable; the budget decides when to stop
+		}
+		return s.adopt(p)
+	}
+}
+
+// adopt makes p the session's relay, unless Close got there first.
+func (s *Session) adopt(p *Pipes) bool {
+	s.mu.Lock()
+	if s.closing.Load() {
+		s.mu.Unlock()
+		stopPipes(p)
+		return false
+	}
+	s.pipes = p
+	s.unexpected.Store(false)
+	s.drops[len(s.drops)-1].Restored = time.Now()
+	s.mu.Unlock()
+	return true
+}
+
+// giveUp reports a relay that could not be brought back.
 //
 // The failure this exists for is silent by construction: the relay and the
 // agent are siblings, so the relay dying disturbs nothing the operator can see.
@@ -153,69 +338,84 @@ func (s *Session) pump(agentSocket string) {
 // sign, often an hour later and nowhere near the cause.
 //
 // Straight to os.Stderr because there is no caller left to hand an error to —
-// this runs in a goroutine the command has already moved past.
-func (s *Session) warnIfUnexpected(err error) {
-	if s.closing.Load() {
-		return // an ordinary shutdown, which is not worth a word
+// this runs in a goroutine the command has already moved past. Silent when the
+// session is ending anyway: Close, or the operator interrupting the command.
+func (s *Session) giveUp(err error) {
+	if s.closing.Load() || s.ctx.Err() != nil {
+		return
 	}
-	s.unexpected.Store(true)
-	// Host returns nil on a clean EOF, which is exactly the shape this failure
-	// takes: the channel collapsed and the relay tidied up after itself. So the
-	// warning is not conditional on err being non-nil; only its detail is.
 	detail := ""
 	if err != nil {
 		detail = ": " + err.Error()
 	}
 	fmt.Fprintf(os.Stderr,
-		"dev: the ssh agent relay stopped unexpectedly%s; commits will not sign\n", detail)
+		"dev: the ssh agent relay stopped unexpectedly%s and could not be restarted; commits will not sign\n",
+		detail)
 }
 
 // Close stops the relay. Safe to call more than once, so a caller can defer it
 // and still close explicitly on the happy path.
 func (s *Session) Close() error {
 	s.closeOne.Do(func() {
-		// Before anything is closed, not after: closing stdin is what ends the
-		// relay, so Host can return and check this flag while Close is still
-		// in its grace period.
+		// Under mu and before anything is stopped: closing stdin is what ends
+		// the relay, so the pump can return from Host and check this flag while
+		// Close is still in its grace period — and it must see it set, or it
+		// would record a drop and respawn the relay being shut down.
+		s.mu.Lock()
 		s.closing.Store(true)
+		p := s.pipes
+		s.mu.Unlock()
 
-		// Closing stdin is the polite stop: the relay's read loop ends, it
-		// removes its own socket, and it exits. Give that a moment to happen
-		// before resorting to a kill — a killed relay cannot run its own
-		// cleanup, and the socket would be left behind in a container that
-		// outlives the session.
-		if s.pipes.Stdin != nil {
-			_ = s.pipes.Stdin.Close()
+		// nil when the pump is between relays; it reaps what it holds itself.
+		if p != nil {
+			s.killed.Store(stopPipes(p))
 		}
-
-		exited := make(chan struct{})
-		go func() {
-			defer close(exited)
-			if s.pipes.Wait != nil {
-				// Discarded on purpose: a relay told to stop may exit non-zero,
-				// and reporting that would turn every clean shutdown into a
-				// warning.
-				_ = s.pipes.Wait()
-			}
-		}()
-
-		select {
-		case <-exited:
-		case <-time.After(closeGrace):
-			// Wedged, most likely on a half-open connection. Kill it, or the
-			// command the operator ran would never return.
-			s.killed.Store(true)
-			if s.pipes.Kill != nil {
-				_ = s.pipes.Kill()
-			}
-			<-exited
-		}
-
-		if s.pipes.Stdout != nil {
-			_ = s.pipes.Stdout.Close()
-		}
+		// After the polite stop, so the relay gets its chance to remove its own
+		// socket; cancelling first would kill it through CommandContext. Wakes a
+		// backoff and ends an attempt stuck on a hung engine.
+		s.cancel()
+		<-s.pumpDone
 	})
 	return s.closeErr
+}
+
+// stopPipes ends one relay process, politely first, and reports whether it had
+// to be killed.
+func stopPipes(p *Pipes) (killed bool) {
+	// Closing stdin is the polite stop: the relay's read loop ends, it removes
+	// its own socket, and it exits. Give that a moment to happen before
+	// resorting to a kill — a killed relay cannot run its own cleanup, and the
+	// socket would be left behind in a container that outlives the session.
+	if p.Stdin != nil {
+		_ = p.Stdin.Close()
+	}
+
+	exited := make(chan struct{})
+	go func() {
+		defer close(exited)
+		if p.Wait != nil {
+			// Discarded on purpose: a relay told to stop may exit non-zero, and
+			// reporting that would turn every clean shutdown into a warning.
+			_ = p.Wait()
+		}
+	}()
+
+	select {
+	case <-exited:
+	case <-time.After(closeGrace):
+		// Wedged, most likely on a half-open connection. Kill it, or the
+		// command the operator ran would never return.
+		killed = true
+		if p.Kill != nil {
+			_ = p.Kill()
+		}
+		<-exited
+	}
+
+	if p.Stdout != nil {
+		_ = p.Stdout.Close()
+	}
+	return killed
 }
 
 // install copies the relay into the container unless it is already there.

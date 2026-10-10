@@ -117,11 +117,15 @@ func (a *app) forwardAgent(ctx context.Context, t *target, override *bool,
 		}
 		// After Close, so End can tell a relay that died mid-session — whose
 		// commits stopped signing — from one that was shut down.
-		a.record("relay", t.workspace.Name, t.container.Name, map[string]any{
+		fields := map[string]any{
 			"started": started.UTC().Format(time.RFC3339Nano),
 			"ended":   time.Now().UTC().Format(time.RFC3339Nano),
 			"end":     session.End(),
-		})
+		}
+		if drops := relayDrops(session.Drops()); drops != nil {
+			fields["drops"] = drops
+		}
+		a.record("relay", t.workspace.Name, t.container.Name, fields)
 	}
 
 	// Appended last, so this wins over a workspace setting of the same name.
@@ -203,6 +207,27 @@ func signingEnv(agentSocket string) []provider.EnvVar {
 			provider.EnvVar{Key: fmt.Sprintf("GIT_CONFIG_KEY_%d", i), Value: p[0]},
 			provider.EnvVar{Key: fmt.Sprintf("GIT_CONFIG_VALUE_%d", i), Value: p[1]},
 		)
+	}
+	return out
+}
+
+// relayDrops is a session's drops as audit fields, oldest first. Nil when there
+// were none, so a relay that never dropped writes the record it always has.
+// The error text is the relay's own I/O error and carries no setting value.
+func relayDrops(drops []provider.AgentDrop) []map[string]any {
+	if len(drops) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(drops))
+	for _, d := range drops {
+		m := map[string]any{"at": d.At.UTC().Format(time.RFC3339Nano)}
+		if d.Err != "" {
+			m["error"] = d.Err
+		}
+		if !d.Restored.IsZero() {
+			m["restored"] = d.Restored.UTC().Format(time.RFC3339Nano)
+		}
+		out = append(out, m)
 	}
 	return out
 }

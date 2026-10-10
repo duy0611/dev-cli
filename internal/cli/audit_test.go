@@ -207,3 +207,51 @@ func TestParseSince(t *testing.T) {
 		}
 	}
 }
+
+// TestSummariseRelay covers the one line `dev audit` prints for a relay: how
+// it ended, and — the question the 2026-10-10 incident could not answer — when
+// it went down. Fields arrive as JSON decodes them, so drops is []any of maps.
+func TestSummariseRelay(t *testing.T) {
+	base := map[string]any{
+		"started": "2026-10-09T08:31:37Z",
+		"ended":   "2026-10-10T07:13:09Z",
+	}
+	with := func(end string, drops ...map[string]any) audit.Entry {
+		f := map[string]any{"end": end}
+		for k, v := range base {
+			f[k] = v
+		}
+		if len(drops) > 0 {
+			list := make([]any, len(drops))
+			for i, d := range drops {
+				list[i] = d
+			}
+			f["drops"] = list
+		}
+		return audit.Entry{Event: "relay", Fields: f}
+	}
+	downAt := time.Date(2026, 10, 9, 20, 14, 0, 0, time.UTC)
+
+	cases := []struct {
+		name string
+		e    audit.Entry
+		want string
+	}{
+		{"no drops", with("clean"), "clean after 22h41m32s"},
+		{"recovered once", with("clean",
+			map[string]any{"at": "2026-10-09T20:14:00Z", "restored": "2026-10-09T20:14:03Z"}),
+			"clean after 22h41m32s, recovered from 1 drop"},
+		{"recovered twice", with("clean",
+			map[string]any{"at": "2026-10-09T20:14:00Z", "restored": "2026-10-09T20:14:03Z"},
+			map[string]any{"at": "2026-10-09T22:00:00Z", "restored": "2026-10-09T22:00:01Z"}),
+			"clean after 22h41m32s, recovered from 2 drops"},
+		{"never came back", with("unexpected",
+			map[string]any{"at": "2026-10-09T20:14:00Z"}),
+			"unexpected after 22h41m32s, down since " + downAt.Local().Format("2006-01-02 15:04")},
+	}
+	for _, c := range cases {
+		if got := summarise(c.e); got != c.want {
+			t.Errorf("%s: summarise = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
