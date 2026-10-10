@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.12.0](https://github.com/duy0611/dev-cli/compare/v0.11.0...v0.12.0) (2026-10-10)
+
+
+### Features
+
+* **cli:** record relay drops in the audit log ([33ac6a1](https://github.com/duy0611/dev-cli/commit/33ac6a1ed55c73f06ee97adbdf0510dd39be81da))
+* **relay:** restart a dropped relay on the same socket ([f766080](https://github.com/duy0611/dev-cli/commit/f766080fdef78b20e8c017bf897dffbf3c416772))
+
+
+### Bug Fixes
+
+* **relay:** bound a hung respawn by the budget, and record no drop for an interrupted session ([71a954d](https://github.com/duy0611/dev-cli/commit/71a954d13361c339cb0abb2282d0b5012d09ed2e))
+* **relay:** remove only the socket the relay created, and stand down once replaced ([8cf8d1a](https://github.com/duy0611/dev-cli/commit/8cf8d1a114da84382d888e0dd8dd470d3f00cbcb))
+
 ## [0.11.0](https://github.com/duy0611/dev-cli/compare/v0.10.0...v0.11.0) (2026-10-10)
 
 
