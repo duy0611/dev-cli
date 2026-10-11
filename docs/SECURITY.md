@@ -4,9 +4,10 @@ This file records the known gaps in the git guard, the evidence for each, and
 every option considered to close them, with what each one leaves open. Nothing
 here is fixed yet: it is the record a decision is meant to be taken from.
 
-Recorded 2026-10-10. The reproductions are smoke tests on the
-`gitguard-host-config-write` branch (PR #28). They were run on the operator's
-Mac under a podman machine, and by CI on Linux amd64 and arm64 under Docker.
+Recorded 2026-10-10, with option F added 2026-10-11. The reproductions are
+smoke tests on the `gitguard-host-config-write` branch (PR #28). They were run
+on the operator's Mac under a podman machine, and by CI on Linux amd64 and
+arm64 under Docker, except where a section says otherwise.
 
 ## The risk
 
@@ -373,6 +374,71 @@ through `alternates`; new commits go to the container's own objects.
 | Leaves open | gaps 3 and 4: the working tree is still shared live |
 | Costs | the container's `HEAD` and index diverge from the host's over one working tree, so host `git status` looks wrong after the agent commits; commits reach the host only by fetch; relies on git internals (`packed-refs`, `gc`, `alternates`), submodules, LFS and `worktrees/`; unverified, would need its own spike |
 
+### F. Mount all of `.git` read-only
+
+Mount the checkout writable and its `.git` directory read-only over it. A
+directory mount holds where the single-file mounts fail: git replaces files
+*inside* `.git` but never the directory itself, and a case variant of a
+directory name resolved to the mount in every test.
+
+This is not what `dev` does today, so the spikes drive the engine directly.
+
+**Ordinary checkout.** `TestSmokeReadOnlyGitDir` passed on all three
+platforms:
+
+| Check | Result |
+|---|---|
+| `git status`, `log`, `diff` inside | work |
+| `git add`, `commit` inside | refused: `index.lock` on a read-only filesystem |
+| Writes into `.git` from inside: `config`, `info/attributes`, a new hook, `commondir`, `git config` | refused, before any host write and after each of five |
+| On macOS, `.git/CONFIG`, `.GIT/config`, `.git/HOOKS/<new>` | refused |
+| Host `git config`, `branch`, `branch -u`, `add`, `commit` while the container runs | all work |
+| `.git/config` writable in the 5 s after each host write | never |
+| The container sees the host's new commit | yes |
+
+**Worktree and submodule.** `TestSmokeReadOnlyGitDirWorktreeAndSubmodule`,
+run on the operator's Mac only:
+
+| Check | Result |
+|---|---|
+| `status`, `log` inside the worktree and inside the submodule | work |
+| Commits in either | refused |
+| Under the read-only `.git`: the shared `config`, the worktree's `config.worktree` and `commondir`, the submodule's `config` (under `.git/modules`) and a new hook there | refused every time |
+| Case variants of those (`modules/sub/CONFIG`, `worktrees/wt/CONFIG.WORKTREE`) | refused |
+| Host git in the superproject, the worktree and the submodule | all work |
+| **The submodule's `.git` file** | **writable from the start**: it sits in the writable workspace with nothing over it |
+| **The worktree checkout's `.git` file**, read-only on its own as the guard mounts it today | held, then **writable 0.1 s after the host rewrote it**, as `git worktree repair` would: gap 1 again |
+| **`.GIT` in either directory**, on macOS | **reached the host's `.git` file**: gap 2 again |
+
+A `.git` file holds one line, `gitdir: <path>`, and host git follows it. A
+container that rewrites it can point host git at a directory it controls,
+with a config of its own, the next time anyone runs git in that submodule or
+worktree on the host. That is the same redirection as a planted `commondir`.
+The read-only `.git` covers every git directory under it, but not the files
+that point at them from the writable tree.
+
+| | |
+|---|---|
+| Closes | gaps 1 and 2 for everything under `.git`, on every platform tested; every setting in the risk table, since the container can write no config or hooks |
+| Leaves open | a submodule's `.git` file, writable outright; a worktree checkout's `.git` file, by a host rewrite and by a case variant on macOS; gaps 3 and 4, as for any shared working tree |
+| Accidents | stopped |
+| Deliberate agent | stopped for an ordinary checkout without submodules; not stopped through a submodule's or a worktree's `.git` file |
+| Costs | the agent cannot commit, stash, or create a branch: the operator commits from the host, or the work leaves the container another way; agents expect to commit and would need telling, in the project's agent instructions |
+
+Covering the `.git` files would need what failed elsewhere: a single-file
+mount, which breaks on a host rewrite and, on macOS, to a case variant. So
+for repositories with submodules and for worktree containers, F needs A's
+after-command comparison extended to every `.git` file, or D.
+
+`.gitattributes` is still writable, since it lives in the working tree. It
+can assign paths to a filter or a textconv, but the command those run is
+defined in config, which the container can no longer write. It runs only
+what a filter the operator's own global config defines would run.
+
+Not tested: a nested repository the agent creates in the working tree
+(gap 3); Git LFS; `git submodule absorbgitdirs` and other host commands that
+rewrite a submodule's `.git` file.
+
 ### Rejected
 
 - **The macOS immutable flag (`chflags uchg`)** for the length of a session.
@@ -392,8 +458,9 @@ through `alternates`; new commits go to the container's own objects.
   git path, `gh` calls git directly).
 - **Proxying the agent's git to the host:** agents use too much of git to
   allow-list, and it is a large new attack surface.
-- **Other mount layouts:** any single-file mount on the shared path fails as
-  in gap 1, and `.git` itself cannot be read-only, since commits write to it.
+- **Other single-file mount layouts:** any single-file mount on the shared
+  path fails as in gap 1. A read-only `.git` *directory* is option F, at the
+  cost of the agent's commits.
 - **File permissions:** git writes by renaming files inside `.git`, so the
   directory must stay writable.
 
@@ -407,6 +474,7 @@ through `alternates`; new commits go to the container's own objects.
 | A + C | yes | re-applied next command, or by the watcher | open | open | not stopped | privileged helper |
 | D | no; attach, fetch or copy | closed | closed | closed | stopped at host git | none |
 | E | yes | closed | probably closed, untested | open | partly | none |
+| F | yes; the agent cannot commit | closed under `.git`; a worktree's `.git` file open | closed under `.git`; `.GIT` in a submodule or worktree open | open | stopped for an ordinary checkout; not through a submodule's or worktree's `.git` file | none |
 
 ## What to do now, with the guard as it is
 
@@ -439,7 +507,11 @@ through `alternates`; new commits go to the container's own objects.
 ## Open questions
 
 - Which threat model the guard serves. That decides between A + C, which keeps
-  live edits, and D.
+  live edits, D, and F, which keeps live edits at the cost of the agent's
+  commits.
+- Under F, how the agent's work becomes commits: the operator commits from the
+  host, or something else does.
+- Under F, how submodule and worktree `.git` files are covered.
 - Whether a restart restores the mount. Expected, not tested.
 - Gap 3 against real VS Code. Untested.
 - Option E as a whole. Untested.
