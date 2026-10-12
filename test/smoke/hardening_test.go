@@ -238,6 +238,12 @@ func TestSmokeIsolated(t *testing.T) {
 	t.Setenv("DEV_STATE", t.TempDir())
 	bin := buildBinary(t)
 	project := gitFixture(t)
+	// The fixture ships an alpine config with no git, which the seed needs
+	// inside; without it, --generate below renders the Ubuntu base, which has
+	// git. Removed before the first commit, so it is not in the history either.
+	if err := os.RemoveAll(filepath.Join(project, ".devcontainer")); err != nil {
+		t.Fatal(err)
+	}
 	hostGit := func(args ...string) string {
 		t.Helper()
 		cmd := exec.Command("git", args...)
