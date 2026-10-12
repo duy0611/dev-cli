@@ -7,7 +7,8 @@ import (
 	"github.com/duy0611/dev-cli/internal/cli"
 )
 
-// Set by the linker: `go build -ldflags "-X main.version=..."`. See the Makefile.
+// Set by the linker: `go build -ldflags "-X main.version=..."`. See the
+// Makefile.
 var version = "dev"
 
 func main() {

@@ -70,13 +70,25 @@ func runWorkspaceRemove(a *app, name string) error {
 		return usageErrorf("workspace %s still holds %d container(s): %s",
 			name, len(names), strings.Join(names, ", "))
 	}
+	// Worktrees too: their checkouts would be left on disk with no record.
+	worktrees, err := st.ListWorktrees(name)
+	if err != nil {
+		return err
+	}
+	if len(worktrees) > 0 {
+		names := make([]string, 0, len(worktrees))
+		for _, w := range worktrees {
+			names = append(names, w.Name)
+		}
+		return usageErrorf("workspace %s still holds %d worktree(s): %s; remove them with dev worktree remove",
+			name, len(names), strings.Join(names, ", "))
+	}
 
 	if err := st.DeleteWorkspace(name); err != nil {
 		return err
 	}
 
-	// Leaving the pointer behind would make the next command report "no such
-	// workspace" about a name the operator never typed.
+	// Cleared too, or the next command reports a name the operator never typed.
 	active, err := st.ActiveWorkspace()
 	if err != nil {
 		return err
@@ -107,8 +119,7 @@ func newWorkspaceInitCmd(a *app) *cobra.Command {
 		Args: exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if from != "" {
-				// A pointer rather than the bool, so that an absent flag inherits
-				// the source's choice instead of quietly turning it off.
+				// A pointer, so an absent flag inherits the source's choice.
 				var ssh *bool
 				if cmd.Flags().Changed("ssh-forward") {
 					ssh = &sshForward
@@ -159,10 +170,9 @@ func runWorkspaceInit(a *app, name, provider string, sshForward bool) error {
 	return activateIfNone(a, st, name)
 }
 
-// runWorkspaceInitFrom creates a workspace bound to the same provider as from,
-// carrying its settings. The provider is shared, not copied: providers are
-// global rows several workspaces already point at, and a copy would be a
-// second record of one cluster free to drift from the first.
+// runWorkspaceInitFrom creates a workspace on from's provider, carrying its
+// settings. The provider is shared, not copied, so there is one record per
+// cluster.
 func runWorkspaceInitFrom(a *app, name, from, provider string, sshForward *bool) error {
 	if err := xpath.ValidateName(name); err != nil {
 		return usageError(err)
@@ -207,8 +217,8 @@ func runWorkspaceInitFrom(a *app, name, from, provider string, sshForward *bool)
 	return activateIfNone(a, st, name)
 }
 
-// activateIfNone makes name the active workspace when none is, so that a fresh
-// install does not demand a `workspace use` before anything else works.
+// activateIfNone makes name active when none is, so a fresh install needs no
+// `workspace use`.
 func activateIfNone(a *app, st *store.Store, name string) error {
 	active, err := st.ActiveWorkspace()
 	if err != nil {
@@ -400,9 +410,8 @@ func runWorkspaceShow(a *app, name string) error {
 
 	a.printf("workspace %s\n", ws.Name)
 	a.printf("provider  %s\n", ws.ProviderName)
-	// Printed whichever way it is set. This command exists to say what a
-	// container launches with, and reaching the operator's ssh agent is part of
-	// that however the answer reads.
+	// Printed unconditionally: this command says what a container launches
+	// with.
 	a.printf("ssh agent %s\n", onOff(ws.SSHForward))
 	if len(settings) == 0 {
 		a.printf("settings  none\n")
@@ -416,8 +425,8 @@ func runWorkspaceShow(a *app, name string) error {
 	})
 }
 
-// addWorkspaceFlag installs the --workspace override that every
-// workspace-scoped and container-scoped command accepts.
+// addWorkspaceFlag installs the --workspace override on workspace- and
+// container-scoped commands.
 func addWorkspaceFlag(cmd *cobra.Command, target *string) {
 	cmd.Flags().StringVar(target, "workspace", "", "workspace to act on (default: the active one)")
 }

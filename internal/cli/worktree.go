@@ -7,7 +7,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/duy0611/dev-cli/internal/dcconfig"
 	"github.com/duy0611/dev-cli/internal/gitwt"
 	"github.com/duy0611/dev-cli/internal/herdr"
 	"github.com/duy0611/dev-cli/internal/model"
@@ -20,10 +19,9 @@ import (
 func newWorktreeCmd(a *app) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "worktree",
-		Short: "Run a container on a git worktree checkout",
-		// A group, not a command: see newContainerCmd for why both are needed.
-		Args: noArgs(),
-		RunE: groupRunE,
+		Short: "Make and remove git worktree checkouts",
+		Args:  noArgs(),
+		RunE:  groupRunE,
 	}
 	cmd.AddCommand(
 		newWorktreeCreateCmd(a),
@@ -33,8 +31,7 @@ func newWorktreeCmd(a *app) *cobra.Command {
 	return cmd
 }
 
-// worktreeOpts is what `worktree create` was asked for beyond the name. The
-// container half is a createOpts so the two commands cannot drift.
+// worktreeOpts holds the flags of `worktree create` beyond the name.
 type worktreeOpts struct {
 	repo        string
 	branch      string
@@ -42,36 +39,28 @@ type worktreeOpts struct {
 	base        string
 	includeFile string
 	noHerdr     bool
-	create      createOpts
 }
 
 func newWorktreeCreateCmd(a *app) *cobra.Command {
 	var (
 		workspace string
-		toolList  string
 		opts      worktreeOpts
 	)
 
 	cmd := &cobra.Command{
 		Use:   "create NAME",
-		Short: "Add a git worktree and run a container on it",
-		Long: "Add a git worktree and run a container on it.\n\n" +
-			"NAME names both the checkout's record and the container. The branch is\n" +
-			"created from --base when it does not exist, and checked out as it is when\n" +
-			"it does; --path says where, and nothing is written anywhere else.\n\n" +
-			"git works inside the container: the repository is bind-mounted at its own\n" +
-			"host path, which is what the checkout's .git file points at.\n\n" +
+		Short: "Add a git worktree checkout",
+		Long: "Add a git worktree checkout.\n\n" +
+			"NAME names the checkout's record. The branch is created from --base when\n" +
+			"it does not exist, and checked out as it is when it does; --path says\n" +
+			"where, and nothing is written anywhere else.\n\n" +
+			"No container is made. Run one on the checkout with dev container create,\n" +
+			"from inside it or with --folder, choosing its mode there.\n\n" +
 			"Ignored files the source checkout's .worktreeinclude lists — .env files,\n" +
 			"node_modules — are copied into the new one; --include-file adds patterns\n" +
-			"on top. The source is the checkout the command runs from, or --repo.\n\n" +
-			"--from SOURCE generates the checkout's configuration from another\n" +
-			"generated container's tools, as on container create. It is checked before\n" +
-			"git runs, so a wrong source leaves no checkout behind.\n\n" +
-			"Local providers only. Kubernetes has no host bind mounts, so the paths a\n" +
-			"worktree depends on cannot resolve there.",
+			"on top. The source is the checkout the command runs from, or --repo.",
 		Args: exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts.create.tools = parseToolList(toolList)
 			return runWorktreeCreate(cmd.Context(), a, workspace, args[0], opts)
 		},
 	}
@@ -84,21 +73,6 @@ func newWorktreeCreateCmd(a *app) *cobra.Command {
 	cmd.Flags().StringVar(&opts.includeFile, "include-file", "",
 		"more ignored-file patterns to copy in, on top of the source's "+wtseed.FileName)
 	cmd.Flags().BoolVar(&opts.noHerdr, "no-herdr", false, "do not register the checkout with Herdr")
-	cmd.Flags().BoolVar(&opts.create.noStart, "no-start", false, "record the container without starting it")
-	cmd.Flags().BoolVar(&opts.create.generate, "generate", false,
-		"generate a base Ubuntu configuration when the checkout ships none")
-	cmd.Flags().StringVar(&toolList, "tools", "",
-		"comma-separated tools to install in a generated container (see: dev container tools)")
-	cmd.Flags().BoolVar(&opts.create.noPersistState, "no-persist-state", false,
-		"do not give the container a volume for its agents' configuration")
-	cmd.Flags().StringVar(&opts.create.agentConfig, "agent-config", "",
-		"apply this agents.yaml instead of the checkout's .devcontainer/agents.yaml")
-	cmd.Flags().BoolVar(&opts.create.noAgentConfig, "no-agent-config", false,
-		"apply no agents.yaml, even if the checkout has one")
-	cmd.Flags().StringVar(&opts.create.from, "from", "",
-		"start from another generated container's tools and settings")
-	cmd.Flags().BoolVar(&opts.create.allowPrivileged, "allow-privileged", false,
-		"let the configuration ask for privileged mode, the engine socket, host namespaces or a mount of / or your home")
 	return cmd
 }
 
@@ -110,23 +84,13 @@ func runWorktreeCreate(ctx context.Context, a *app, workspace, name string, opts
 		return usageErrorf("--branch is required")
 	}
 	if opts.path == "" {
-		// No default. One would have to invent a directory on the operator's
-		// disk, and a checkout appearing somewhere they did not choose is worse
-		// than one more flag.
+		// No default: dev would have to invent a directory on the operator's
+		// disk.
 		return usageErrorf("--path is required; it says where the checkout goes")
 	}
-	// Checked before the checkout exists, so a bad flag leaves nothing to roll
-	// back. createWorktreeRows repeats it to get the value; it is cheap.
-	if _, err := agentConfigChoice(opts.create.agentConfig, opts.create.noAgentConfig); err != nil {
-		return err
-	}
-
-	// First, before the store is opened or anything is created: this is the
-	// most common way the command will be typed wrong, and every later step's
-	// error would be more confusing than this one.
-	//
-	// The resolved repository is what is checked, not the working directory as
-	// such — with --repo given, cwd is never consulted.
+	// First, before the store is opened or anything is created. The resolved
+	// repository is checked, not the working directory: with --repo given, cwd
+	// is never consulted.
 	dir := opts.repo
 	if dir == "" {
 		var err error
@@ -137,22 +101,21 @@ func runWorktreeCreate(ctx context.Context, a *app, workspace, name string, opts
 	repo, err := gitwt.CommonDir(ctx, dir)
 	if err != nil {
 		if errors.Is(err, gitwt.ErrNotRepo) {
-			// Git's own message names ".git" rather than the directory the
-			// operator was standing in, which is why this one is written.
+			// Git's own message names ".git" rather than the directory, so this
+			// one is written instead.
 			return usageErrorf("not a git repository: %s "+
 				"(run dev worktree create from a repository, or pass --repo)", dir)
 		}
 		return err
 	}
-	// The checkout whose ignored files are carried over: the one dir is in,
-	// which from inside a linked worktree is that worktree. A bare repository
-	// run from outside its worktrees has none, and that is only an error when
-	// patterns were asked for — there is no .worktreeinclude to read either.
+	// The checkout whose ignored files are copied: the one dir is in. A bare
+	// repository outside its worktrees has none, which is an error only when
+	// patterns were asked for.
 	source, err := gitwt.Toplevel(ctx, dir)
 	if err != nil && !errors.Is(err, gitwt.ErrNoWorkTree) {
 		return err
 	}
-	// Read before anything is created, so a mistyped --include-file costs no
+	// Read before anything is created, so a bad --include-file costs no
 	// rollback.
 	patterns, err := wtseed.PatternFiles(source, opts.includeFile)
 	if err != nil {
@@ -164,9 +127,8 @@ func runWorktreeCreate(ctx context.Context, a *app, workspace, name string, opts
 	}
 
 	if opts.base != "" && gitwt.BranchExists(ctx, repo, opts.branch) {
-		// Reads as one intent and means another: --base only has an effect when
-		// the branch is being created, so silently ignoring it here would hide
-		// a mistake rather than report one.
+		// --base only applies when the branch is created; ignoring it silently
+		// would hide a mistake.
 		return usageErrorf("--base has no effect on %s, which already exists", opts.branch)
 	}
 
@@ -174,18 +136,14 @@ func runWorktreeCreate(ctx context.Context, a *app, workspace, name string, opts
 	if err != nil {
 		return err
 	}
-	if err := a.requireLocalProvider(wsName); err != nil {
+	st, err := a.store()
+	if err != nil {
 		return err
 	}
-	// Before the checkout, like every other knowable mistake: a mistyped or
-	// project-owned source then leaves no checkout and no branch to roll back.
-	if err := applyFrom(a, wsName, &opts.create); err != nil {
-		return err
+	if _, err := st.GetWorktree(wsName, name); err == nil {
+		return usageErrorf("worktree %s already exists in workspace %s", name, wsName)
 	}
 
-	// Before the checkout, so a mistake costs nothing: git refuses an existing
-	// directory anyway, and finding that out after the add would mean a
-	// rollback for a failure that was knowable first.
 	if _, err := os.Stat(opts.path); err == nil {
 		return usageErrorf("%s already exists; --path must name a directory to create",
 			xpath.Shorten(opts.path))
@@ -195,17 +153,14 @@ func runWorktreeCreate(ctx context.Context, a *app, workspace, name string, opts
 		return usageError(err)
 	}
 
-	// Resolved *after* the add, not before: git records the resolved path in
-	// the repository's backlink — given a symlinked path it stores the real one
-	// — and the mount has to match what git wrote, not what was typed.
+	// Resolved after the add: git records the resolved path in the backlink,
+	// and the mount must match it.
 	path, err := xpath.Resolve(opts.path)
 	if err != nil {
 		rollback(ctx, a, repo, opts.path)
 		return usageError(err)
 	}
 
-	// Before the rows, so dcconfig.Find sees the finished checkout: a project
-	// that ignores its .devcontainer and lists it gets that config used.
 	copied, err := wtseed.Seed(ctx, source, path, patterns)
 	if err != nil {
 		rollback(ctx, a, repo, path)
@@ -214,14 +169,20 @@ func runWorktreeCreate(ctx context.Context, a *app, workspace, name string, opts
 
 	herdrWS := ""
 	if !opts.noHerdr && herdr.Available(ctx) {
-		// Best-effort throughout: Herdr is a view onto a checkout that exists
-		// either way, so a failed view is not a failed command.
+		// Best effort: a failed Herdr view is not a failed command.
 		if herdrWS, err = herdr.Open(ctx, path); err != nil {
 			warnf(a, "%v (the checkout is fine; it is not in the Herdr sidebar)", err)
 		}
 	}
 
-	if err := a.createWorktreeRows(ctx, wsName, name, repo, path, herdrWS, opts); err != nil {
+	if err := st.CreateWorktree(model.Worktree{
+		WorkspaceName:  wsName,
+		Name:           name,
+		Repo:           repo,
+		Branch:         opts.branch,
+		Path:           path,
+		HerdrWorkspace: herdrWS,
+	}); err != nil {
 		rollback(ctx, a, repo, path)
 		return err
 	}
@@ -235,134 +196,41 @@ func runWorktreeCreate(ctx context.Context, a *app, workspace, name string, opts
 		a.printf("copied %d ignored %s from %s (%s)\n", len(copied), noun,
 			xpath.Shorten(source), strings.Join(copied, ", "))
 	}
-
-	if opts.create.noStart {
-		return nil
-	}
-	st, err := a.store()
-	if err != nil {
-		return err
-	}
-	c, err := st.GetContainer(wsName, name)
-	if err != nil {
-		return err
-	}
-	// Past this point the checkout is not rolled back: the operator has a
-	// container worth keeping, and a start failure is something to retry rather
-	// than something to undo.
-	return a.start(ctx, wsName, c)
-}
-
-// createWorktreeRows writes the container and the worktree that names it.
-//
-// The container first, because the worktree's foreign key points at it. Not one
-// transaction: the store's methods each own their statement, and the cascade
-// means a worktree row cannot outlive its container even if this returns
-// halfway.
-func (a *app) createWorktreeRows(ctx context.Context, wsName, name, repo, path, herdrWS string, opts worktreeOpts) error {
-	configPath, err := dcconfig.Find(path)
-	switch {
-	case err == nil && opts.create.generate:
-		return usageErrorf("%s already has a devcontainer config; --generate would shadow it",
-			xpath.Shorten(path))
-	case err != nil && !errors.Is(err, dcconfig.ErrNoConfig):
-		return usageError(err)
-	}
-
-	generated := ""
-	if errors.Is(err, dcconfig.ErrNoConfig) {
-		generated, err = generatedConfigFor(name, opts.create.generate, opts.create.tools,
-			worktreeMount(repo, path),
-			stateFor(!opts.create.noPersistState, wsName, name), os.Stdin, a.out)
-		if err != nil {
-			return err
-		}
-		if generated == "" {
-			return usageErrorf("no devcontainer config in %s "+
-				"(--generate builds a base Ubuntu one; dev container tools lists what it can add)",
-				xpath.Shorten(path))
-		}
-		configPath = ""
-	}
-
-	agentConfig, err := agentConfigChoice(opts.create.agentConfig, opts.create.noAgentConfig)
-	if err != nil {
-		return err
-	}
-	st, err := a.store()
-	if err != nil {
-		return err
-	}
-	c := model.Container{
-		Name:            name,
-		WorkspaceName:   wsName,
-		SourceKind:      model.SourceFolder,
-		Source:          path,
-		ConfigPath:      configPath,
-		GeneratedConfig: generated,
-		PersistState:    !opts.create.noPersistState,
-		AgentConfig:     agentConfig,
-		AllowPrivileged: opts.create.allowPrivileged,
-		// Always a repository: a worktree is a checkout of one.
-		GitGuard: true,
-	}
-	// A failure here is returned before the row exists, and the caller rolls
-	// the checkout back, the same as for a bad devcontainer config.
-	if err := markAgentConfig(&c); err != nil {
-		return err
-	}
-	// Before the row, so a refusal rolls the checkout back with nothing
-	// recorded. Skipped for --no-start for container create's reason: start
-	// checks on every call.
-	if !opts.create.noStart {
-		if err := a.guardNewContainer(ctx, wsName, &c, repo); err != nil {
-			return err
-		}
-	}
-	if err := st.CreateContainer(c); err != nil {
-		if errors.Is(err, store.ErrExists) {
-			return usageErrorf("container %s already exists in workspace %s", name, wsName)
-		}
-		return err
-	}
-	if err := st.CreateWorktree(model.Worktree{
-		WorkspaceName:  wsName,
-		ContainerName:  name,
-		Repo:           repo,
-		Branch:         opts.branch,
-		Path:           path,
-		HerdrWorkspace: herdrWS,
-	}); err != nil {
-		// Not one transaction, so a failure here leaves the container row
-		// behind unless it is cleaned up explicitly — deleted rather than left
-		// for the caller's checkout rollback to imply, since the checkout
-		// rollback says nothing about the database.
-		if delErr := st.DeleteContainer(wsName, name); delErr != nil {
-			warnf(a, "could not remove the container row after a failed worktree write: %v", delErr)
-		}
-		return err
-	}
-	a.recordCreate(wsName, c)
+	a.printf("run a container on it: cd %s && dev container create %s\n", xpath.Shorten(path), name)
 	return nil
 }
 
-// rollback removes a checkout a failed create had already made, so a command
-// that reported an error leaves nothing behind.
-//
-// --force, because the checkout is seconds old and holds only what git put
-// there. A failure here is warned about and swallowed: the command is already
-// returning an error, and a second one would bury the first.
+// rollback removes a checkout a failed create left behind. --force, since it
+// holds only what git put there. A failure is warned about, not returned, so it
+// does not bury the original error.
 func rollback(ctx context.Context, a *app, repo, path string) {
 	if err := gitwt.Remove(ctx, repo, path, true); err != nil {
 		warnf(a, "could not remove the half-made checkout at %s: %v", xpath.Shorten(path), err)
 	}
 }
 
+// providerKind is the kind of the provider a workspace names.
+func (a *app) providerKind(workspace string) (model.ProviderKind, error) {
+	st, err := a.store()
+	if err != nil {
+		return "", err
+	}
+	ws, err := st.GetWorkspace(workspace)
+	if err != nil {
+		return "", err
+	}
+	rec, err := st.GetProvider(ws.ProviderName)
+	if err != nil {
+		return "", err
+	}
+	return rec.Kind, nil
+}
+
 // requireLocalProvider refuses a workspace whose provider is not local.
 //
-// Kubernetes has no host bind mounts, so neither of the two absolute paths a
-// worktree depends on can resolve in a pod. Seeding the files would deliver a
-// checkout whose every git command fails, which looks like it worked.
+// requireLocalProvider refuses a non-local workspace for a worktree container.
+// Kubernetes has no host bind mounts, so the worktree's absolute paths cannot
+// resolve in a pod, and git would fail there silently.
 func (a *app) requireLocalProvider(workspace string) error {
 	st, err := a.store()
 	if err != nil {
@@ -394,7 +262,7 @@ func newWorktreeListCmd(a *app) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "List worktree containers and their checkouts",
+		Short: "List worktree checkouts and the containers on them",
 		Args:  noArgs(),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runWorktreeList(cmd.Context(), a, workspace, all)
@@ -427,10 +295,8 @@ func runWorktreeList(ctx context.Context, a *app, workspace string, all bool) er
 		return nil
 	}
 
-	// Whether git still knows about a checkout is read from git every time,
-	// for the reason live container status is: an operator can run
-	// `git worktree remove` themselves, and a stored answer would be wrong
-	// from that moment on.
+	// Read from git each time, not stored: `git worktree remove` may run
+	// outside dev.
 	known := map[string]bool{}
 	checked := map[string]bool{}
 	live := func(w model.Worktree) string {
@@ -450,11 +316,28 @@ func runWorktreeList(ctx context.Context, a *app, workspace string, all bool) er
 		return "gone"
 	}
 
+	// Any number of containers may share a checkout.
+	on := map[string][]string{}
+	containers, err := st.ListContainers(scope)
+	if err != nil {
+		return err
+	}
+	for _, c := range containers {
+		if c.SourceKind == model.SourceFolder {
+			key := c.WorkspaceName + "\x00" + c.Source
+			on[key] = append(on[key], c.Name)
+		}
+	}
+
 	return a.table(func(out io.Writer) {
-		header(out, "WORKSPACE", "NAME", "BRANCH", "CHECKOUT", "PATH")
+		header(out, "WORKSPACE", "NAME", "BRANCH", "CHECKOUT", "PATH", "CONTAINERS")
 		for _, wt := range rows {
-			row(out, wt.WorkspaceName, wt.ContainerName, wt.Branch,
-				live(wt), xpath.Shorten(wt.Path))
+			names := strings.Join(on[wt.WorkspaceName+"\x00"+wt.Path], ",")
+			if names == "" {
+				names = "-"
+			}
+			row(out, wt.WorkspaceName, wt.Name, wt.Branch,
+				live(wt), xpath.Shorten(wt.Path), names)
 		}
 	})
 }
@@ -469,11 +352,12 @@ func newWorktreeRemoveCmd(a *app) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "remove NAME",
-		Short: "Remove a worktree's container and its checkout",
-		Long: "Remove a worktree's container and its checkout.\n\n" +
-			"The container goes first, then the checkout. git refuses a checkout\n" +
-			"holding modified or untracked files, and that refusal leaves the record\n" +
-			"in place so the command can be retried; --force passes it through.\n\n" +
+		Short: "Remove a worktree checkout",
+		Long: "Remove a worktree checkout.\n\n" +
+			"Refused while any container is on the checkout: remove those first with\n" +
+			"dev container remove. git refuses a checkout holding modified or\n" +
+			"untracked files, and that refusal leaves the record in place so the\n" +
+			"command can be retried; --force passes it through.\n\n" +
 			"The branch is never deleted.",
 		Args: exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -498,52 +382,50 @@ func runWorktreeRemove(ctx context.Context, a *app, workspace, name string, forc
 	w, err := st.GetWorktree(wsName, name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return notFoundErrorf("no such worktree: %s (workspace %s); "+
-				"dev container remove takes a container that has no checkout", name, wsName)
+			return notFoundErrorf("no such worktree: %s (workspace %s)", name, wsName)
 		}
 		return err
 	}
 
-	// The container from the engine first, so a --force removal of a dirty
-	// checkout is not racing an agent still writing into it.
-	t, err := a.resolve(ctx, workspace, name)
+	// A container on the checkout would lose its folder. Refused rather than
+	// removed with it, since it may hold work.
+	on, err := containersOn(st, wsName, w.Path)
 	if err != nil {
 		return err
 	}
-	defer t.release()
-	if err := t.provider.Remove(ctx, t.container); err != nil {
-		if !force {
-			return err
-		}
-		// The same forgiveness `container remove --force` gives an engine that
-		// refuses: an orphan left by a vanished engine must still be cleanable.
-		warnf(a, "%v (forgetting the record anyway)", err)
+	if len(on) > 0 {
+		return usageErrorf("worktree %s still has %d container(s) on it: %s; "+
+			"remove them first with dev container remove", name, len(on), strings.Join(on, ", "))
 	}
 
-	// Then git, and *before* the row: git's own refusal on a dirty checkout has
-	// to leave the record intact and the command retryable, the same shape
-	// `container remove` already has when the engine refuses. provider.Remove
-	// above is safe to call again on retry — the container is already gone
-	// from the engine by the time this runs.
+	// Before the row, so a refusal from git leaves the record intact and the
+	// command retryable.
 	if err := gitwt.Remove(ctx, w.Repo, w.Path, force); err != nil {
 		return usageError(err)
 	}
-
-	// The row last. DeleteContainer cascades the worktree row away with it.
-	if err := st.DeleteContainer(wsName, name); err != nil {
+	if err := st.DeleteWorktree(wsName, name); err != nil {
 		return err
 	}
-	a.record("remove", wsName, name, map[string]any{"worktree": true})
-	removeHooksCopy(wsName, name)
 
-	// Herdr last and best-effort, for the same reason as on create.
+	// Herdr last and best-effort, as on create.
 	if err := herdr.Close(ctx, w.HerdrWorkspace); err != nil {
 		warnf(a, "%v (the checkout is gone; its Herdr workspace may linger)", err)
 	}
-
-	// The row is already gone — DeleteContainer cascaded it away — so there is
-	// nothing left to delete here. Said out loud because its absence looks
-	// like an omission.
 	a.printf("worktree %s removed; branch %s kept\n", name, w.Branch)
 	return nil
+}
+
+// containersOn names the containers in a workspace whose folder is path.
+func containersOn(st *store.Store, workspace, path string) ([]string, error) {
+	containers, err := st.ListContainers(workspace)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, c := range containers {
+		if c.SourceKind == model.SourceFolder && c.Source == path {
+			out = append(out, c.Name)
+		}
+	}
+	return out, nil
 }

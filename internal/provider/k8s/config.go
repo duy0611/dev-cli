@@ -8,10 +8,8 @@ import (
 
 // Defaults for the settings that have a sensible one.
 const (
-	// The host is Apple Silicon and cluster nodes are usually amd64. Building
-	// for the host's architecture puts an arm64 image on an amd64 node, where
-	// the pod crash-loops with "exec format error" — which reads like anything
-	// but a build problem.
+	// Cluster nodes are usually amd64, and an arm64 image there crash-loops
+	// with "exec format error", which reads like anything but a build problem.
 	defaultPlatform    = "linux/amd64"
 	defaultStorageSize = "1Gi"
 	defaultNamespace   = "default"
@@ -19,13 +17,11 @@ const (
 
 // Config is a k8s provider's settings, stored as JSON in providers.config.
 type Config struct {
-	// Context is the kubeconfig context to use. Empty means whatever is
-	// current, which is deliberately allowed but worth being explicit about.
+	// Empty means the kubeconfig's current context.
 	Context string `json:"context,omitempty"`
-	// Namespace must already exist; this tool does not create namespaces.
+	// Must already exist.
 	Namespace string `json:"namespace"`
-	// Registry is the prefix images are pushed to and pulled from, e.g.
-	// europe-docker.pkg.dev/my-project/dev.
+	// Registry is the image prefix, e.g. europe-docker.pkg.dev/my-project/dev.
 	Registry string `json:"registry"`
 	// Platform is the architecture to build for.
 	Platform string `json:"platform"`
@@ -35,8 +31,7 @@ type Config struct {
 	StorageClass string `json:"storageClass,omitempty"`
 	// ServiceAccount is optional; empty means the namespace default.
 	ServiceAccount string `json:"serviceAccount,omitempty"`
-	// ImagePullSecret is optional, for a registry the nodes cannot read
-	// anonymously.
+	// For a registry the nodes cannot pull from anonymously.
 	ImagePullSecret string `json:"imagePullSecret,omitempty"`
 }
 
@@ -52,8 +47,8 @@ func ParseConfig(raw string) (Config, error) {
 	return c, c.validate()
 }
 
-// Marshal renders the config for storage, defaults included so that a later
-// change to a default cannot silently move an existing provider.
+// Marshal renders the config for storage. Defaults are stored too, so a later
+// change to one cannot move an existing provider.
 func (c Config) Marshal() (string, error) {
 	c.applyDefaults()
 	b, err := json.Marshal(c)
@@ -75,8 +70,8 @@ func (c *Config) applyDefaults() {
 	}
 }
 
-// validate catches the settings whose absence fails much later — a missing
-// registry surfaces as a push to Docker Hub under a name that does not exist.
+// validate rejects settings whose absence only fails later, e.g. a push to
+// Docker Hub with no registry.
 func (c Config) validate() error {
 	if c.Registry == "" {
 		return fmt.Errorf("the k8s provider needs a registry (--registry)")

@@ -8,8 +8,7 @@ import (
 	"github.com/duy0611/dev-cli/internal/provider/k8s"
 )
 
-// runWorkspace drives the real `workspace` command tree, so the flag handling
-// in RunE — --ssh-forward given versus absent — is what is under test.
+// runWorkspace drives the real `workspace` command tree.
 func runWorkspace(t *testing.T, a *app, argv ...string) error {
 	t.Helper()
 	root := newRootCmd("test")
@@ -18,8 +17,8 @@ func runWorkspace(t *testing.T, a *app, argv ...string) error {
 	return root.Execute()
 }
 
-// seedSource creates providers p and q and a workspace src on p with ssh
-// forwarding on and two settings.
+// seedSource creates providers p and q and a workspace src on p, with
+// forwarding and two settings.
 func seedSource(t *testing.T, a *app) {
 	t.Helper()
 	for _, p := range []string{"p", "q"} {
@@ -65,7 +64,6 @@ func TestWorkspaceInitFromCopiesEverything(t *testing.T) {
 	if ws.ProviderName != "p" {
 		t.Errorf("provider = %q, want p", ws.ProviderName)
 	}
-	// Absent from the command line means inherited, not off.
 	if !ws.SSHForward {
 		t.Error("ssh forwarding was not inherited from the source")
 	}

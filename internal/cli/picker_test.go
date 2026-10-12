@@ -10,9 +10,8 @@ import (
 	"github.com/duy0611/dev-cli/internal/dcgen"
 )
 
-// Escape sequences arrive as whole reads most of the time and split across two
-// reads sometimes, which is the bug this table exists to prevent: a decoder
-// that assumes three bytes are present treats a lone ESC as an arrow key.
+// Escape sequences sometimes split across reads; a decoder that assumes three
+// bytes treats a lone ESC as an arrow.
 func TestDecodeKey(t *testing.T) {
 	tests := []struct {
 		name string
@@ -51,7 +50,6 @@ func testItems() []pickItem {
 }
 
 func TestMultiSelectTogglesAndAccepts(t *testing.T) {
-	// Toggle the first, move down twice, toggle the third, accept.
 	in := strings.NewReader(" \x1b[B\x1b[B \r")
 	got, err := multiSelect(testItems(), in, &bytes.Buffer{})
 	if err != nil {
@@ -62,7 +60,6 @@ func TestMultiSelectTogglesAndAccepts(t *testing.T) {
 	}
 }
 
-// Selecting nothing is a real answer: a bare Ubuntu box.
 func TestMultiSelectAcceptsAnEmptySelection(t *testing.T) {
 	got, err := multiSelect(testItems(), strings.NewReader("\r"), &bytes.Buffer{})
 	if err != nil {
@@ -90,10 +87,8 @@ func TestMultiSelectCancels(t *testing.T) {
 	}
 }
 
-// The cursor must not walk off either end: an index out of range here is a
-// panic in the middle of an interactive prompt.
+// An out-of-range cursor would panic mid-prompt.
 func TestMultiSelectClampsTheCursor(t *testing.T) {
-	// Up past the top, then toggle: still the first item.
 	got, err := multiSelect(testItems(), strings.NewReader("\x1b[A\x1b[A \r"), &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("multiSelect: %v", err)
@@ -102,7 +97,6 @@ func TestMultiSelectClampsTheCursor(t *testing.T) {
 		t.Errorf("selected %v, want [node]", got)
 	}
 
-	// Down past the bottom, then toggle: still the last item.
 	got, err = multiSelect(testItems(), strings.NewReader("\x1b[B\x1b[B\x1b[B\x1b[B \r"), &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("multiSelect: %v", err)
@@ -112,8 +106,6 @@ func TestMultiSelectClampsTheCursor(t *testing.T) {
 	}
 }
 
-// End of input without an accept is the operator's terminal going away. It must
-// not be read as "they accepted an empty list" and silently build something.
 func TestMultiSelectTreatsEOFAsCancellation(t *testing.T) {
 	_, err := multiSelect(testItems(), strings.NewReader(" "), &bytes.Buffer{})
 	if !errors.Is(err, errPickCancelled) {
@@ -121,9 +113,6 @@ func TestMultiSelectTreatsEOFAsCancellation(t *testing.T) {
 	}
 }
 
-// The catalog rows have to say which references are the devcontainers
-// project's own and which are somebody's community image, because pulling the
-// latter is a decision rather than a default.
 func TestCatalogItemsMarkTheSource(t *testing.T) {
 	items := catalogItems(dcgen.Catalog())
 

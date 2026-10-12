@@ -1,9 +1,5 @@
-// Package provider abstracts where a devcontainer runs.
-//
-// The abstraction sits at the execution level rather than at devcontainer-spec
-// parsing, because each provider drives a different external binary: the local
-// one shells out to the devcontainer CLI and docker, and the Kubernetes one
-// will shell out to kubectl.
+// Package provider abstracts where a devcontainer runs. Each provider drives
+// its own external binary rather than parsing the devcontainer spec.
 package provider
 
 import (
@@ -16,15 +12,12 @@ import (
 )
 
 // EnvVar is one resolved environment variable to inject into a container.
-// Resolved, because turning a setting's spec into a value needs the secret
-// backend, which is a host concern rather than a provider one.
 type EnvVar struct {
 	Key   string
 	Value string
 }
 
-// ExecOpts carries the stream wiring for a command run inside a container, so
-// that `shell`, `exec` and `agent` are one code path with different options.
+// ExecOpts carries the stream wiring for a command run inside a container.
 type ExecOpts struct {
 	Env    []EnvVar
 	TTY    bool
@@ -35,14 +28,13 @@ type ExecOpts struct {
 
 // Provider runs and inspects containers for one engine.
 type Provider interface {
-	// Up creates the container if it is missing and starts it if it is
-	// stopped. Safe to call on a running container.
+	// Up creates the container if missing, and starts it if stopped. Safe on a
+	// running one.
 	Up(ctx context.Context, c model.Container, env []EnvVar) error
 
 	// Rebuild recreates the container from its configuration, optionally
-	// without the image layer cache. It takes the same env as Up, because the
-	// lifecycle commands run again and a postCreateCommand that needs a token
-	// must not start working on create and failing on rebuild.
+	// without the image layer cache. Takes the same env as Up, since lifecycle
+	// commands run again.
 	Rebuild(ctx context.Context, c model.Container, env []EnvVar, noCache bool) error
 
 	// Exec runs a command inside a running container.
@@ -50,8 +42,8 @@ type Provider interface {
 
 	Stop(ctx context.Context, c model.Container) error
 
-	// Remove deletes the container. Removing one that is not there is not an
-	// error: the caller's goal is that it be gone.
+	// Remove deletes the container. Removing one that is absent is not an
+	// error.
 	Remove(ctx context.Context, c model.Container) error
 
 	Status(ctx context.Context, c model.Container) (model.Status, error)
@@ -59,87 +51,50 @@ type Provider interface {
 	Logs(ctx context.Context, c model.Container, follow bool, out io.Writer) error
 }
 
-// Syncer reconciles a container's copy of the workspace's settings.
-//
-// A postcondition rather than an action: after Sync returns, whatever copy the
-// provider keeps outside the process dev launches matches the workspace. A
-// provider that keeps no such copy satisfies that by doing nothing — the local
-// one injects the settings per invocation, so there is nothing that can drift.
-//
-// Deliberately not part of Provider, for the reason AgentForwarder is not
-// either: a provider added later should be able to run a container before it
-// owes this. Callers type assert.
-//
-// Resolved variables are passed in rather than read here, as Up and Rebuild
-// take them: turning a spec into a value needs the secret backend, which is a
-// host concern.
+// Syncer reconciles a container's copy of the workspace's settings. It is a
+// postcondition: after Sync returns, any copy the provider keeps matches the
+// workspace. A provider that keeps no copy satisfies this by doing nothing.
 type Syncer interface {
 	Sync(ctx context.Context, c model.Container, env []EnvVar) error
 }
 
 // AgentForwarder is implemented by providers that can carry the host's SSH
-// agent into a container.
-//
-// Optional for the same reason Syncer is, and discovered the same way — but
-// note the asymmetry runs the other way here: both providers implement this
-// one, because it needs only an exec channel and both have one. It is separate
-// from Provider anyway, so that a provider added later is not obliged to
-// support it before it can run a container at all.
-//
-// The returned socket path is where the agent is reachable inside the
-// container, for SSH_AUTH_SOCK. Callers must Close the session: until they do,
-// anything in the container can ask the operator's agent to sign.
+// agent into a container. Callers must Close the session: until they do, the
+// container can ask the operator's agent to sign.
 type AgentForwarder interface {
 	ForwardAgent(ctx context.Context, c model.Container, agentSocket string) (AgentSession, error)
 }
 
 // ConfigOverrider is a provider that consumes a merged devcontainer.json,
-// through model.Container's OverrideConfigPath.
-//
-// Optional and discovered by type assertion, for the reason Syncer is: the
-// Kubernetes provider builds its own pod spec and ignores a document's mounts
-// entirely, so merging one would be work with no effect — and worse, a project
-// file that does not parse would fail a k8s command over a document k8s never
-// reads.
-//
-// The method reports nothing; its presence is the answer.
+// through model.Container's OverrideConfigPath. The method is a marker:
+// implementing it is the answer.
 type ConfigOverrider interface {
 	OverridesConfig()
 }
 
-// ConfigReader is a provider that can report a container's configuration as
-// the devcontainer CLI will merge it: the project's document, every feature it
+// ConfigReader is a provider that can report a container's configuration as the
+// devcontainer CLI will merge it: the project's document, every feature it
 // names, and the override dev passes alongside.
-//
-// Optional, and discovered by type assertion, for the reason ConfigOverrider
-// is: what it answers — privileged mode, mounts, runArgs — only reaches the
-// engine on a provider that hands the document to it. The Kubernetes provider
-// builds its own pod spec and ignores all three, so asking it would check a
-// document that never runs.
 type ConfigReader interface {
-	// MergedConfig returns the merged configuration as the CLI reports it, as
-	// raw JSON, and the compose files it names, resolved — empty unless the
-	// configuration uses docker compose.
+	// MergedConfig returns the CLI's merged configuration as raw JSON, and the
+	// resolved compose files, which are empty unless docker compose is used.
 	MergedConfig(ctx context.Context, c model.Container) (merged []byte, composeFiles []string, err error)
 }
 
 // AgentSession is a live agent relay.
 type AgentSession interface {
 	// Socket is the path inside the container to put in SSH_AUTH_SOCK. Fixed
-	// for the session's life, across any respawn of the relay behind it.
+	// for the session's life, across relay respawns.
 	Socket() string
 	Close() error
-	// End reports how the session ended — clean, killed or unexpected — once
-	// Close has returned. For the audit log.
+	// End reports how the session ended, once Close has returned.
 	End() string
-	// Drops reports each time the relay's exec channel collapsed, oldest
-	// first. For the audit log.
+	// Drops reports each time the relay's exec channel collapsed, oldest first.
 	Drops() []AgentDrop
 }
 
-// AgentDrop is one collapse of a relay's exec channel. A mirror of relay.Drop,
-// because this package cannot name the relay package without every provider
-// importing it.
+// AgentDrop is one collapse of a relay's exec channel. Mirrors relay.Drop,
+// which this package cannot import.
 type AgentDrop struct {
 	At       time.Time
 	Err      string    // empty when the channel simply closed
@@ -149,9 +104,8 @@ type AgentDrop struct {
 // Factory builds the Provider for a configured provider record.
 type Factory func(p model.Provider) (Provider, error)
 
-// registry maps a provider kind to its constructor. Populated by each
-// implementation's init, so that adding the Kubernetes provider later is one
-// new package and no edit here.
+// registry maps a provider kind to its constructor, populated by each
+// implementation's init.
 var registry = map[model.ProviderKind]Factory{}
 
 // Register wires a kind to its constructor. Called from package init.
@@ -174,13 +128,9 @@ type Mount struct {
 	ReadOnly    bool
 }
 
-// MountReader is a provider that can report what an existing container was
-// started with — which is fixed at create, so a mount dev would add today is
-// absent from a container created before it was needed.
-//
-// Optional for ConfigOverrider's reason: only a provider that hands the
-// document's mounts to its engine has them to report. exists is false when the
-// engine has no such container.
+// MountReader reports the mounts an existing container was created with. Mounts
+// are fixed at create, so one dev now wants may be absent. exists is false when
+// the engine has no such container.
 type MountReader interface {
 	Mounts(ctx context.Context, c model.Container) (mounts []Mount, exists bool, err error)
 }

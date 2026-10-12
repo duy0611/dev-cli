@@ -12,9 +12,8 @@ import (
 
 // tarDir archives a local skill directory, its contents at the archive root.
 //
-// Regular files and directories only. A symlink would be followed on the host
-// or recreated in the container, and either way a skill could carry a pointer
-// to something that is not part of it.
+// Regular files and directories only: a symlink would be followed on the host
+// or recreated in the container.
 func tarDir(dir string) ([]byte, error) {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
@@ -44,9 +43,7 @@ func tarDir(dir string) ([]byte, error) {
 		if info.IsDir() {
 			hdr.Name += "/"
 		}
-		// A host uid means nothing in the container, and extracting as a user
-		// who does not own it is what makes tar warn. Zeroed, and extracted
-		// with -o so the files belong to whoever runs the extraction.
+		// Zeroed: tar warns on a uid it does not own, so extraction uses -o.
 		hdr.Uid, hdr.Gid, hdr.Uname, hdr.Gname = 0, 0, "", ""
 		if err := tw.WriteHeader(hdr); err != nil {
 			return err

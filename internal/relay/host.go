@@ -10,12 +10,7 @@ import (
 )
 
 // AgentSocket returns the host's SSH agent socket, or an error naming what is
-// missing.
-//
-// Reported by name because the alternative is discovered much later and much
-// less clearly: without an agent the container's socket exists but answers
-// nothing, and ssh-add prints "error fetching identities: communication with
-// agent failed", which says nothing about the host at all.
+// missing. Failing here beats the container's socket answering nothing.
 func AgentSocket() (string, error) {
 	path := os.Getenv("SSH_AUTH_SOCK")
 	if path == "" {
@@ -27,22 +22,15 @@ func AgentSocket() (string, error) {
 	return path, nil
 }
 
-// Host runs the host half: it reads framed connections from the container and
-// joins each one to a fresh dial of the operator's agent.
-//
-// in and out are the container process's stdout and stdin — the exec channel,
-// whichever provider established it. Returns when that channel ends.
+// Host runs the host half: it joins each framed connection from the container
+// to a fresh dial of the agent. It returns when the exec channel ends.
 func Host(agentSocket string, in io.Reader, out io.Writer) error {
 	m := newMux(out)
 
 	var wg sync.WaitGroup
 	err := readFrames(in, m, func(id uint32) {
-		// Registered here, in the reader, rather than inside the goroutine
-		// below. The client writes its request immediately after connecting, so
-		// the data frame can arrive before a goroutine has had a chance to run
-		// — and a data frame for an unregistered channel is dropped, which
-		// leaves the client waiting for a reply to a request the agent never
-		// saw.
+		// Registered before the goroutine starts: a data frame for an
+		// unregistered channel is dropped.
 		p := m.add(id)
 
 		wg.Add(1)
@@ -55,7 +43,6 @@ func Host(agentSocket string, in io.Reader, out io.Writer) error {
 	m.shutdown()
 	wg.Wait()
 	if errors.Is(err, io.EOF) {
-		// The container end closing is how a session ends.
 		return nil
 	}
 	return err
@@ -68,15 +55,14 @@ func hostConn(m *mux, id uint32, p *pipe, agentSocket string) {
 
 	conn, err := net.Dial("unix", agentSocket)
 	if err != nil {
-		// Tell the container so its client fails now. Without this the client
-		// would wait on a connection nothing is ever going to answer.
+		// Close the channel now, or the client waits on a connection nothing
+		// answers.
 		_ = m.send(frame{kind: kindClose, channel: id})
 		return
 	}
 	defer func() { _ = conn.Close() }()
 	defer func() { _ = m.send(frame{kind: kindClose, channel: id}) }()
 
-	// Container to agent.
 	go func() {
 		_, _ = io.Copy(conn, p)
 		if cw, ok := conn.(interface{ CloseWrite() error }); ok {
@@ -84,7 +70,6 @@ func hostConn(m *mux, id uint32, p *pipe, agentSocket string) {
 		}
 	}()
 
-	// Agent to container.
 	buf := make([]byte, 32*1024)
 	for {
 		n, err := conn.Read(buf)

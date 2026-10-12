@@ -8,8 +8,7 @@ import (
 	"github.com/duy0611/dev-cli/internal/model"
 )
 
-// What Kubernetes accepts for a label value, which is the stricter of the two
-// places a slug is used.
+// Kubernetes' label-value rule, the stricter of the two places a slug is used.
 var labelValue = regexp.MustCompile(`^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$`)
 
 func container(workspace, name string) model.Container {
@@ -41,8 +40,7 @@ func TestSlugIsAValidLabelValue(t *testing.T) {
 	}
 }
 
-// Lowercasing alone would map these onto one object, and the second create
-// would silently adopt the first's container.
+// Lowercasing alone would merge these into one object.
 func TestSlugSeparatesNamesThatDifferOnlyInCase(t *testing.T) {
 	pairs := [][2]string{
 		{"My_Api", "my-api"},
@@ -56,8 +54,7 @@ func TestSlugSeparatesNamesThatDifferOnlyInCase(t *testing.T) {
 	}
 }
 
-// Object names are derived, never stored, so an unstable slug would orphan
-// every object created by an earlier run.
+// Names are derived, not stored, so an unstable slug orphans earlier objects.
 func TestSlugIsStable(t *testing.T) {
 	const name = "My_Api"
 	first := slug(name)
@@ -68,8 +65,7 @@ func TestSlugIsStable(t *testing.T) {
 	}
 }
 
-// Two workspaces holding a container of the same name is the point of
-// workspaces, so their objects must not collide in one namespace.
+// Same container name in two workspaces must not collide in one namespace.
 func TestObjectNamesAreWorkspaceScoped(t *testing.T) {
 	a := objectName(container("alpha", "api"))
 	b := objectName(container("beta", "api"))

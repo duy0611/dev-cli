@@ -10,10 +10,8 @@ import (
 	"github.com/duy0611/dev-cli/internal/model"
 )
 
-// Every provider call needs a --workspace-folder that exists: the devcontainer
-// CLI takes one on up, exec and read-configuration alike. A folderless
-// container has no host directory, so it borrows the temporary one its
-// configuration is already written into.
+// Provider calls need a --workspace-folder that exists; a folderless container
+// borrows the temporary directory its configuration is written into.
 func TestMaterialiseGivesAFolderlessContainerAFolder(t *testing.T) {
 	c := model.Container{
 		Name: "scratch", WorkspaceName: "ws",
@@ -33,8 +31,6 @@ func TestMaterialiseGivesAFolderlessContainerAFolder(t *testing.T) {
 	if info, err := os.Stat(got.Source); err != nil || !info.IsDir() {
 		t.Fatalf("Source %q is not a directory: %v", got.Source, err)
 	}
-	// The config has to be inside the folder that is handed to the CLI, or the
-	// CLI reads the layout around a file that is somewhere else entirely.
 	if !strings.HasPrefix(got.ConfigPath, got.Source+string(filepath.Separator)) {
 		t.Errorf("ConfigPath %q is not inside Source %q", got.ConfigPath, got.Source)
 	}
@@ -45,7 +41,6 @@ func TestMaterialiseGivesAFolderlessContainerAFolder(t *testing.T) {
 	}
 }
 
-// A folder container's source is the project, and nothing may move it.
 func TestMaterialiseLeavesAFolderSourceAlone(t *testing.T) {
 	dir := t.TempDir()
 	c := model.Container{
@@ -66,8 +61,8 @@ func TestMaterialiseLeavesAFolderSourceAlone(t *testing.T) {
 	}
 }
 
-// projectContainer is a container whose project ships its own devcontainer.json
-// at path, and which persists agent state.
+// projectContainer is a container whose project ships devcontainer.json at
+// path.
 func projectContainer(path string) model.Container {
 	return model.Container{
 		Name:          "c1",
@@ -79,7 +74,7 @@ func projectContainer(path string) model.Container {
 	}
 }
 
-// writeProjectConfig puts a devcontainer.json on disk and returns its path.
+// writeProjectConfig writes a devcontainer.json and returns its path.
 func writeProjectConfig(t *testing.T, body string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -110,21 +105,18 @@ func TestMaterialiseBuildsAnOverrideForAProjectOwnedContainer(t *testing.T) {
 		t.Errorf("override does not name the state volume: %s", body)
 	}
 
-	// The project's own path still reaches the CLI as --config, which is what
-	// keeps a relative "dockerfile" anchored to the project.
+	// The project's own path still reaches the CLI as --config, keeping a
+	// relative dockerfile anchored.
 	if c.ConfigPath != path {
 		t.Errorf("ConfigPath = %q, want the project's own %q", c.ConfigPath, path)
 	}
 
-	// The temp file goes with the invocation; nothing survives release.
 	cleanup()
 	if _, err := os.Stat(c.OverrideConfigPath); !os.IsNotExist(err) {
 		t.Errorf("cleanup left the override behind: %v", err)
 	}
 }
 
-// A generated document already names the volume in its own mounts. Adding an
-// override too would be two mechanisms for one outcome.
 func TestMaterialiseBuildsNoOverrideForAGeneratedContainer(t *testing.T) {
 	c := projectContainer("")
 	c.GeneratedConfig = `{"name":"demo"}`
@@ -157,7 +149,6 @@ func TestMaterialiseBuildsNoOverrideWithoutPersistState(t *testing.T) {
 	}
 }
 
-// k8s ignores a document's mounts, so it is never handed an override.
 func TestMaterialiseBuildsNoOverrideWhenTheProviderIgnoresIt(t *testing.T) {
 	c := projectContainer(writeProjectConfig(t, `{"name":"demo"}`))
 
@@ -173,8 +164,6 @@ func TestMaterialiseBuildsNoOverrideWhenTheProviderIgnoresIt(t *testing.T) {
 	}
 }
 
-// The deferred failure. A project file dev cannot parse must not strand the
-// container in the engine: stop, remove, logs and status never read it.
 func TestMaterialiseDefersAParseFailure(t *testing.T) {
 	path := writeProjectConfig(t, `{"name":}`)
 
@@ -187,15 +176,11 @@ func TestMaterialiseDefersAParseFailure(t *testing.T) {
 	if !isOverlayError(err) {
 		t.Errorf("error is not deferrable: %v", err)
 	}
-	// The container is still usable for the commands that do not need the
-	// override — Remove finds it by docker label, not by config.
 	if c.Name != "c1" {
 		t.Errorf("materialise lost the container on a parse failure: %+v", c)
 	}
 }
 
-// The merge runs per invocation, so an edit to the project's file between two
-// commands is picked up by the second. A stored merge would freeze a snapshot.
 func TestMaterialiseRereadsTheProjectConfig(t *testing.T) {
 	path := writeProjectConfig(t, `{"name":"demo"}`)
 
@@ -231,10 +216,6 @@ func TestMaterialiseRereadsTheProjectConfig(t *testing.T) {
 	_ = first
 }
 
-// A project-owned worktree container gets both of a worktree's bind mounts
-// merged in, the same way the state mount is: dev never writes into a
-// project's own devcontainer.json (invariant 9), so there is no generated
-// document to name them in.
 func TestMaterialiseBuildsAWorktreeOverride(t *testing.T) {
 	path := writeProjectConfig(t, `{"name":"demo"}`)
 	c := projectContainer(path)
@@ -261,9 +242,6 @@ func TestMaterialiseBuildsAWorktreeOverride(t *testing.T) {
 	}
 }
 
-// A worktree container that also persists state gets all three bind mounts in
-// one document, with no target repeated — docker refuses the whole run with
-// "duplicate mount destination" otherwise.
 func TestMaterialiseWorktreeWithStateGetsBothMerges(t *testing.T) {
 	path := writeProjectConfig(t, `{"name":"demo"}`)
 	c := projectContainer(path)
@@ -299,8 +277,6 @@ func TestMaterialiseWorktreeWithStateGetsBothMerges(t *testing.T) {
 	}
 }
 
-// A generated document already names both mounts, so no override is built for
-// one — the same rule the state mount follows.
 func TestMaterialiseBuildsNoWorktreeOverrideForAGeneratedContainer(t *testing.T) {
 	c := projectContainer("")
 	c.GeneratedConfig = `{"name":"demo"}`

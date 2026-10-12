@@ -1,10 +1,8 @@
 // Package kubetoken mints a short-lived ServiceAccount token on the host and
 // wraps it in a kubeconfig a container can use.
 //
-// It lists what can be picked and mints; asking which to pick is the CLI's job.
-// Every call names its context explicitly: a call that falls back on whatever
-// kubeconfig has selected does not fail when that is the wrong cluster, it
-// succeeds there.
+// Every call names its context explicitly, since a fallback to the current
+// context would succeed silently against the wrong cluster.
 package kubetoken
 
 import (
@@ -28,31 +26,26 @@ type Request struct {
 	Context        string
 	Namespace      string
 	ServiceAccount string
-	// Duration is the lifetime asked for. Zero passes no --duration, so the
-	// API server's own default applies rather than this package's idea of it.
+	// Duration is the lifetime asked for. Zero leaves the server's default.
 	Duration time.Duration
 }
 
 // Token is a minted token, already wrapped for the container.
 type Token struct {
-	// Kubeconfig is a self-contained document: one cluster, one user carrying
-	// the token, one context. It holds a credential and must never be logged.
+	// Kubeconfig holds a credential and must never be logged.
 	Kubeconfig []byte
-	// Expiry is when the token stops working, read from the token itself. Zero
-	// when it could not be read.
+	// Expiry is read from the token's exp claim; zero when unreadable.
 	Expiry time.Time
 }
 
-// shortfall is how far short of the request an issued token may fall before
-// it counts as shortened. The API server stamps exp from its own clock after
-// the request has travelled, so an exact comparison would warn every time.
+// shortfall is the tolerance for clock skew and latency before a token counts
+// as shortened.
 const shortfall = time.Minute
 
 // Shortened reports whether the cluster issued less than was asked for.
 //
-// A server whose --service-account-max-token-expiration is lower than the
-// request does not refuse it: it quietly issues a shorter token. This is the
-// only place that becomes visible before kubectl starts saying Unauthorized.
+// The server issues a shorter token rather than refusing one asked for too
+// long.
 func (t Token) Shortened(asked time.Duration, now time.Time) bool {
 	if asked == 0 || t.Expiry.IsZero() {
 		return false
@@ -62,8 +55,7 @@ func (t Token) Shortened(asked time.Duration, now time.Time) bool {
 
 // Contexts lists the host kubeconfig's contexts and reports the current one.
 //
-// No current context is an ordinary state, not an error: the list is still
-// what the operator picks from.
+// No current context is not an error.
 func Contexts(ctx context.Context) (names []string, current string, err error) {
 	out, err := kubectl(ctx, "config", "get-contexts", "-o", "name")
 	if err != nil {
@@ -80,8 +72,7 @@ func Namespaces(ctx context.Context, kubeContext string) (names []string, def st
 	if err != nil {
 		return nil, "", err
 	}
-	// --minify with --context restricts the view to that context, so this is
-	// its namespace rather than the first one in the file.
+	// --minify with --context yields that context's namespace.
 	def, _ = kubectl(ctx, "config", "view", "--minify", "--context", kubeContext,
 		"-o", "jsonpath={..namespace}")
 	return lines(out, "namespace/"), strings.TrimSpace(def), nil
@@ -115,8 +106,7 @@ func Mint(ctx context.Context, r Request) (Token, error) {
 			r.Namespace, r.ServiceAccount, r.Context)
 	}
 
-	// --flatten inlines the CA data: a certificate-authority path names a file
-	// on the host, which does not exist in the container.
+	// --flatten inlines CA data; a CA path would name a host file.
 	view, err := kubectl(ctx, "--context", r.Context, "config", "view",
 		"--minify", "--flatten", "-o", "json")
 	if err != nil {
@@ -134,11 +124,8 @@ func Mint(ctx context.Context, r Request) (Token, error) {
 	return Token{Kubeconfig: kc, Expiry: expiry(token)}, nil
 }
 
-// clusterOf picks the one cluster entry out of a minified view.
-//
-// Only the cluster is taken. The view's user carries the operator's own
-// credentials — client certificates, an exec plugin — and the whole point of
-// the token is that none of those reach the container.
+// clusterOf picks the one cluster entry from a minified view. The user is
+// dropped so the operator's own credentials never reach the container.
 func clusterOf(view string) (map[string]any, error) {
 	var v struct {
 		Clusters []struct {
@@ -164,8 +151,7 @@ func clusterOf(view string) (map[string]any, error) {
 	return out, nil
 }
 
-// name labels the cluster, user and context in the generated kubeconfig. One
-// of each, so there is nothing to tell apart.
+// name labels the cluster, user and context in the generated kubeconfig.
 const name = "dev"
 
 func render(cluster map[string]any, namespace, token string) ([]byte, error) {
@@ -180,11 +166,8 @@ func render(cluster map[string]any, namespace, token string) ([]byte, error) {
 	return yaml.Marshal(doc)
 }
 
-// expiry reads a JWT's exp claim, zero when there is none to read.
-//
-// The signature is not checked. This reports what the cluster handed back so
-// the operator knows when to refresh; trusting the token is the API server's
-// business, not this package's.
+// expiry reads a JWT's exp claim, zero when there is none. The signature is not
+// checked: that is the API server's job.
 func expiry(token string) time.Time {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {

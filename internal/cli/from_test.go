@@ -1,21 +1,16 @@
 package cli
 
 import (
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/duy0611/dev-cli/internal/dcgen"
-	"github.com/duy0611/dev-cli/internal/gitwt"
 	"github.com/duy0611/dev-cli/internal/model"
 )
 
 // createSource makes a generated, folderless container to clone from.
-//
-// generate is set explicitly: a scripted --no-folder create without it renders
-// no tools at all, which would leave every comparison below equal and empty.
 func createSource(t *testing.T, a *app, name string, opts createOpts) model.Container {
 	t.Helper()
 	opts.noFolder, opts.noStart, opts.generate = true, true, true
@@ -65,8 +60,6 @@ func TestCreateFromCopiesTheSourceTools(t *testing.T) {
 	if got := toolsOf(t, c); !slices.Equal(got, want) {
 		t.Errorf("tools = %v, want the source's %v", got, want)
 	}
-	// The document is rendered for the new container, never copied: a copy
-	// would mount the source's workspace and state volumes into this one.
 	for _, want := range []string{"dev-ws-scratch", "dev-ws-scratch-state"} {
 		if !strings.Contains(c.GeneratedConfig, want) {
 			t.Errorf("document does not name %s:\n%s", want, c.GeneratedConfig)
@@ -110,8 +103,6 @@ func TestCreateFromAppliesAToolDiff(t *testing.T) {
 	}
 }
 
-// applyToolDiff treats a plain list as a replacement, which would silently
-// discard everything --from exists to carry.
 func TestCreateFromRejectsAPlainToolList(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -223,81 +214,40 @@ func TestCreateFromLeavesTheSourceAlone(t *testing.T) {
 	}
 }
 
-func TestWorktreeCreateFromCopiesTools(t *testing.T) {
+func TestContainerOnAWorktreeFromCopiesTools(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
 	src := createSource(t, a, "api", createOpts{tools: []string{"go"}})
 	repo := initRepo(t)
 
-	opts := baseOpts(repo, filepath.Join(t.TempDir(), "wt"))
-	opts.create = createOpts{from: "api", noStart: true}
-	if err := runWorktreeCreate(t.Context(), a, "", "feat", opts); err != nil {
-		t.Fatalf("worktree create --from: %v", err)
-	}
+	path := filepath.Join(t.TempDir(), "wt")
+	worktreeWithContainer(t, a, "feat", repo, path, createOpts{from: "api"})
 	c := getContainer(t, a, "feat")
 	if got, want := toolsOf(t, c), toolsOf(t, src); !slices.Equal(got, want) {
 		t.Errorf("tools = %v, want %v", got, want)
 	}
-	st, _ := a.store()
-	w, err := st.GetWorktree("ws", "feat")
-	if err != nil {
-		t.Fatalf("worktree row: %v", err)
-	}
-	for _, want := range []string{w.Repo, w.Path} {
-		if !strings.Contains(c.GeneratedConfig, want) {
-			t.Errorf("document does not bind %s:\n%s", want, c.GeneratedConfig)
+	for _, want := range []string{c.WorktreeRepo, c.Source} {
+		if want == "" || !strings.Contains(c.GeneratedConfig, want) {
+			t.Errorf("document does not bind %q:\n%s", want, c.GeneratedConfig)
 		}
 	}
 }
 
-// Validated before git runs, so a mistyped source leaves no checkout and no
-// branch behind to clean up.
-func TestWorktreeCreateFromAMissingSourceMakesNoCheckout(t *testing.T) {
-	requireGit(t)
-	a, _ := newTestApp(t)
-	seedWorkspace(t, a)
-	repo := initRepo(t)
-	path := filepath.Join(t.TempDir(), "wt")
-
-	opts := baseOpts(repo, path)
-	opts.create = createOpts{from: "nope", noStart: true}
-	err := runWorktreeCreate(t.Context(), a, "", "feat", opts)
-	if got := exitCodeOf(err); got != exitNotFound {
-		t.Fatalf("exit = %d (%v), want %d", got, err, exitNotFound)
-	}
-	if _, err := os.Stat(path); err == nil {
-		t.Errorf("a refused --from left a checkout at %s", path)
-	}
-	if gitwt.BranchExists(t.Context(), repo, "feat") {
-		t.Error("a refused --from created the branch")
-	}
-}
-
-func TestWorktreeCreateFromAWorktreeSourceDropsItsBinds(t *testing.T) {
+func TestContainerFromAWorktreeSourceDropsItsBinds(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
 	repo := initRepo(t)
 
-	first := baseOpts(repo, filepath.Join(t.TempDir(), "wt1"))
-	if err := runWorktreeCreate(t.Context(), a, "", "one", first); err != nil {
-		t.Fatalf("first worktree: %v", err)
-	}
-	st, _ := a.store()
-	w1, err := st.GetWorktree("ws", "one")
-	if err != nil {
-		t.Fatal(err)
-	}
+	path1 := filepath.Join(t.TempDir(), "wt1")
+	worktreeWithContainer(t, a, "one", repo, path1, createOpts{})
+	one := getContainer(t, a, "one")
 
-	second := baseOpts(repo, filepath.Join(t.TempDir(), "wt2"))
-	second.branch = "other"
-	second.create = createOpts{from: "one", noStart: true}
-	if err := runWorktreeCreate(t.Context(), a, "", "two", second); err != nil {
-		t.Fatalf("second worktree: %v", err)
-	}
+	path2 := filepath.Join(t.TempDir(), "wt2")
+	worktreeWithContainer(t, a, "two", repo, path2, createOpts{from: "one"})
 	c := getContainer(t, a, "two")
-	if strings.Contains(c.GeneratedConfig, w1.Path) {
-		t.Errorf("document binds the source's checkout %s:\n%s", w1.Path, c.GeneratedConfig)
+	if strings.Contains(c.GeneratedConfig, one.Source) {
+		t.Errorf("document binds the source's checkout %s:\n%s", one.Source, c.GeneratedConfig)
 	}
 }

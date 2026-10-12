@@ -19,8 +19,7 @@ type Filter struct {
 	Since     time.Time
 }
 
-// Entry is one record as read back: the raw line, for --json, and the fields
-// decoded, for everything else.
+// Entry is one record: the raw line for --json, and the decoded fields.
 type Entry struct {
 	Raw    []byte
 	Time   time.Time
@@ -32,12 +31,9 @@ type Entry struct {
 func (e Entry) Workspace() string { s, _ := e.Fields["workspace"].(string); return s }
 func (e Entry) Container() string { s, _ := e.Fields["container"].(string); return s }
 
-// Read returns the records in path that match f, oldest first.
-//
-// A missing file is not an error: no record has been written yet, which is a
-// true and unremarkable answer. A line that does not parse is skipped and
-// reported through skipped, so one damaged line — a disk that filled mid-write
-// — does not hide everything after it.
+// Read returns the records in path that match f, oldest first. A missing file
+// yields none. A line that does not parse is skipped and reported through
+// skipped, so one damaged line does not hide the rest.
 func Read(path string, f Filter, skipped func(line int, err error)) ([]Entry, error) {
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -53,8 +49,8 @@ func Read(path string, f Filter, skipped func(line int, err error)) ([]Entry, er
 func scan(r io.Reader, f Filter, skipped func(line int, err error)) ([]Entry, error) {
 	var out []Entry
 	sc := bufio.NewScanner(r)
-	// Records are bounded by maxLine when written; the buffer allows a little
-	// over that so a line written by an older or newer dev still reads.
+	// Allows a little over maxLine so lines from another dev version still
+	// read.
 	sc.Buffer(make([]byte, 0, 64<<10), 4*maxLine)
 	n := 0
 	for sc.Scan() {

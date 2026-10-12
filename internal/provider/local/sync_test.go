@@ -10,10 +10,7 @@ import (
 	"github.com/duy0611/dev-cli/internal/provider"
 )
 
-// TestProviderImplementsSyncer pins the type assertion the CLI makes. A
-// provider that silently stopped satisfying the interface would not fail to
-// compile anywhere — `dev container sync` would just start reporting that this
-// provider cannot do it.
+// TestProviderImplementsSyncer checks the type assertion the CLI makes.
 func TestProviderImplementsSyncer(t *testing.T) {
 	var p any = &Provider{}
 	if _, ok := p.(provider.Syncer); !ok {
@@ -21,15 +18,10 @@ func TestProviderImplementsSyncer(t *testing.T) {
 	}
 }
 
-// Sync has nothing to reconcile here: every command resolves the settings and
-// passes them with --remote-env, so no copy exists in the container that could
-// have drifted. Running anything would mean writing one, and a file of tokens
-// inside a container is what the relay's design exists to avoid.
+// TestSyncTouchesNothing checks Sync runs neither docker nor devcontainer.
 func TestSyncTouchesNothing(t *testing.T) {
 	f := newFakePath(t)
-	// Installed so that a Sync which did shell out would succeed and be caught
-	// by the assertion below, rather than failing with "not found" and looking
-	// like some unrelated breakage.
+	// Installed, so a Sync that shells out succeeds and is caught below.
 	f.install(t, dockerBin, "", 0)
 	f.install(t, devcontainerBin, "", 0)
 
@@ -50,8 +42,8 @@ func TestSyncTouchesNothing(t *testing.T) {
 	}
 }
 
-// A folderless container has settings like any other, and there are no files
-// here to be missing.
+// TestSyncAcceptsAFolderlessContainer checks Sync accepts a folderless
+// container.
 func TestSyncAcceptsAFolderlessContainer(t *testing.T) {
 	newFakePath(t)
 

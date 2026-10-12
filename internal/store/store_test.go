@@ -8,9 +8,8 @@ import (
 	"github.com/duy0611/dev-cli/internal/model"
 )
 
-// openTest returns a Store backed by a temp file. Deliberately not
-// ":memory:": that database is per-connection, and the pool would hand a
-// migration to one connection and a query to another.
+// openTest returns a Store backed by a temp file, not ":memory:", which is
+// per-connection.
 func openTest(t *testing.T) *Store {
 	t.Helper()
 	s, err := Open(filepath.Join(t.TempDir(), "dev.db"))
@@ -21,8 +20,7 @@ func openTest(t *testing.T) *Store {
 	return s
 }
 
-// seed creates a provider and a workspace, the two rows almost everything else
-// references.
+// seed creates the provider and workspace most other rows reference.
 func seed(t *testing.T, s *Store) {
 	t.Helper()
 	if err := s.PutProvider(model.Provider{Name: "local", Kind: model.KindLocal}); err != nil {
@@ -401,9 +399,8 @@ func TestWorkspacesUsing(t *testing.T) {
 	}
 }
 
-// A generated container carries its configuration in the row rather than on
-// disk, so the round-trip has to preserve it exactly: it is the input to the
-// devcontainer CLI on every later invocation.
+// A generated container keeps its configuration in the row, which must
+// round-trip exactly.
 func TestContainerRoundTripsAGeneratedConfig(t *testing.T) {
 	s := openTest(t)
 	seed(t, s)
@@ -441,8 +438,7 @@ func TestContainerRoundTripsAGeneratedConfig(t *testing.T) {
 	}
 }
 
-// Storing the configuration on the row is what makes this true: a file under
-// the state directory would outlive the workspace that owned it.
+// The configuration lives on the row, so deleting the workspace removes it too.
 func TestDeletingAWorkspaceTakesTheGeneratedConfig(t *testing.T) {
 	s := openTest(t)
 	seed(t, s)
@@ -468,8 +464,7 @@ func TestDeletingAWorkspaceTakesTheGeneratedConfig(t *testing.T) {
 	}
 }
 
-// A folderless container stores an empty source. The column is NOT NULL, not
-// non-empty, and nothing on the way through may turn "" into a default.
+// A folderless container stores an empty source, not a default value.
 func TestContainerRoundTripsAnEmptySource(t *testing.T) {
 	s := openTest(t)
 	seed(t, s)
@@ -496,8 +491,7 @@ func TestContainerRoundTripsAnEmptySource(t *testing.T) {
 	}
 }
 
-// The choice of agents.yaml is fixed at create and read back on every rebuild,
-// so it has to survive the round trip exactly.
+// The agents.yaml choice must round-trip exactly, since every rebuild reads it.
 func TestContainerRoundTripsAgentConfig(t *testing.T) {
 	s := openTest(t)
 	seed(t, s)
@@ -530,9 +524,8 @@ func TestContainerRoundTripsAgentConfig(t *testing.T) {
 	}
 }
 
-// A container row written without either field reads as "use the project's
-// default file" and "nothing owed" — the answer the migration gives rows that
-// predate it.
+// A row written without either field reads as the migration's default for old
+// rows.
 func TestAgentConfigDefaultsToProjectFileAndNothingPending(t *testing.T) {
 	s := openTest(t)
 	seed(t, s)
@@ -591,9 +584,7 @@ func TestContainerRoundTripsTheHardeningColumns(t *testing.T) {
 	}
 }
 
-// A row written without naming the new columns is what every container created
-// before the migration looks like. It must keep behaving as it did: unguarded,
-// still allowed what it was allowed, and with no digest to compare against.
+// A row written without the new columns must behave as a pre-migration row did.
 func TestHardeningDefaultsSpeakForExistingRows(t *testing.T) {
 	s := openTest(t)
 	seed(t, s)
@@ -610,5 +601,42 @@ func TestHardeningDefaultsSpeakForExistingRows(t *testing.T) {
 	if got.GitGuard || !got.AllowPrivileged || got.ConfigDigest != "" {
 		t.Errorf("got guard=%v allow=%v digest=%q, want false true empty",
 			got.GitGuard, got.AllowPrivileged, got.ConfigDigest)
+	}
+}
+
+// Mode and WorktreeRepo must round-trip, since mounts are derived from them.
+func TestContainerRoundTripsModeAndWorktreeRepo(t *testing.T) {
+	s := openTest(t)
+	seed(t, s)
+	if err := s.CreateContainer(model.Container{
+		Name: "wt", WorkspaceName: "ws", SourceKind: model.SourceFolder, Source: "/wt/feat",
+		Mode: model.ModeIsolated, WorktreeRepo: "/src/app/.git",
+	}); err != nil {
+		t.Fatalf("CreateContainer: %v", err)
+	}
+	got, err := s.GetContainer("ws", "wt")
+	if err != nil {
+		t.Fatalf("GetContainer: %v", err)
+	}
+	if got.Mode != model.ModeIsolated || got.WorktreeRepo != "/src/app/.git" {
+		t.Errorf("got mode=%q worktree_repo=%q, want isolated and the repo", got.Mode, got.WorktreeRepo)
+	}
+}
+
+// A container built without a mode is written as legacy.
+func TestContainerWithoutAModeIsLegacy(t *testing.T) {
+	s := openTest(t)
+	seed(t, s)
+	if err := s.CreateContainer(model.Container{
+		Name: "old", WorkspaceName: "ws", SourceKind: model.SourceFolder, Source: "/src/old",
+	}); err != nil {
+		t.Fatalf("CreateContainer: %v", err)
+	}
+	got, err := s.GetContainer("ws", "old")
+	if err != nil {
+		t.Fatalf("GetContainer: %v", err)
+	}
+	if got.Mode != model.ModeLegacy {
+		t.Errorf("mode = %q, want legacy", got.Mode)
 	}
 }

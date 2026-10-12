@@ -9,45 +9,34 @@ import (
 
 const podmanBin = "podman"
 
-// hostArch is what an image built without an explicit platform comes out as.
-// A variable so a test can pretend to be on the other architecture.
+// hostArch is the host architecture; a variable so a test can override it.
 var hostArch = runtime.GOARCH
 
-// The devcontainer CLI decides whether BuildKit is available by running
-// `<docker-path> buildx version` and looking for a semver anywhere in the
-// output. Probing the same way, with the same rule, is what makes this
-// agreement rather than a guess.
+// Matches the devcontainer CLI's BuildKit probe: any semver in the output of
+// `<docker-path> buildx version`.
 var semver = regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`)
 
 // builder is how the image gets built and pushed on this host.
 type builder struct {
-	// dockerPath is passed to the CLI as --docker-path. Empty means its
-	// default, docker.
+	// dockerPath is the CLI's --docker-path. Empty means docker.
 	dockerPath string
 	// engine is the binary to run directly, for the push.
 	engine string
-	// crossBuild says whether --platform may be passed. The CLI refuses it
-	// outright without BuildKit.
+	// crossBuild permits --platform. The CLI refuses it without BuildKit.
 	crossBuild bool
-	// pushWithCLI says whether --push works, saving a separate step.
+	// pushWithCLI permits --push, which saves a separate push.
 	pushWithCLI bool
 }
 
-// selectBuilder picks the best available way to produce the image.
+// selectBuilder picks how to build and push, in order of preference:
 //
-// Three real configurations, in order of preference:
+//   - docker with buildx: cross-builds and pushes in one step.
+//   - podman: passes the CLI's BuildKit probe, and `buildx build` is an alias for
+//     `build`, which honours --platform. It has no --push, so the push is separate.
+//   - docker alone: builds only for this host's architecture.
 //
-//   - docker with the buildx plugin: cross-builds and pushes in one step.
-//   - podman: satisfies the CLI's BuildKit probe, because `podman buildx
-//     version` prints a version, and `podman buildx build` is an alias for
-//     `podman build`, which honours --platform. It has no --push, so the image
-//     is pushed separately.
-//   - docker without buildx: neither, so the image can only be built for this
-//     host's architecture.
-//
-// Preferring docker+buildx is not only about the single step: building
-// Features under rootless podman is known to fail on the bind mount the
-// generated Dockerfile uses (devcontainers/cli#548).
+// Docker with buildx is preferred to podman because Features under rootless
+// podman fail on the Dockerfile's bind mount (devcontainers/cli#548).
 func selectBuilder(ctx context.Context) builder {
 	if hasBuildx(ctx, dockerBin) {
 		return builder{engine: dockerBin, crossBuild: true, pushWithCLI: true}
@@ -61,8 +50,7 @@ func selectBuilder(ctx context.Context) builder {
 	if available(podmanBin) {
 		return builder{dockerPath: podmanBin, engine: podmanBin}
 	}
-	// Nothing to build with. The caller reports the missing binary by name
-	// rather than this pretending otherwise.
+	// Nothing to build with. The caller reports the missing binary by name.
 	return builder{engine: dockerBin}
 }
 
@@ -83,7 +71,7 @@ func available(bin string) bool {
 	return err == nil
 }
 
-// args returns the --docker-path pair, if this builder needs one.
+// dockerPathArgs returns the --docker-path pair, if this builder needs one.
 func (b builder) dockerPathArgs() []string {
 	if b.dockerPath == "" {
 		return nil
@@ -91,11 +79,9 @@ func (b builder) dockerPathArgs() []string {
 	return []string{"--docker-path", b.dockerPath}
 }
 
-// engineBin is the engine the devcontainer CLI should be pointed at for
-// anything other than a build.
-//
-// The CLI shells out to it even to read a configuration, so a host with only
-// podman needs this too.
+// engineBin is the engine the devcontainer CLI is pointed at for non-build
+// calls. The CLI needs it even to read a configuration, so podman-only hosts
+// need it too.
 func engineBin() string {
 	if available(dockerBin) {
 		return dockerBin

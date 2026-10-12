@@ -36,8 +36,8 @@ func TestMergedConfigAsksForTheMergedFormWithTheOverride(t *testing.T) {
 			t.Errorf("argv %v lacks %q", argv, want)
 		}
 	}
-	// No id label: the CLI would find the existing container and report the
-	// merged form of the image being replaced, not the one about to be built.
+	// No id-label, or the CLI reads the image being replaced (see
+	// MergedConfig).
 	if slices.Contains(argv, "--id-label") {
 		t.Errorf("argv %v names a container; it must read the configuration afresh", argv)
 	}
@@ -69,8 +69,7 @@ func TestMergedConfigFailureQuotesTheCLI(t *testing.T) {
 	}
 }
 
-// Silence in the merged field is a configuration the guard cannot check, not
-// one with nothing to report.
+// A missing merged field is an error, not an empty configuration.
 func TestMergedConfigWithNoMergedFieldIsAnError(t *testing.T) {
 	f := newFakePath(t)
 	f.install(t, "devcontainer", `{"configuration":{}}`, 0)

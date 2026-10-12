@@ -8,9 +8,7 @@ import (
 	"testing"
 )
 
-// startAgent runs a real ssh-agent and returns its socket. The agent protocol
-// is worth testing against the real implementation rather than a stub: the
-// wire format is the whole content of identity.go.
+// startAgent runs a real ssh-agent and returns its socket.
 func startAgent(t *testing.T) string {
 	t.Helper()
 	for _, bin := range []string{"ssh-agent", "ssh-add", "ssh-keygen"} {
@@ -62,8 +60,7 @@ func addKey(t *testing.T, socket, comment string) string {
 	return strings.TrimSpace(string(pub))
 }
 
-// TestSigningKeyMatchesSSHAdd is the test that matters: the value handed to git
-// must be the same key material ssh-add reports, in the form git parses.
+// TestSigningKeyMatchesSSHAdd checks the key handed to git is the agent's key.
 func TestSigningKeyMatchesSSHAdd(t *testing.T) {
 	socket := startAgent(t)
 	pub := addKey(t, socket, "signing-test")
@@ -73,15 +70,12 @@ func TestSigningKeyMatchesSSHAdd(t *testing.T) {
 		t.Fatalf("SigningKey: %v", err)
 	}
 
-	// Without key:: git reads the value as a filename and fails looking for a
-	// key file that does not exist.
+	// Without key:: git reads the value as a filename.
 	if !strings.HasPrefix(got, "key::") {
 		t.Errorf("signing key lacks the key:: prefix: %q", got)
 	}
 
-	// The algorithm and base64 blob must match the generated key exactly. The
-	// comment is not part of what is compared: ssh-add reports the one from the
-	// file, and the agent does not have to.
+	// The comment is not compared; the agent need not hold it.
 	fields := strings.Fields(strings.TrimPrefix(got, "key::"))
 	wantFields := strings.Fields(pub)
 	if len(fields) < 2 || len(wantFields) < 2 {
@@ -93,9 +87,7 @@ func TestSigningKeyMatchesSSHAdd(t *testing.T) {
 	}
 }
 
-// TestSigningKeyPicksTheFirst pins the documented behaviour for an agent
-// holding several keys. Not obviously the right key — it is the one the
-// operator loaded first — but it must at least be a key the agent actually has.
+// With several keys loaded, the first one is returned.
 func TestSigningKeyPicksTheFirst(t *testing.T) {
 	socket := startAgent(t)
 	first := addKey(t, socket, "first-key")
@@ -109,7 +101,6 @@ func TestSigningKeyPicksTheFirst(t *testing.T) {
 	blob := strings.Fields(strings.TrimPrefix(got, "key::"))[1]
 	switch blob {
 	case strings.Fields(first)[1]:
-		// Expected.
 	case strings.Fields(second)[1]:
 		t.Error("SigningKey returned the second key, not the first")
 	default:
@@ -117,8 +108,7 @@ func TestSigningKeyPicksTheFirst(t *testing.T) {
 	}
 }
 
-// TestSigningKeyEmptyAgent covers an agent holding nothing: reported with the
-// command that fixes it, rather than as an empty value git would later reject.
+// An agent with no keys is reported with the command that fixes it.
 func TestSigningKeyEmptyAgent(t *testing.T) {
 	socket := startAgent(t)
 
@@ -131,7 +121,6 @@ func TestSigningKeyEmptyAgent(t *testing.T) {
 	}
 }
 
-// TestSigningKeyNoAgent covers the socket not being there at all.
 func TestSigningKeyNoAgent(t *testing.T) {
 	_, err := SigningKey(filepath.Join(t.TempDir(), "absent.sock"))
 	if err == nil {

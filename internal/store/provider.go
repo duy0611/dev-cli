@@ -8,14 +8,8 @@ import (
 	"github.com/duy0611/dev-cli/internal/model"
 )
 
-// PutProvider creates the provider or updates its config. `provider configure`
-// is deliberately idempotent, so re-running it to change one setting is the
-// supported way to correct a provider.
-//
-// The kind is written on the same terms as the config, but the caller has
-// already refused to change it: a provider whose kind moves leaves its
-// workspaces' containers behind in the engine they were created in. The refusal
-// lives in internal/cli so the message can name both kinds and the way out.
+// PutProvider creates the provider or updates its config. The kind is not
+// changed on update; the caller refuses that before getting here.
 func (s *Store) PutProvider(p model.Provider) error {
 	config := p.Config
 	if config == "" {
@@ -33,10 +27,6 @@ func (s *Store) PutProvider(p model.Provider) error {
 }
 
 // DeleteProvider removes a provider.
-//
-// The foreign key from workspaces would refuse this anyway; the caller checks
-// first so the operator gets told which workspaces are in the way rather than a
-// constraint name.
 func (s *Store) DeleteProvider(name string) error {
 	res, err := s.db.Exec(`DELETE FROM providers WHERE name = ?`, name)
 	if err != nil {
@@ -70,8 +60,7 @@ func (s *Store) ListProviders() ([]model.Provider, error) {
 	return out, rows.Err()
 }
 
-// scanner is what *sql.Row and *sql.Rows have in common, so one scan function
-// serves both the Get and the List.
+// scanner is what *sql.Row and *sql.Rows have in common.
 type scanner interface{ Scan(dest ...any) error }
 
 func scanProvider(sc scanner) (model.Provider, error) {

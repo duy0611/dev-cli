@@ -19,8 +19,8 @@ func TestResolveFollowsSymlinks(t *testing.T) {
 		t.Fatalf("Symlink: %v", err)
 	}
 
-	// The whole point: a bind mount built from the symlink path resolves to a
-	// different directory inside the engine's VM.
+	// A bind mount from the symlink path would resolve differently inside the
+	// engine's VM.
 	got, err := Resolve(link)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)

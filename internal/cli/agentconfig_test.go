@@ -91,17 +91,13 @@ func TestMarkAgentConfig(t *testing.T) {
 	}
 }
 
-// stubDevcontainer puts a devcontainer on PATH that logs each call as one line
-// and succeeds — except a call whose arguments contain failOn, which prints
-// "boom" to stderr and exits 1. Up and every exec go through it, so the log is
-// the sequence of steps an apply ran.
+// stubDevcontainer logs each call as one line, and fails for any call
+// containing failOn.
 func stubDevcontainer(t *testing.T, failOn string) string {
 	t.Helper()
 	dir := t.TempDir()
 	log := filepath.Join(dir, "calls")
 	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + log + "'\n" +
-		// The escape guard reads the merged configuration before every start;
-		// a plain project merges to nothing that reaches the host.
 		"case \"$1\" in read-configuration) echo '{\"mergedConfiguration\":{}}'; exit 0;; esac\n"
 	if failOn != "" {
 		script += "case \"$*\" in *'" + failOn + "'*) echo boom >&2; exit 1;; esac\n"
@@ -124,8 +120,8 @@ func callsIn(t *testing.T, log string) string {
 	return string(b)
 }
 
-// projectWithAgents is a project that ships a devcontainer.json and an
-// agents.yaml with one local skill beside it.
+// projectWithAgents is a project with a devcontainer.json and an agents.yaml
+// beside a local skill.
 func projectWithAgents(t *testing.T, agents string) string {
 	t.Helper()
 	folder := projectWithConfig(t)
@@ -211,7 +207,6 @@ func TestCreateNoStartDefersTheApplyToStart(t *testing.T) {
 		t.Error("the flag survived a finished apply")
 	}
 
-	// A second start owes nothing, so it runs nothing.
 	before := strings.Count(callsIn(t, log), "claude plugin install")
 	if err := a.start(t.Context(), "ws", containerRow(t, a, "api")); err != nil {
 		t.Fatalf("second start: %v", err)
@@ -261,7 +256,7 @@ func TestAnAgentThatIsNotInstalledIsSkipped(t *testing.T) {
 		t.Errorf("no warning:\n%s", stderr)
 	}
 	// Not HERMES_HOME: that rides --remote-env on every exec, the probe
-	// included. config.yaml appears only in hermes's own step.
+	// included.
 	if strings.Contains(callsIn(t, log), "config.yaml") {
 		t.Error("ran a hermes step anyway")
 	}
@@ -336,25 +331,19 @@ func TestCreateAgentConfigFlagErrors(t *testing.T) {
 	}
 }
 
-func TestWorktreeCreateRecordsTheAgentConfigChoice(t *testing.T) {
+func TestContainerOnAWorktreeRecordsTheAgentConfigChoice(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
 	repo := initRepo(t)
-	path := filepath.Join(t.TempDir(), "wt")
-
-	opts := baseOpts(repo, path)
-	opts.create.noAgentConfig = true
-	if err := runWorktreeCreate(t.Context(), a, "", "feat", opts); err != nil {
-		t.Fatalf("worktree create: %v", err)
-	}
+	worktreeWithContainer(t, a, "feat", repo, filepath.Join(t.TempDir(), "wt"),
+		createOpts{noAgentConfig: true})
 	if c := containerRow(t, a, "feat"); c.AgentConfig != agentConfigNone {
 		t.Errorf("AgentConfig = %q, want %q", c.AgentConfig, agentConfigNone)
 	}
 }
 
-// runIn drives the real command tree against an existing test app, so a test
-// can create through runContainerCreate and then rebuild through cobra.
+// runIn drives the real command tree against an existing test app.
 func runIn(t *testing.T, a *app, argv ...string) error {
 	t.Helper()
 	root := newRootCmd("test")
@@ -373,7 +362,6 @@ func TestRebuildReappliesTheFile(t *testing.T) {
 	if err := runContainerCreate(t.Context(), a, "", "api", folder, createOpts{}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	// An edit waits for the rebuild, and the rebuild picks it up.
 	writeFile(t, filepath.Join(folder, ".devcontainer", "agents.yaml"),
 		"version: 1\nclaude:\n  plugins: [second@official]\n")
 

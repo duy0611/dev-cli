@@ -65,8 +65,7 @@ func TestAssembleResolvesSettings(t *testing.T) {
 	}
 }
 
-// An explicit setting has to win over the identity read off the host, or there
-// is no way to commit as someone else from inside a container.
+// A workspace setting wins over the host identity.
 func TestWorkspaceSettingOverridesGitIdentity(t *testing.T) {
 	fakeGit(t, "Ada", "ada@example.invalid")
 
@@ -91,7 +90,7 @@ func TestWorkspaceSettingOverridesGitIdentity(t *testing.T) {
 	}
 }
 
-// No git on PATH is a normal state for a container start, not a reason to fail.
+// Missing git is not an error.
 func TestAssembleWithoutGit(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 
@@ -109,8 +108,7 @@ func TestAssembleWithoutGit(t *testing.T) {
 	}
 }
 
-// A setting that cannot be resolved has to stop the launch: starting without it
-// produces a failure inside the container that is much harder to read.
+// An unresolvable setting stops the launch.
 func TestAssembleFailsOnUnresolvableSetting(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 

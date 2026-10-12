@@ -19,11 +19,8 @@ const (
 	gitEmailKey = "DEVCONTAINER_GIT_EMAIL"
 )
 
-// Assemble resolves a workspace's settings into environment variables, with
-// the host's git identity added underneath.
-//
-// Order matters: the identity goes first so an explicit workspace setting of
-// the same name wins.
+// Assemble resolves a workspace's settings into environment variables. The
+// host's git identity sits beneath them, so a setting of the same name wins.
 func Assemble(ctx context.Context, r *secret.Resolver, settings []model.Setting) ([]provider.EnvVar, error) {
 	defined := make(map[string]bool, len(settings))
 	for _, s := range settings {
@@ -47,14 +44,8 @@ func Assemble(ctx context.Context, r *secret.Resolver, settings []model.Setting)
 	return out, nil
 }
 
-// gitIdentity reads the host's committer identity.
-//
-// Without it the first commit inside a container fails with "Author identity
-// unknown", which is a confusing way to learn that a sandbox has no gitconfig.
-//
-// Identity only, deliberately: carrying the host's user.signingkey and
-// commit.gpgsign across turns on signing that the container has no secret key
-// for, and then every commit fails with "No secret key" instead.
+// gitIdentity reads the host's name and email. Signing config is left out: the
+// container has no secret key, so every commit would fail.
 func gitIdentity(ctx context.Context) []provider.EnvVar {
 	var out []provider.EnvVar
 	if v := gitConfig(ctx, "user.name"); v != "" {
@@ -67,8 +58,7 @@ func gitIdentity(ctx context.Context) []provider.EnvVar {
 }
 
 // gitConfig reads one git setting, returning "" when git is absent or the key
-// is unset. Not having an identity configured is a normal state, not an error
-// worth stopping a container start over.
+// is unset.
 func gitConfig(ctx context.Context, key string) string {
 	cmd := exec.CommandContext(ctx, "git", "config", "--get", key)
 	cmd.Stderr = &bytes.Buffer{}

@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// stub installs an executable named name on a temp PATH.
+// stub installs an executable on a temp PATH.
 func stub(t *testing.T, name, script string) {
 	t.Helper()
 
@@ -40,7 +40,7 @@ func TestResolveLiteral(t *testing.T) {
 	}
 }
 
-// A literal with a colon in it must survive: URLs are the common case.
+// A literal containing colons must not be split on them.
 func TestResolveLiteralKeepsColons(t *testing.T) {
 	r := NewResolver()
 	got, err := r.Resolve(context.Background(), "literal:host:8080/path?a=b:c")
@@ -61,8 +61,8 @@ func TestResolveKeychain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	// Checks three things at once: the service name reached -s, the account
-	// defaulted to $USER, and the trailing newline was trimmed.
+	// Checks the service name reached -s, the account came from $USER, and the
+	// newline was trimmed.
 	if got != "tok-for-MY_TOKEN-as-tester" {
 		t.Errorf("Resolve = %q, want %q", got, "tok-for-MY_TOKEN-as-tester")
 	}
@@ -75,8 +75,7 @@ func TestResolveOnePasswordKeepsTheWholeURI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	// $3 is the URI argument: op:// is a URI, not a scheme:ref pair, so the
-	// whole spec has to reach the CLI unchanged.
+	// $3 is the URI; it must reach op unchanged, not be split into scheme:ref.
 	if got != "read:op://Private/gh/token" {
 		t.Errorf("Resolve = %q, want the full URI passed through", got)
 	}

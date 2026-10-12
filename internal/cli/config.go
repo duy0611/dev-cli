@@ -26,9 +26,6 @@ func runContainerTools(a *app) error {
 	return a.table(func(w io.Writer) {
 		header(w, "TOOL", "SUMMARY", "SOURCE")
 		for _, t := range dcgen.Catalog() {
-			// Whether a feature is published by the devcontainers project (or
-			// the tool's own vendor) is the operator's business: the rest are
-			// community images they are choosing to trust.
 			source := "community"
 			if t.Official {
 				source = "official"
@@ -73,16 +70,12 @@ func runContainerConfigShow(ctx context.Context, a *app, workspace, name string)
 		return nil
 	}
 
-	// A project-owned container. The file on disk is not the whole answer:
-	// dev merges its state mount into it per invocation and hands the result
-	// to the devcontainer CLI, so the document the container is actually built
-	// from exists only for the length of one command. Printing the path alone
-	// would name a file that is not quite what ran.
+	// A project-owned container: the file on disk is not the whole answer,
+	// since dev merges its state mount in per invocation. Printing only the
+	// path would name a file that is not quite what ran.
 	//
-	// A parse failure is deliberately fatal here, unlike on stop or remove:
-	// this command exists to answer "what was this built from", and the honest
-	// answer when the project's file will not parse is the error, not the file
-	// that dev could not use.
+	// Fatal on a parse error, unlike stop or remove, since this must not show a
+	// file dev could not use.
 	if err := t.requireOverride(a); err != nil {
 		return err
 	}
@@ -90,11 +83,8 @@ func runContainerConfigShow(ctx context.Context, a *app, workspace, name string)
 	source := t.container.ConfigPath
 	merged := t.container.OverrideConfigPath
 	if merged == "" {
-		// No merge to show: a container that persists no state gets its
-		// document through --config untouched, so the project's file is
-		// literally what the CLI receives. Said out loud, because an operator
-		// comparing two containers should not have to infer why one has a
-		// mounts entry dev added and the other does not.
+		// Without state there is no merge, so the project's file is what the
+		// CLI gets.
 		warnf(a, "%s (no merge: state off)", source)
 		return printFile(a, source)
 	}
@@ -103,10 +93,8 @@ func runContainerConfigShow(ctx context.Context, a *app, workspace, name string)
 	return printFile(a, merged)
 }
 
-// printFile copies a configuration document to the command's output.
-//
-// The document goes to stdout while the path above it goes to stderr, so
-// `config show | jq` still receives valid JSON and nothing else.
+// printFile copies a configuration document to stdout. Warnings go to stderr,
+// so `config show | jq` still gets valid JSON.
 func printFile(a *app, path string) error {
 	body, err := os.ReadFile(path)
 	if err != nil {

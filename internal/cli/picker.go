@@ -13,15 +13,15 @@ import (
 )
 
 // errPickCancelled is returned when the operator abandons the picker. The
-// caller must write nothing: a half-answered question is not an answer.
+// caller writes nothing.
 var errPickCancelled = errors.New("cancelled")
 
 // pickItem is one row in the picker.
 type pickItem struct {
 	ID      string
 	Summary string
-	// Note qualifies the row — "official" or "community" — so that pulling a
-	// third-party image is a visible choice rather than a default.
+	// Note is "official" or "community", so pulling a third-party image is a
+	// visible choice.
 	Note string
 }
 
@@ -36,13 +36,7 @@ const (
 	keyCancel
 )
 
-// decodeKey reads one key from the front of buf, returning how many bytes it
-// consumed.
-//
-// Returning (keyNone, 0) means "not enough bytes yet, read more": an arrow key
-// is three bytes and a terminal is free to deliver them across separate reads,
-// so treating a lone ESC as a complete key would turn a cursor move into a
-// cancel.
+// decodeKey reads one key from buf, returning the bytes it consumed.
 func decodeKey(buf []byte) (key, int) {
 	if len(buf) == 0 {
 		return keyNone, 0
@@ -71,11 +65,8 @@ func decodeKey(buf []byte) (key, int) {
 	return keyNone, 1
 }
 
-// multiSelect runs the picker over the given streams.
-//
-// Streams rather than os.Stdin and os.Stdout, the way prompter takes them, so
-// the whole interaction can be driven from a test over a pipe. Putting the
-// terminal into raw mode is the caller's job; see pickTools.
+// multiSelect runs the picker over the given streams, so a test can drive it
+// over a pipe. Raw mode is the caller's job; see pickTools.
 func multiSelect(items []pickItem, in io.Reader, out io.Writer) ([]string, error) {
 	chosen := make([]bool, len(items))
 	cursor := 0
@@ -91,8 +82,8 @@ func multiSelect(items []pickItem, in io.Reader, out io.Writer) ([]string, error
 			buf = append(buf, readBuf[:n]...)
 		}
 		if n == 0 && err != nil {
-			// The input ended without an accept. That is the terminal going
-			// away, not a considered empty selection, so nothing is built.
+			// Input ended without an accept: the terminal went away, not an
+			// empty selection.
 			return nil, errPickCancelled
 		}
 
@@ -127,19 +118,15 @@ func multiSelect(items []pickItem, in io.Reader, out io.Writer) ([]string, error
 				}
 				return picked, nil
 			case keyNone:
-				// A byte that means nothing here, already consumed.
+				// A byte that means nothing here.
 			}
 			draw(out, items, chosen, cursor, false)
 		}
 	}
 }
 
-// draw rewrites the list in place.
-//
-// Cursor-up over the rows it printed last time, rather than clearing the
-// screen: the question above the list and whatever the operator was reading
-// before it stay where they are. final leaves the list on screen without the
-// cursor marker, as a record of what was chosen.
+// draw rewrites the list in place, moving the cursor up rather than clearing
+// the screen.
 func draw(out io.Writer, items []pickItem, chosen []bool, cursor int, final bool) {
 	var b strings.Builder
 	for i, it := range items {
@@ -151,33 +138,28 @@ func draw(out io.Writer, items []pickItem, chosen []bool, cursor int, final bool
 		if chosen[i] {
 			box = "x"
 		}
-		// \r\n rather than \n: in raw mode the terminal does not translate a
-		// newline into a carriage return, so every line would step right.
+		// \r\n, since in raw mode a bare \n does not return the carriage.
 		fmt.Fprintf(&b, "%s [%s] %-12s %s (%s)\r\n", marker, box, it.ID, it.Summary, it.Note)
 	}
 	if !final {
-		// Park the cursor back at the top of the list for the next redraw.
+		// Park the cursor at the top of the list for the next redraw.
 		fmt.Fprintf(&b, "\x1b[%dA", len(items))
 	}
-	// A failed write to the terminal is not worth failing the picker over: the
-	// next redraw or the final one will show the same state again.
+	// A failed terminal write is not worth failing over: the next redraw shows
+	// the same state.
 	_, _ = io.WriteString(out, b.String())
 }
 
-// pickTools runs the picker on the real terminal.
-//
-// The prompt goes to stderr so that a command whose stdout is being captured
-// does not have the question land in the captured output.
+// pickTools runs the picker on the real terminal. The prompt goes to stderr,
+// out of captured output.
 func pickTools(items []pickItem) ([]string, error) {
 	fd := int(os.Stdin.Fd())
 	state, err := term.MakeRaw(fd)
 	if err != nil {
 		return nil, fmt.Errorf("putting the terminal into raw mode: %w", err)
 	}
-	// Restored even on a panic: leaving a terminal in raw mode makes the
-	// operator's shell unusable until they blindly type `reset`. Nothing can be
-	// done if the restore itself fails, and returning that error instead of the
-	// operator's selection would lose the answer they just gave.
+	// Restored even on a panic: a raw-mode terminal leaves the shell unusable.
+	// A restore error is dropped rather than losing the operator's selection.
 	defer func() { _ = term.Restore(fd, state) }()
 
 	return multiSelect(items, os.Stdin, os.Stderr)

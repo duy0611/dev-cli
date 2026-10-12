@@ -30,8 +30,6 @@ func stubBin(t *testing.T, dir, name, body string) {
 func TestChooseUsesFzf(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PATH", dir)
-	// fzf reads the choices on stdin and prints the pick on stdout; the stub
-	// picks the second line and records what it was offered.
 	offered := filepath.Join(dir, "offered")
 	stubBin(t, dir, "fzf", "/bin/cat > '"+offered+"'\n/usr/bin/sed -n 2p '"+offered+"'")
 
@@ -44,7 +42,6 @@ func TestChooseUsesFzf(t *testing.T) {
 	if got != "default" {
 		t.Errorf("choose = %q, want the second line fzf was given", got)
 	}
-	// The default goes first, so enter in fzf takes it.
 	b, _ := os.ReadFile(offered)
 	if string(b) != "team-b\ndefault\nteam-a\n" {
 		t.Errorf("fzf offered %q", b)
@@ -73,15 +70,11 @@ func TestChooseWithoutFzf(t *testing.T) {
 	if err != nil || got != "prod-eu" {
 		t.Errorf("choose = %q, %v; want the default on return", got, err)
 	}
-	// The choices are shown, since without fzf there is nothing else to show
-	// them.
 	if !strings.Contains(out.String(), "kind-dev") {
 		t.Errorf("choices not listed:\n%s", out.String())
 	}
 }
 
-// An empty list — commonly RBAC forbidding the listing — is not a dead end:
-// the operator may know the name without being allowed to list it.
 func TestChooseEmptyListIsFreeText(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PATH", dir)
@@ -121,9 +114,8 @@ func TestAskDuration(t *testing.T) {
 	}
 }
 
-// noTerminal points os.Stdin at /dev/null for one test. go test may hand a
-// test binary the terminal it was run from, and then a test of the scripted
-// path would stop at a real prompt.
+// noTerminal points stdin at /dev/null: go test may hand the binary a real
+// terminal.
 func noTerminal(t *testing.T) {
 	t.Helper()
 	f, err := os.Open(os.DevNull)
@@ -135,8 +127,6 @@ func noTerminal(t *testing.T) {
 	t.Cleanup(func() { os.Stdin = old; f.Close() })
 }
 
-// A non-terminal run cannot answer the questions, and says so with exit 2
-// rather than blocking on a prompt nobody sees.
 func TestAskKubeTokenNeedsATerminal(t *testing.T) {
 	noTerminal(t)
 	_, err := askKubeToken(context.Background())
@@ -211,7 +201,6 @@ func TestInjectKubeToken(t *testing.T) {
 	if !strings.Contains(write.stdin, token) {
 		t.Error("the kubeconfig did not arrive on stdin")
 	}
-	// Anywhere else it is in a process list, the container's or the host's.
 	for _, e := range p.execs {
 		if strings.Contains(strings.Join(e.cmd, " "), token) {
 			t.Errorf("token in an exec's arguments: %v", e.cmd)
@@ -222,7 +211,6 @@ func TestInjectKubeToken(t *testing.T) {
 			}
 		}
 	}
-	// Written then renamed, so a session reading mid-refresh never sees half.
 	script := strings.Join(write.cmd, " ")
 	for _, want := range []string{"umask 077", "mv "} {
 		if !strings.Contains(script, want) {
@@ -243,8 +231,6 @@ func TestInjectKubeTokenWriteFails(t *testing.T) {
 	}
 }
 
-// No kubectl in the container is worth saying and not worth failing over:
-// another client there may read the file.
 func TestInjectKubeTokenNoKubectlInContainer(t *testing.T) {
 	a, _ := newTestApp(t)
 	p := &recordingProvider{noKubectl: true}
@@ -265,19 +251,16 @@ func TestWithKubeconfigIsLast(t *testing.T) {
 	}
 }
 
-// fakeKind is a provider kind registered only in this test binary, so the real
-// command functions can run against a provider that records what it is asked.
+// fakeKind is registered only in this test binary, so commands run against a
+// recording provider.
 const fakeKind model.ProviderKind = "kubetoken-fake"
 
-// fake is the one instance the factory hands out; each test resets it.
 var fake *fakeProvider
 
 func init() {
 	provider.Register(fakeKind, func(model.Provider) (provider.Provider, error) { return fake, nil })
 }
 
-// fakeProvider records calls in order, so a test can assert what happened
-// before what.
 type fakeProvider struct {
 	recordingProvider
 	status model.Status
@@ -300,7 +283,6 @@ func (p *fakeProvider) Exec(ctx context.Context, c model.Container, cmd []string
 	return p.recordingProvider.Exec(ctx, c, cmd, opts)
 }
 
-// seedFake makes workspace ws on the fake provider, with one container.
 func seedFake(t *testing.T, status model.Status) *app {
 	t.Helper()
 	a, _ := newTestApp(t)
@@ -327,7 +309,6 @@ func envHas(env []provider.EnvVar, key string) bool {
 	return slices.ContainsFunc(env, func(e provider.EnvVar) bool { return e.Key == key })
 }
 
-// Without the flag nothing changes: no question, no write, no KUBECONFIG.
 func TestExecWithoutKubeToken(t *testing.T) {
 	a := seedFake(t, model.StatusRunning)
 	if err := runContainerExec(t.Context(), a, "", "api", []string{"true"}, false, nil); err != nil {
@@ -340,8 +321,6 @@ func TestExecWithoutKubeToken(t *testing.T) {
 	}
 }
 
-// A stopped container is refused before any question, so nobody answers four
-// of them for nothing.
 func TestExecKubeTokenStoppedRefusesFirst(t *testing.T) {
 	noTerminal(t)
 	a := seedFake(t, model.StatusStopped)
@@ -351,7 +330,6 @@ func TestExecKubeTokenStoppedRefusesFirst(t *testing.T) {
 	}
 }
 
-// With the flag and no terminal, exec refuses with exit 2 and runs nothing.
 func TestExecKubeTokenNoTerminal(t *testing.T) {
 	noTerminal(t)
 	a := seedFake(t, model.StatusRunning)
@@ -364,8 +342,6 @@ func TestExecKubeTokenNoTerminal(t *testing.T) {
 	}
 }
 
-// start-agent asks before it starts anything: a refusal leaves a stopped
-// container stopped.
 func TestStartAgentAsksBeforeUp(t *testing.T) {
 	noTerminal(t)
 	a := seedFake(t, model.StatusStopped)
@@ -378,8 +354,6 @@ func TestStartAgentAsksBeforeUp(t *testing.T) {
 	}
 }
 
-// applyKubeToken is what every command runs after asking; with a request the
-// command's environment gains KUBECONFIG, without one it is untouched.
 func TestApplyKubeToken(t *testing.T) {
 	a := seedFake(t, model.StatusRunning)
 	tg, err := a.resolve(t.Context(), "", "api")

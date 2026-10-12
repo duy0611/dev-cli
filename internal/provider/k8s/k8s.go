@@ -1,8 +1,6 @@
-// Package k8s runs devcontainers in a Kubernetes cluster.
-//
-// The devcontainer CLI speaks Docker only, so it is used for the two things it
-// alone can do — reading the merged configuration and building an image from
-// Features and a Dockerfile — and kubectl does everything else.
+// Package k8s runs devcontainers in a cluster. The devcontainer CLI is used
+// only to read the merged configuration and build the image; kubectl does
+// everything else.
 package k8s
 
 import (
@@ -18,14 +16,11 @@ import (
 	"github.com/duy0611/dev-cli/internal/provider"
 )
 
-// rolloutTimeout bounds the wait for a pod to come up. Generous because the
-// first start of a container pulls an image that may be gigabytes.
+// Generous: the first start pulls an image that may be gigabytes.
 const rolloutTimeout = 10 * time.Minute
 
-// How long to wait for a pod to disappear after scaling to zero, and how often
-// to look. The pod handles SIGTERM, so this is normally a second or two; the
-// timeout is generous enough to cover a node under load without hanging a
-// command that will never finish.
+// Normally a second or two, as the pod handles SIGTERM. The timeout covers a
+// loaded node.
 const (
 	terminationTimeout = 2 * time.Minute
 	pollInterval       = 500 * time.Millisecond
@@ -48,18 +43,13 @@ func init() {
 }
 
 // Up creates the container if the cluster has none, and starts it otherwise.
-//
-// The image is built only when the Deployment does not exist yet. That is the
-// difference between a create and a start, and it is read from the cluster
-// rather than tracked: `start` must not spend minutes rebuilding, and there is
-// nowhere better to ask.
+// The image is built only on create, judged from the cluster rather than
+// tracked.
 func (p *Provider) Up(ctx context.Context, c model.Container, env []provider.EnvVar) error {
 	exists, err := p.deploymentExists(ctx, c)
 	if err != nil {
 		return err
 	}
-	// A container the cluster has never seen is a create: build it, and put the
-	// host's files in it. A start does neither.
 	return p.apply(ctx, c, env, applyOpts{build: !exists, firstCreate: !exists})
 }
 
@@ -68,8 +58,8 @@ func (p *Provider) Rebuild(ctx context.Context, c model.Container, env []provide
 	return p.apply(ctx, c, env, applyOpts{
 		build:   true,
 		noCache: noCache,
-		// The tag never changes, so without something new in the pod template
-		// there is no new ReplicaSet and the freshly pushed image is ignored.
+		// The tag is always :latest, so only a changed pod template gives a new
+		// ReplicaSet.
 		rebuiltAt: time.Now().UTC().Format(time.RFC3339),
 	})
 }
@@ -114,9 +104,8 @@ func (p *Provider) apply(ctx context.Context, c model.Container, env []provider.
 		return err
 	}
 
-	// Before the lifecycle commands, not after: postCreate is usually "install
-	// what this project needs", and it needs the project to be there. A
-	// folderless container has no host tree to seed from.
+	// Seeded before the lifecycle commands, which usually need the project's
+	// files.
 	if opts.firstCreate && c.SourceKind == model.SourceFolder {
 		if err := p.seedWorkspace(ctx, c); err != nil {
 			return err
@@ -157,14 +146,8 @@ func (p *Provider) Exec(ctx context.Context, c model.Container, command []string
 	}, args...)
 }
 
-// Stop scales to zero and waits for the pod to go.
-//
-// The PVC, and so the workspace and home directories, survive.
-//
-// The wait is the point: `kubectl scale` returns as soon as the API server has
-// the new replica count, long before the pod is gone. Returning there would
-// make `stop` report success while the container is still running, and the
-// local provider's `docker stop` does not behave that way.
+// Stop scales to zero and waits for the pod to go. `kubectl scale` returns
+// before the pod is gone, and docker stop does not behave that way.
 func (p *Provider) Stop(ctx context.Context, c model.Container) error {
 	exists, err := p.deploymentExists(ctx, c)
 	if err != nil {
@@ -181,8 +164,7 @@ func (p *Provider) Stop(ctx context.Context, c model.Container) error {
 
 // Remove deletes everything belonging to the container, the volume included.
 //
-// The PVC goes too: `dev container remove` means the container is gone, and
-// leaving a claim behind would quietly bill for storage nothing references.
+// Leaving the claim behind would keep billing for storage nothing references.
 func (p *Provider) Remove(ctx context.Context, c model.Container) error {
 	name := objectName(c)
 	for _, target := range []struct{ kind, name string }{
@@ -218,8 +200,8 @@ func (p *Provider) Status(ctx context.Context, c model.Container) (model.Status,
 	if d.Status.ReadyReplicas > 0 {
 		return model.StatusRunning, nil
 	}
-	// Scaled to zero, or scaled up but not ready yet. Neither can take an exec,
-	// which is the only thing a caller does with this.
+	// Stopped covers both scaled to zero and not yet ready; neither takes an
+	// exec.
 	return model.StatusStopped, nil
 }
 
@@ -231,9 +213,6 @@ func (p *Provider) Logs(ctx context.Context, c model.Container, follow bool, out
 	return p.kube.stream(ctx, streamOpts{Stdout: out, Stderr: os.Stderr}, args...)
 }
 
-// Sync satisfies provider.Syncer, and seedWorkspace backs the copy Up makes on
-// first create. Both are implemented in sync.go.
-
 func (p *Provider) deploymentExists(ctx context.Context, c model.Container) (bool, error) {
 	out, err := p.kube.output(ctx,
 		"get", "deployment", objectName(c), "--ignore-not-found", "-o", "name")
@@ -243,10 +222,9 @@ func (p *Provider) deploymentExists(ctx context.Context, c model.Container) (boo
 	return strings.TrimSpace(out) != "", nil
 }
 
-// waitGone blocks until no pod carries this container's labels.
-//
-// Polled rather than `kubectl wait --for=delete`, which errors when nothing
-// matches — the case that is already success here.
+// waitGone blocks until no pod carries this container's labels. Polled, not
+// `kubectl wait --for=delete`, which errors when nothing matches (that is
+// success).
 func (p *Provider) waitGone(ctx context.Context, c model.Container) error {
 	deadline := time.Now().Add(terminationTimeout)
 	for {
@@ -268,11 +246,9 @@ func (p *Provider) waitGone(ctx context.Context, c model.Container) error {
 	}
 }
 
-// waitReady blocks until the pod is serving.
-//
-// `rollout status` rather than polling: it is the one command that understands
-// a Recreate strategy, and it fails rather than hanging when the pod cannot be
-// scheduled or the image cannot be pulled.
+// waitReady blocks until the pod is serving. rollout status understands the
+// Recreate strategy and fails, rather than hangs, when the pod cannot be
+// scheduled or pulled.
 func (p *Provider) waitReady(ctx context.Context, c model.Container) error {
 	return p.kube.run(ctx,
 		"rollout", "status", "deployment/"+objectName(c),

@@ -14,7 +14,7 @@ func TestLookup(t *testing.T) {
 		t.Errorf("Binary = %q, want %q", got.Binary, "claude")
 	}
 
-	// Tolerant of the shapes a shell hands over.
+	// Accepts the forms a shell passes in.
 	for _, id := range []string{"CLAUDE", " claude "} {
 		if _, err := Lookup(id); err != nil {
 			t.Errorf("Lookup(%q) = %v, want it to resolve", id, err)

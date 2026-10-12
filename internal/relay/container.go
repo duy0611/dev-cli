@@ -12,38 +12,26 @@ import (
 )
 
 // ownershipInterval is how often a relay checks that its socket path still
-// leads to it. A var so tests can shorten it; ten seconds is quick enough
-// that a stale relay does not linger, and a stat that often costs nothing.
+// leads to it. A var so tests can shorten it.
 var ownershipInterval = 10 * time.Second
 
 // Serve runs the in-container half: it listens on socketPath and forwards every
-// connection over the framed stream to the host, which holds the real agent.
-//
-// This is what the embedded binary runs. It returns when the stream ends, which
-// is how the session is stopped — the host closes its side and every pending
-// connection fails rather than hanging.
+// connection over the framed stream to the host. It returns when the stream
+// ends.
 func Serve(socketPath string, in io.Reader, out io.Writer) error {
-	// The socket must not be readable by other users on the host side of a
-	// shared mount, and inside a container it is the only guard there is: any
-	// process that can open it can ask the operator's agent to sign. 0700 on
-	// the directory and 0600 on the socket is the same posture ssh-agent uses
-	// for its own.
+	// Any process that can open the socket can ask the agent to sign, so it is
+	// locked down as ssh-agent does its own.
 	if err := os.MkdirAll(dirOf(socketPath), 0o700); err != nil {
 		return fmt.Errorf("creating the socket directory: %w", err)
 	}
-	// A leftover socket from a killed session would make Listen fail with
-	// "address already in use"; nothing is listening on it, so removing it is
-	// safe and is what lets a session start after a crash.
+	// A leftover socket from a killed session makes Listen fail.
 	_ = os.Remove(socketPath)
 
 	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
 	if err != nil {
 		return fmt.Errorf("listening on %s: %w", socketPath, err)
 	}
-	// Go unlinks a listener's path when it closes, whoever the path belongs to
-	// by then. After the host respawns a relay it belongs to the replacement,
-	// and this one closing late would pull the live socket out from under the
-	// session. removeIfMine does the removal instead, and only of our own.
+	// Go unlinks the path on Close even when a replacement relay now owns it.
 	ln.SetUnlinkOnClose(false)
 	defer func() { _ = ln.Close() }()
 

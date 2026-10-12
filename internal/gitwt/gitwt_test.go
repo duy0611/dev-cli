@@ -9,9 +9,8 @@ import (
 	"testing"
 )
 
-// requireGit skips when git is missing. Real git rather than a stub: it is
-// cheap, hermetic and needs no network, so a stub would only test the stub —
-// and the behaviour under test here *is* git's behaviour.
+// requireGit skips when git is missing. Real git, since the behaviour under
+// test is git's.
 func requireGit(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
@@ -19,14 +18,8 @@ func requireGit(t *testing.T) {
 	}
 }
 
-// tempDir is t.TempDir() with the symlinks taken out.
-//
-// Git reports paths as it resolved them — it chdirs and asks getcwd, so both
-// `rev-parse --git-common-dir` and `worktree list` answer with a symlink-free
-// path. On macOS t.TempDir() sits under /var, which is a symlink to
-// /private/var, so an expectation built from the raw temp path disagrees with
-// git's answer about the same directory. This is the same rule production
-// follows through xpath.Resolve (invariant 2), applied to the fixtures.
+// tempDir is t.TempDir() with symlinks resolved. Git reports resolved paths,
+// and on macOS /var is a symlink to /private/var.
 func tempDir(t *testing.T) string {
 	t.Helper()
 	dir, err := filepath.EvalSymlinks(t.TempDir())
@@ -41,8 +34,7 @@ func initRepo(t *testing.T) string {
 	t.Helper()
 	dir := tempDir(t)
 	run(t, dir, "init", "-q", ".")
-	// Identity is set per-repo: the host running the test may have none, and
-	// `git commit` refuses without one.
+	// Set per repo: the host may have no identity.
 	run(t, dir, "config", "user.email", "test@example.com")
 	run(t, dir, "config", "user.name", "test")
 	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("x"), 0o600); err != nil {
@@ -94,10 +86,7 @@ func TestCommonDirResolvesUpward(t *testing.T) {
 	}
 }
 
-// From inside a worktree the answer is the repository, not the worktree. This
-// is why --show-toplevel is not used: it would answer the worktree, and
-// creating a worktree from inside another worktree would then point at the
-// wrong place.
+// From inside a linked worktree the answer is the repository, not the worktree.
 func TestCommonDirFromInsideAWorktree(t *testing.T) {
 	requireGit(t)
 	repo := initRepo(t)
@@ -113,9 +102,7 @@ func TestCommonDirFromInsideAWorktree(t *testing.T) {
 	}
 }
 
-// A bare repository answers with itself. Its common dir has no .git beneath
-// anything, which is why the mount source is defined as this directory rather
-// than as <repo>/.git.
+// A bare repository's common dir is itself, with no .git beneath it.
 func TestCommonDirOnABareRepository(t *testing.T) {
 	requireGit(t)
 	dir := tempDir(t)
@@ -157,8 +144,7 @@ func TestAddCreatesANewBranch(t *testing.T) {
 	}
 }
 
-// An existing branch is checked out rather than recreated: `git worktree add -b`
-// on a branch that exists fails, so the -b must not be passed.
+// `git worktree add -b` fails on an existing branch, so -b must not be passed.
 func TestAddChecksOutAnExistingBranch(t *testing.T) {
 	requireGit(t)
 	repo := initRepo(t)
@@ -170,8 +156,7 @@ func TestAddChecksOutAnExistingBranch(t *testing.T) {
 	}
 }
 
-// An empty repository is not an error: `git worktree add -b` infers --orphan
-// there, which is the right answer for a repository just initialised.
+// Adding to an empty repository is not an error; git infers --orphan.
 func TestAddOnARepositoryWithNoCommits(t *testing.T) {
 	requireGit(t)
 	repo := tempDir(t)
@@ -198,8 +183,7 @@ func TestRemoveRefusesADirtyCheckout(t *testing.T) {
 	if err == nil {
 		t.Fatal("Remove succeeded on a dirty checkout")
 	}
-	// Git's own wording reaches the operator. It says more than anything this
-	// could write, and it names the flag that gets past it.
+	// Git's wording reaches the operator, including the flag that overrides it.
 	if !strings.Contains(err.Error(), "use --force") {
 		t.Errorf("error %q does not carry git's own message", err)
 	}
@@ -209,7 +193,7 @@ func TestRemoveRefusesADirtyCheckout(t *testing.T) {
 	}
 }
 
-// The branch outlives the checkout, which is the promise the command makes.
+// The branch outlives the checkout.
 func TestRemoveKeepsTheBranch(t *testing.T) {
 	requireGit(t)
 	repo := initRepo(t)
@@ -265,7 +249,6 @@ func TestToplevelFromASubdirectory(t *testing.T) {
 	}
 }
 
-// A bare repository has no working tree, so there is no checkout to name.
 func TestToplevelOnABareRepository(t *testing.T) {
 	requireGit(t)
 	repo := initRepo(t)
@@ -277,8 +260,7 @@ func TestToplevelOnABareRepository(t *testing.T) {
 	}
 }
 
-// Every file, not directories: a directory entry from --directory would be
-// grouped differently by each listing, and could not be intersected.
+// Lists files, not directories: --directory groups differently per listing.
 func TestIgnoredFilesListsEachFile(t *testing.T) {
 	requireGit(t)
 	repo := initRepo(t)
@@ -300,8 +282,7 @@ func TestIgnoredFilesListsEachFile(t *testing.T) {
 	}
 }
 
-// The pattern files apply in order, so a later negation wins over an earlier
-// match — the property --include-file relies on to narrow a project's list.
+// Pattern files apply in order, so a later negation wins.
 func TestMatchingFilesAppliesPatternFilesInOrder(t *testing.T) {
 	requireGit(t)
 	repo := initRepo(t)
@@ -347,5 +328,35 @@ func TestTrackedAndAllFiles(t *testing.T) {
 	}
 	if strings.Join(all, ",") != ".env,.gitignore,f" {
 		t.Errorf("AllFiles = %v, want [.env .gitignore f]", all)
+	}
+}
+
+// A linked worktree answers with its repository.
+func TestWorktreeRepoOfALinkedWorktree(t *testing.T) {
+	requireGit(t)
+	repo := initRepo(t)
+	wt := filepath.Join(tempDir(t), "wt")
+	run(t, repo, "worktree", "add", "-q", wt, "-b", "feat")
+
+	got, ok := WorktreeRepo(t.Context(), wt)
+	if !ok || got != filepath.Join(repo, ".git") {
+		t.Errorf("WorktreeRepo = %q, %v; want the repository's .git", got, ok)
+	}
+}
+
+// The main checkout, its subdirectories, and non-repositories are not linked.
+func TestWorktreeRepoOfAnythingElse(t *testing.T) {
+	requireGit(t)
+	repo := initRepo(t)
+	sub := filepath.Join(repo, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for label, dir := range map[string]string{
+		"main checkout": repo, "subdirectory": sub, "outside a repository": tempDir(t),
+	} {
+		if got, ok := WorktreeRepo(t.Context(), dir); ok {
+			t.Errorf("%s: WorktreeRepo = %q, true; want not a worktree", label, got)
+		}
 	}
 }

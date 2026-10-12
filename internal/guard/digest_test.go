@@ -41,9 +41,7 @@ func TestDigestIsStableForTheSameConfiguration(t *testing.T) {
 	}
 }
 
-// configFilePath is where the CLI found the file — on every invocation of a
-// generated or merged document that is a fresh temporary directory, so it must
-// not count as a change.
+// configFilePath names a temporary directory on each run, so it must not count.
 func TestDigestIgnoresWhereTheConfigWasRead(t *testing.T) {
 	a := digest(t, `{"image":"ubuntu","configFilePath":{"fsPath":"/tmp/dev-override-1/devcontainer.json"}}`, nil)
 	b := digest(t, `{"image":"ubuntu","configFilePath":{"fsPath":"/tmp/dev-override-2/devcontainer.json"}}`, nil)
@@ -64,7 +62,6 @@ func TestDigestChangesWithWhatRuns(t *testing.T) {
 	}
 }
 
-// A Dockerfile's RUN line is as much what runs as initializeCommand is.
 func TestDigestCoversTheDockerfile(t *testing.T) {
 	merged := `{"build":{"dockerfile":"Dockerfile"}}`
 	a := digest(t, merged, map[string]string{"Dockerfile": "FROM ubuntu\n"})
@@ -86,8 +83,6 @@ func TestDigestCoversComposeFiles(t *testing.T) {
 	}
 }
 
-// What changed is said in terms the operator can act on: which fields of the
-// configuration, which files.
 func TestDiffNamesWhatChanged(t *testing.T) {
 	merged := `{"build":{"dockerfile":"Dockerfile"},"image":"a","remoteUser":"vscode"}`
 	a := digest(t, merged, map[string]string{"Dockerfile": "FROM a\n"})
@@ -112,8 +107,6 @@ func TestDigestOfAMissingDockerfileIsAnError(t *testing.T) {
 	}
 }
 
-// A stored record compares like the digest it came from, so a rebuild can name
-// what changed since create without dev keeping a copy of the document.
 func TestRecordRoundTripsForDiff(t *testing.T) {
 	merged := `{"build":{"dockerfile":"Dockerfile"},"image":"a","remoteUser":"vscode"}`
 	stored := digest(t, merged, map[string]string{"Dockerfile": "FROM a\n"})
@@ -126,7 +119,7 @@ func TestRecordRoundTripsForDiff(t *testing.T) {
 	if got := Diff(back, live); !slices.Equal(got, []string{"image"}) {
 		t.Errorf("Diff = %v, want [image]", got)
 	}
-	// Hashes, not the document: nothing of the value is kept.
+	// Hashes only, not values.
 	if strings.Contains(stored.Record(), "vscode") {
 		t.Errorf("the record holds a field's value: %s", stored.Record())
 	}
@@ -139,8 +132,7 @@ func TestParseRecordOfNothingDiffsAsAllNew(t *testing.T) {
 	}
 }
 
-// The git guard's tree mounts follow the operator's git config, so a digest
-// that leaves them out stays the same when `make hooks` runs on the host.
+// Tree mounts follow the host's git config, so they must not change the digest.
 func TestWithoutMountsDropsOnlyTheNamedTargets(t *testing.T) {
 	merged := `{"image":"x","mounts":["source=/h/r/.githooks,target=/workspaces/r/.githooks,type=bind,readonly",` +
 		`{"source":"/h/r/tools","target":"/workspaces/r/tools","type":"bind"},"source=v,target=/var/dev-state,type=volume"]}`

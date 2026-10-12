@@ -88,7 +88,6 @@ func TestViewMergesTheTwoLayers(t *testing.T) {
 	if got := names(claude.Skills); !slices.Equal(got, []string{"brainstorming", "ours"}) {
 		t.Errorf("claude skills = %v", got)
 	}
-	// A per-agent server of the same name replaces the shared one for that agent.
 	if !claude.MCP["context7"].Remote() {
 		t.Errorf("claude's context7 was not overridden: %+v", claude.MCP["context7"])
 	}
@@ -152,8 +151,7 @@ func TestSkillShapes(t *testing.T) {
 	}
 }
 
-// One repository, several skills: paths expands into one Skill per path, in
-// order, each sharing the entry's git and ref.
+// paths expands into one Skill per path, sharing the entry's git and ref.
 func TestSkillPathsExpand(t *testing.T) {
 	s, err := Load(write(t, `version: 1
 skills:
@@ -242,8 +240,7 @@ func TestLoadRejects(t *testing.T) {
 			if !strings.Contains(err.Error(), c.want) {
 				t.Errorf("error %q does not mention %q", err, c.want)
 			}
-			// Every rejection names the file, so a message printed from deep in
-			// create still says where to look.
+			// Every error names the file.
 			if !strings.Contains(err.Error(), p) {
 				t.Errorf("error %q does not name the file", err)
 			}
@@ -286,8 +283,7 @@ func TestRewriteRefsLeavesOtherDollarsAlone(t *testing.T) {
 	}
 }
 
-// The sample in docs/ is what an operator copies, and it claims to show every
-// key the file accepts. It has to stay loadable as the format changes.
+// The documented sample must keep loading as the format changes.
 func TestTheSampleLoads(t *testing.T) {
 	s, err := Load(filepath.Join("..", "..", "docs", "agents.sample.yaml"))
 	if err != nil {

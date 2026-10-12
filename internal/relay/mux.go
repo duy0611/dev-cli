@@ -5,14 +5,9 @@ import (
 	"sync"
 )
 
-// mux carries several connections over one framed stream.
-//
-// Both ends use it: in the container it multiplexes accepted socket
-// connections, and on the host it demultiplexes them onto dials of the real
-// agent. The two directions are symmetric, so the logic lives here once.
+// mux carries several connections over one framed stream. Both ends use it.
 type mux struct {
-	// writeMu serialises frame writes. Every connection writes to the same
-	// stream, and two interleaved partial writes would corrupt it.
+	// writeMu serialises frame writes to the shared stream.
 	writeMu sync.Mutex
 	w       io.Writer
 
@@ -38,8 +33,8 @@ func (m *mux) add(id uint32) *pipe {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
-		// The stream is already gone; hand back a pipe that is closed so the
-		// caller's copy loop ends at once rather than blocking forever.
+		// The stream is gone, so return a closed pipe rather than block
+		// forever.
 		p.close()
 		return p
 	}
@@ -66,8 +61,7 @@ func (m *mux) lookup(id uint32) (*pipe, bool) {
 	return p, ok
 }
 
-// shutdown closes every channel. Called when the framed stream ends, so that
-// connections still waiting on it fail instead of hanging.
+// shutdown closes every channel, so connections waiting on the stream fail.
 func (m *mux) shutdown() {
 	m.mu.Lock()
 	m.closed = true
@@ -82,12 +76,8 @@ func (m *mux) shutdown() {
 	}
 }
 
-// pipe is a byte stream one goroutine fills and another drains.
-//
-// io.Pipe is unbuffered — every Write blocks until a Read takes it — which
-// would stall the single frame reader whenever one connection was slow to be
-// drained, and with it every other connection on the stream. This buffers
-// instead, so the reader never blocks on a consumer.
+// pipe is a buffered byte stream. It is not io.Pipe: an unbuffered write would
+// stall the shared frame reader behind one slow connection.
 type pipe struct {
 	mu     sync.Mutex
 	cond   *sync.Cond

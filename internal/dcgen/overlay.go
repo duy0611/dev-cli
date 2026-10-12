@@ -8,30 +8,19 @@ import (
 	"github.com/tailscale/hujson"
 )
 
-// Overlay merges dev's state mount into a project's own devcontainer.json.
+// Overlay merges dev's state mount into a project's own devcontainer.json. The
+// --override-config flag replaces the document rather than merging it, so every
+// field dev does not touch is passed through unchanged. Only mounts is
+// rewritten; environment already reaches the container through --remote-env.
 //
-// The devcontainer CLI's --override-config *replaces* the document rather than
-// deep-merging it, so everything the project declared has to come back out
-// again. That is why the document is decoded into json.RawMessage values:
-// every field dev does not touch round-trips byte for byte, and dev stays out
-// of the business of understanding a spec it does not implement.
-//
-// Exactly one field is rewritten. Environment already reaches both up and exec
-// through --remote-env, so merging containerEnv would be a second route to a
-// destination that already has one — and two mechanisms for one outcome is how
-// a mount gets dropped.
-//
-// dev owns StateDir whenever dev is driving: an existing mount at that target is
-// replaced, not kept beside. Leaving both would make docker refuse the whole run
-// with "duplicate mount destination", and standing down instead would leave
-// `container remove` unable to delete a volume dev did not name.
+// dev owns StateDir while it drives: an existing mount there is replaced,
+// because docker refuses a duplicate mount destination.
 func Overlay(projectConfig []byte, state State) ([]byte, error) {
 	doc, err := parseConfig(projectConfig)
 	if err != nil {
 		return nil, err
 	}
-	// The string spelling, matching what Render writes, so the two places dev
-	// names this volume name it the same way.
+	// The string spelling, matching what Render writes.
 	own := ownMount{
 		target: StateDir,
 		entry:  fmt.Sprintf("source=%s,target=%s,type=volume", state.Volume, StateDir),
@@ -42,28 +31,16 @@ func Overlay(projectConfig []byte, state State) ([]byte, error) {
 	return marshalConfig(doc)
 }
 
-// OverlayWorktree merges a worktree's two bind mounts into a project's own
-// devcontainer.json: git's common directory and the checkout, each at its own
-// host path.
-//
-// A project-owned container cannot get these from a generated document, since
-// dev never writes into a project's own devcontainer.json (invariant 9), so
-// they arrive the same way the state mount does — merged in at invocation
-// time and passed through --override-config. Both mounts are required for git
-// to work at all inside the container: see CLAUDE.md invariant 11.
-//
-// dev owns both targets whenever dev is driving, for the reason Overlay owns
-// StateDir: an existing entry at either path is replaced, not kept beside,
-// since docker refuses the whole run with "duplicate mount destination" when a
-// target arrives twice.
+// OverlayWorktree merges a worktree's two bind mounts, the common directory and
+// the checkout, into a project's devcontainer.json. dev owns both targets while
+// it drives, as with Overlay.
 func OverlayWorktree(projectConfig []byte, repo, path string) ([]byte, error) {
 	doc, err := parseConfig(projectConfig)
 	if err != nil {
 		return nil, err
 	}
-	// The identical path on both sides of each mount — see gitwt and invariant
-	// 11 for why. Repo resolves the checkout's gitdir: line; path satisfies the
-	// repository's own backlink to the checkout.
+	// The identical path on both sides: git's gitdir line and the repository's
+	// backlink are both absolute host paths (invariant 11).
 	if err := mergeMounts(doc,
 		ownMount{target: repo, entry: fmt.Sprintf("source=%s,target=%s,type=bind", repo, repo)},
 		ownMount{target: path, entry: fmt.Sprintf("source=%s,target=%s,type=bind", path, path)},
@@ -73,15 +50,31 @@ func OverlayWorktree(projectConfig []byte, repo, path string) ([]byte, error) {
 	return marshalConfig(doc)
 }
 
-// OverlayMounts merges mounts entries dev owns into a project's own
-// devcontainer.json, each in the string form. Used for the git guard's mounts,
-// which arrive the same way the state and worktree mounts do: merged at
-// invocation time and passed through --override-config, never written into the
-// project (invariant 9).
-//
-// dev owns each target while it drives, for Overlay's reason: a project mount
-// at the same target is replaced rather than kept beside it, since docker
-// refuses the whole run with "duplicate mount destination".
+// OverlayIsolatedWorkspace points a project's devcontainer.json at a volume for
+// its workspace, for an isolated container. Both workspaceMount and
+// workspaceFolder are replaced, so the CLI does not derive the in-container
+// path from the host folder.
+func OverlayIsolatedWorkspace(projectConfig []byte, mount Mount) ([]byte, error) {
+	doc, err := parseConfig(projectConfig)
+	if err != nil {
+		return nil, err
+	}
+	for key, value := range map[string]string{
+		"workspaceMount":  fmt.Sprintf("source=%s,target=%s,type=volume", mount.Volume, mount.Folder),
+		"workspaceFolder": mount.Folder,
+	} {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("rendering %s: %w", key, err)
+		}
+		doc[key] = raw
+	}
+	return marshalConfig(doc)
+}
+
+// OverlayMounts merges mounts entries dev owns into a project's
+// devcontainer.json, in string form. A project mount at the same target is
+// replaced.
 func OverlayMounts(projectConfig []byte, entries []string) ([]byte, error) {
 	doc, err := parseConfig(projectConfig)
 	if err != nil {
@@ -93,17 +86,16 @@ func OverlayMounts(projectConfig []byte, entries []string) ([]byte, error) {
 	return marshalConfig(doc)
 }
 
-// AppendMounts adds mounts entries to a generated document — dev's own, so
-// nothing in it needs round-tripping, only the entries added after whatever is
-// there. Used per invocation for the git guard's mounts, which depend on where
-// the project's .git is today and so are not baked into the stored document.
+// AppendMounts adds mounts entries to a generated document. They are added per
+// invocation, because the git guard's mounts depend on where the project's .git
+// is today.
 func AppendMounts(generated []byte, entries []string) ([]byte, error) {
 	return OverlayMounts(generated, entries)
 }
 
-// NamesWorkspaceMount reports whether a project's document says where its
-// workspace goes — workspaceMount or workspaceFolder — which replaces the
-// devcontainer CLI's default layout, so dev cannot know where .git lands.
+// NamesWorkspaceMount reports whether a project's document sets its workspace
+// location, which replaces the CLI's default layout, so dev cannot know where
+// .git lands.
 func NamesWorkspaceMount(projectConfig []byte) (bool, error) {
 	doc, err := parseConfig(projectConfig)
 	if err != nil {
@@ -128,18 +120,14 @@ func strconvQuote(s string) string {
 	return string(b)
 }
 
-// ownMount is one mounts entry dev owns for the length of one invocation:
-// where it lands in the container, and the full devcontainer.json spelling.
+// ownMount is one mounts entry dev owns for one invocation.
 type ownMount struct {
 	target string
 	entry  string
 }
 
-// mergeMounts replaces any project mount whose target matches one of own's,
-// and appends the rest of own after the project's surviving entries — kept in
-// the project's own order, with dev's appended last, so the result is
-// deterministic and a diff between two invocations of the same document is
-// empty.
+// mergeMounts replaces any project mount whose target matches one of own's, and
+// appends the rest, so the result is deterministic.
 func mergeMounts(doc map[string]json.RawMessage, own ...ownMount) error {
 	var existing []json.RawMessage
 	if raw, ok := doc["mounts"]; ok {
@@ -180,10 +168,8 @@ func mergeMounts(doc map[string]json.RawMessage, own ...ownMount) error {
 	return nil
 }
 
-// marshalConfig renders a merged document back to JSON.
-//
-// Indented because this file is what an operator is pointed at when a
-// container starts wrong, and two spaces cost nothing in a temporary file.
+// marshalConfig renders a merged document back to JSON, indented for a human
+// reading it.
 func marshalConfig(doc map[string]json.RawMessage) ([]byte, error) {
 	out, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
@@ -192,13 +178,9 @@ func marshalConfig(doc map[string]json.RawMessage) ([]byte, error) {
 	return out, nil
 }
 
-// UsesCompose reports whether a project's document names a compose file.
-//
-// A `mounts` entry is not reliably applied for a compose project: the spec
-// lists the property as cross-orchestrator, but mounts there belong in the
-// compose file and implementations differ on whether they inject it
-// (devcontainers/spec#106). The container still runs; its state volume is
-// simply absent, with nothing reporting an error. The caller warns.
+// UsesCompose reports whether a project's document names a compose file. A
+// mounts entry is not reliably applied for a compose project
+// (devcontainers/spec#106), so the caller warns.
 func UsesCompose(projectConfig []byte) (bool, error) {
 	doc, err := parseConfig(projectConfig)
 	if err != nil {
@@ -208,13 +190,9 @@ func UsesCompose(projectConfig []byte) (bool, error) {
 	return ok, nil
 }
 
-// parseConfig decodes a devcontainer.json into its top-level fields.
-//
-// devcontainer.json is JSONC: comments and trailing commas are legal, the CLI
-// accepts them and VS Code's own templates ship them, while encoding/json
-// rejects both. hujson.Standardize normalises the syntax and nothing else — it
-// is correct on a // or /* inside a string literal, where a hand-rolled
-// stripper would silently corrupt the line.
+// parseConfig decodes a devcontainer.json into its top-level fields. It is
+// JSONC: comments and trailing commas are legal, and hujson.Standardize handles
+// them without touching string literals.
 func parseConfig(projectConfig []byte) (map[string]json.RawMessage, error) {
 	std, err := hujson.Standardize(projectConfig)
 	if err != nil {
@@ -224,28 +202,22 @@ func parseConfig(projectConfig []byte) (map[string]json.RawMessage, error) {
 	if err := json.Unmarshal(std, &doc); err != nil {
 		return nil, fmt.Errorf("reading the project's devcontainer.json: %w", err)
 	}
-	// json.Unmarshal unmarshals null into a nil map with err == nil. A top-level
-	// null is not a valid devcontainer document; reject it before returning,
-	// since a nil map causes a panic in Overlay when it tries to assign to it.
+	// A top-level null unmarshals into a nil map without error, which would
+	// panic in Overlay.
 	if doc == nil {
 		return nil, fmt.Errorf("reading the project's devcontainer.json: expected an object, got null")
 	}
 	return doc, nil
 }
 
-// mountTarget returns where a mounts entry lands inside the container.
-//
-// Both spellings, because the CLI accepts both: the string form
-// "source=x,target=/y,type=volume" and the object form
-// {"source":"x","target":"/y"}. Reading only one would leave an object-form
-// project with dev's mount added beside its own rather than replacing it, which
-// is the duplicate-destination failure again.
+// mountTarget returns where a mounts entry lands inside the container, in
+// either spelling.
 func mountTarget(entry json.RawMessage) (string, error) {
 	var s string
 	if err := json.Unmarshal(entry, &s); err == nil {
 		for _, field := range strings.Split(s, ",") {
-			// target= is the documented spelling; docker's own --mount also
-			// accepts destination= and dst= for the same thing.
+			// docker's --mount also accepts destination= and dst= for the same
+			// thing.
 			for _, key := range []string{"target=", "destination=", "dst="} {
 				if strings.HasPrefix(field, key) {
 					return strings.TrimPrefix(field, key), nil

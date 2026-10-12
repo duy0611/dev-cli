@@ -6,9 +6,7 @@ import (
 )
 
 func TestBinaryArchNames(t *testing.T) {
-	// Both spellings, because `uname -m` says x86_64 and aarch64 while Go says
-	// amd64 and arm64, and the arch reaches this code from whichever of the two
-	// the caller had to hand.
+	// Both spellings: uname -m and Go name the same architectures differently.
 	for _, arch := range []string{"x86_64", "amd64", "aarch64", "arm64"} {
 		if _, err := Binary(arch); err != nil && !isNotBuilt(err) {
 			t.Errorf("Binary(%q): %v", arch, err)
@@ -21,17 +19,13 @@ func TestBinaryUnknownArch(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error for an unsupported architecture")
 	}
-	// Named, because the alternative is an exec format error inside a container
-	// that says nothing about which architecture was wanted.
 	if !strings.Contains(err.Error(), "riscv64") {
 		t.Errorf("error should name the architecture, got: %v", err)
 	}
 }
 
-// TestBinaryIsBuilt checks the embedded relay is a real executable. Skipped
-// rather than failed when `make relay` has not run, so `go test ./...` works on
-// a fresh checkout where the binaries are absent — they are build output and
-// not committed. `make build` depends on `relay`, so a real build has them.
+// TestBinaryIsBuilt checks the embedded relay is an ELF executable. It skips
+// when the binaries are not built, as on a fresh checkout.
 func TestBinaryIsBuilt(t *testing.T) {
 	for _, arch := range []string{"x86_64", "aarch64"} {
 		b, err := Binary(arch)
@@ -41,16 +35,14 @@ func TestBinaryIsBuilt(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Binary(%q): %v", arch, err)
 		}
-		// ELF magic. A build that silently produced something else — a shell
-		// script, an error page — would otherwise only fail in a container.
+		// Anything else would only fail inside a container.
 		if len(b) < 4 || string(b[:4]) != "\x7fELF" {
 			t.Errorf("Binary(%q) is not an ELF executable", arch)
 		}
 	}
 }
 
-// isNotBuilt distinguishes "make relay has not run" from a genuine failure,
-// such as an architecture with no relay at all.
+// isNotBuilt reports whether the error means the relay binary was not built.
 func isNotBuilt(err error) bool {
 	return strings.Contains(err.Error(), "no relay binary")
 }

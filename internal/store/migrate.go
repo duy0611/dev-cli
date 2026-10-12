@@ -10,10 +10,8 @@ import (
 //go:embed migrations/*.sql
 var migrationFS embed.FS
 
-// migrate applies every migration the database has not seen yet, in filename
-// order, each inside its own transaction. A failed migration therefore leaves
-// the database on the last version that did apply, rather than half-way through
-// one that did not.
+// migrate applies every unseen migration in filename order, each in its own
+// transaction.
 func (s *Store) migrate() error {
 	if _, err := s.db.Exec(
 		`CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -87,9 +85,8 @@ func (s *Store) applyMigration(name, body string) error {
 	return nil
 }
 
-// migrationNames lists the embedded migrations in the order they must run.
-// Filenames are zero-padded and sort lexically, which is why they are numbered
-// that way.
+// migrationNames lists the embedded migrations in run order. Filenames are
+// zero-padded so they sort lexically.
 func migrationNames() ([]string, error) {
 	entries, err := fs.ReadDir(migrationFS, "migrations")
 	if err != nil {

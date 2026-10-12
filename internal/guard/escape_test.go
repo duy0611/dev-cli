@@ -34,9 +34,8 @@ func clean(t *testing.T, merged string) {
 	}
 }
 
-// Every way a configuration can ask for the host, each from the place it
-// actually arrives: the merged document (where a feature's privileged has
-// already been OR'd in), a mount in either spelling, and runArgs.
+// Every route into the host, from each place it arrives: the merged document, a
+// mount in either spelling, and runArgs.
 func TestEscapeFindsEachRoute(t *testing.T) {
 	cases := map[string]struct{ merged, substr string }{
 		"privileged":            {`{"privileged": true}`, "privileged"},
@@ -68,8 +67,7 @@ func TestEscapeFindsEachRoute(t *testing.T) {
 	}
 }
 
-// These widen what root can do inside the container, not the way out of it —
-// and the Go feature in dev's own catalog asks for the first two.
+// Settings that widen root inside the container are not escapes.
 func TestEscapeAllowsWhatStaysInside(t *testing.T) {
 	for name, merged := range map[string]string{
 		"empty":                           `{}`,
@@ -86,8 +84,7 @@ func TestEscapeAllowsWhatStaysInside(t *testing.T) {
 	}
 }
 
-// A finding says where it came from, so the operator knows which file — or
-// which feature — to look at.
+// A finding names the field it came from.
 func TestEscapeFindingsSayWhere(t *testing.T) {
 	got := check(t, `{"privileged": true, "runArgs": ["--pid=host"], "mounts": ["source=/,target=/h,type=bind"]}`)
 	if len(got) != 3 {
@@ -114,7 +111,7 @@ func TestEscapeDeduplicates(t *testing.T) {
 		}
 	}
 	if n != 2 {
-		// One per source is the useful answer: both places need changing.
+		// One per source: both places need changing.
 		t.Errorf("got %d privileged findings, want one per source (2): %v", n, got)
 	}
 	got = check(t, `{"runArgs": ["--pid=host", "--pid", "host"]}`)
@@ -127,7 +124,7 @@ func TestEscapeRejectsMalformedInput(t *testing.T) {
 	if _, err := Escape([]byte(`not json`), home); err == nil {
 		t.Error("accepted malformed JSON")
 	}
-	// A mounts field that is not a list is malformed, not safe.
+	// A mounts field that is not a list is malformed.
 	if _, err := Escape([]byte(`{"mounts": "source=/,target=/h"}`), home); err == nil {
 		t.Error("accepted a non-list mounts")
 	}

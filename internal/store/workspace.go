@@ -8,9 +8,7 @@ import (
 	"github.com/duy0611/dev-cli/internal/model"
 )
 
-// CreateWorkspace inserts a workspace. Unlike PutProvider this refuses to
-// overwrite: a workspace owns containers and settings, so silently rebinding
-// one to a different provider would strand them.
+// CreateWorkspace inserts a workspace. It refuses to overwrite an existing one.
 func (s *Store) CreateWorkspace(w model.Workspace) error {
 	_, err := s.db.Exec(
 		`INSERT INTO workspaces (name, provider_name, ssh_forward, created_at)
@@ -25,11 +23,10 @@ func (s *Store) CreateWorkspace(w model.Workspace) error {
 	return nil
 }
 
-// CloneWorkspace inserts w and copies every setting of the workspace src onto
-// it, returning how many were copied. One transaction, so a failure part-way
-// leaves no workspace rather than one holding half its settings — which would
-// launch containers missing a token with nothing to say so. Specs are copied
-// as specs; nothing is resolved here or anywhere in this layer.
+// CloneWorkspace inserts w and copies the settings of src onto it, returning
+// how many were copied. It runs in one transaction, so a failure leaves no
+// workspace rather than one missing settings. Specs are copied as specs, never
+// resolved.
 func (s *Store) CloneWorkspace(src string, w model.Workspace) (int, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -37,8 +34,8 @@ func (s *Store) CloneWorkspace(src string, w model.Workspace) (int, error) {
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op once the commit below succeeds
 
-	// Checked inside the transaction: the copy below selects by name, and a
-	// missing source would otherwise copy nothing and succeed.
+	// Inside the transaction; a missing source would otherwise copy nothing and
+	// succeed.
 	var one int
 	if err := tx.QueryRow(`SELECT 1 FROM workspaces WHERE name = ?`, src).Scan(&one); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -103,7 +100,6 @@ func (s *Store) ListWorkspaces() ([]model.Workspace, error) {
 }
 
 // WorkspacesUsing returns the workspaces bound to a provider, in name order.
-// What `provider remove` reports instead of a foreign-key error.
 func (s *Store) WorkspacesUsing(provider string) ([]string, error) {
 	rows, err := s.db.Query(
 		`SELECT name FROM workspaces WHERE provider_name = ? ORDER BY name`, provider)
@@ -124,8 +120,7 @@ func (s *Store) WorkspacesUsing(provider string) ([]string, error) {
 }
 
 // DeleteWorkspace removes the workspace and, by cascade, its settings and
-// container records. The containers themselves are the caller's problem: this
-// layer never talks to an engine.
+// container records. The engine containers are the caller's to remove.
 func (s *Store) DeleteWorkspace(name string) error {
 	res, err := s.db.Exec(`DELETE FROM workspaces WHERE name = ?`, name)
 	if err != nil {
@@ -159,8 +154,8 @@ func (s *Store) UnsetSetting(workspace, key string) error {
 	return requireOneRow(res, ErrNotFound)
 }
 
-// ListSettings returns a workspace's settings in key order, so that command
-// output and the env passed to a container are both stable.
+// ListSettings returns a workspace's settings in key order, so output is
+// stable.
 func (s *Store) ListSettings(workspace string) ([]model.Setting, error) {
 	rows, err := s.db.Query(
 		`SELECT key, spec FROM workspace_settings WHERE workspace_name = ? ORDER BY key`,

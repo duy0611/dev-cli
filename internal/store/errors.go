@@ -5,16 +5,14 @@ import (
 	"time"
 )
 
-// ErrNotFound is returned by every Get for a row that is not there. Callers
-// turn it into the command-level "no such thing" message and exit code.
+// ErrNotFound is returned by every Get for a row that is not there.
 var ErrNotFound = errors.New("not found")
 
 // ErrExists is returned when a create would collide with an existing row.
 var ErrExists = errors.New("already exists")
 
-// Timestamps are written by the application rather than by the database, so
-// that the same SQL runs unchanged against Postgres. RFC 3339 in UTC sorts
-// lexically, which keeps ORDER BY created_at honest.
+// Timestamps are written by the application, not the database, so the same SQL
+// runs against Postgres. RFC 3339 in UTC sorts lexically.
 const timeFormat = time.RFC3339Nano
 
 func nowString() string { return time.Now().UTC().Format(timeFormat) }

@@ -8,9 +8,7 @@ import (
 	"github.com/duy0611/dev-cli/internal/provider"
 )
 
-// TestProviderImplementsAgentForwarder pins the type assertion callers use.
-// A provider that stopped satisfying the interface would fail nowhere at
-// compile time — the caller would just stop forwarding the agent.
+// A failed assertion would stop forwarding the agent without any error.
 func TestProviderImplementsAgentForwarder(t *testing.T) {
 	var p any = testProvider()
 	if _, ok := p.(provider.AgentForwarder); !ok {
@@ -18,8 +16,8 @@ func TestProviderImplementsAgentForwarder(t *testing.T) {
 	}
 }
 
-// agentStubs answers the configuration read and lets kubectl report the
-// container's architecture.
+// agentStubs answers the configuration read and reports the container's
+// architecture.
 func agentStubs(t *testing.T, arch string) *stubs {
 	t.Helper()
 	s := newStubs(t)
@@ -31,21 +29,21 @@ esac`)
     echo '{"mergedConfiguration":{"workspaceFolder":"/workspaces/api","remoteUser":"node","containerEnv":{},"remoteEnv":{}}}'
     ;;
 esac`)
-	// The configuration read needs a docker on PATH even though it only reads a
-	// file: the devcontainer CLI shells out to the engine regardless.
+	// The CLI runs docker even to read a configuration, so docker must be on
+	// PATH.
 	withBuildx(t, s)
 	return s
 }
 
-// TestForwardAgentTargetsTheDeployment covers the exec reaching the right
-// object in the right cluster. Every kubectl call has to carry --context and
-// --namespace: one that does not will not fail, it will succeed somewhere else.
+// TestForwardAgentTargetsTheDeployment checks that exec reaches the right
+// object. Every kubectl call must carry --context and --namespace, or it
+// succeeds elsewhere.
 func TestForwardAgentTargetsTheDeployment(t *testing.T) {
 	s := agentStubs(t, "riscv64")
 	c := k8sContainer(t)
 
-	// An architecture nothing is embedded for stops the session immediately
-	// after the uname, which is all this test needs: the argv that carried it.
+	// An unsupported architecture stops the session after the uname, which is
+	// all this test needs.
 	_, err := testProvider().ForwardAgent(context.Background(), c, "/tmp/agent.sock")
 	if err == nil {
 		t.Fatal("expected an error for an unsupported architecture")
@@ -65,29 +63,23 @@ func TestForwardAgentTargetsTheDeployment(t *testing.T) {
 	}
 }
 
-// TestForwardAgentRunsAsRemoteUser covers the relay running as the user the
-// configuration names. kubectl exec runs as the image's own USER, and the
-// devcontainer spec's remoteUser is applied by the CLI at exec time, which
-// never happens here — so a relay left as root would write its socket somewhere
-// the operator's own shell cannot use it.
+// kubectl exec runs as the image's USER, not remoteUser, so the relay must
+// switch itself.
 func TestForwardAgentRunsAsRemoteUser(t *testing.T) {
 	s := agentStubs(t, "riscv64")
 
 	_, _ = testProvider().ForwardAgent(context.Background(), k8sContainer(t), "/tmp/agent.sock")
 
 	calls := kubectlCalls(t, s)
-	// The command is shell-quoted and then quoted again inside su -c, so match
-	// the user rather than any particular spelling of the wrapper.
+	// Commands are quoted twice inside su -c, so match the user name only.
 	if !anyCall(calls, "node") {
 		t.Errorf("the relay does not switch to the remote user: %v", calls)
 	}
 }
 
-// TestForwardAgentRequiresKubectl covers the binary being absent: reported as a
-// missing tool rather than as a failure to forward.
+// A missing kubectl is reported by name, not as a forwarding failure.
 func TestForwardAgentRequiresKubectl(t *testing.T) {
-	// A stub directory with nothing in it. Replacing PATH rather than
-	// prepending, or a real kubectl on this machine would answer.
+	// Replace PATH rather than prepend, or a host kubectl answers.
 	t.Setenv("PATH", t.TempDir())
 
 	_, err := testProvider().ForwardAgent(context.Background(), k8sContainer(t), "/tmp/agent.sock")

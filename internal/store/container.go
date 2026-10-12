@@ -8,20 +8,21 @@ import (
 	"github.com/duy0611/dev-cli/internal/model"
 )
 
-// CreateContainer records a container. The name has to be free within the
-// workspace; the same name in another workspace is fine, and is the point of
-// workspaces.
+// CreateContainer records a container. The name must be free within its
+// workspace.
 func (s *Store) CreateContainer(c model.Container) error {
 	_, err := s.db.Exec(
 		`INSERT INTO containers
 		   (name, workspace_name, source_kind, source, config_path, generated_config,
 		    persist_state, agent_config, agent_config_pending,
-		    git_guard, allow_privileged, config_digest, config_digest_fields, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		    git_guard, allow_privileged, config_digest, config_digest_fields,
+		    mode, worktree_repo, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		c.Name, c.WorkspaceName, string(c.SourceKind), c.Source, c.ConfigPath,
 		c.GeneratedConfig, boolToInt(c.PersistState), c.AgentConfig,
 		boolToInt(c.AgentConfigPending), boolToInt(c.GitGuard),
-		boolToInt(c.AllowPrivileged), c.ConfigDigest, c.ConfigDigestFields, nowString())
+		boolToInt(c.AllowPrivileged), c.ConfigDigest, c.ConfigDigestFields,
+		string(modeOrLegacy(c.Mode)), c.WorktreeRepo, nowString())
 	if err != nil {
 		if isUniqueViolation(err) {
 			return ErrExists
@@ -35,7 +36,8 @@ func (s *Store) GetContainer(workspace, name string) (model.Container, error) {
 	row := s.db.QueryRow(
 		`SELECT name, workspace_name, source_kind, source, config_path, generated_config,
 		        persist_state, agent_config, agent_config_pending,
-		        git_guard, allow_privileged, config_digest, config_digest_fields, created_at
+		        git_guard, allow_privileged, config_digest, config_digest_fields,
+		        mode, worktree_repo, created_at
 		 FROM containers WHERE workspace_name = ? AND name = ?`, workspace, name)
 	return scanContainer(row)
 }
@@ -45,7 +47,8 @@ func (s *Store) GetContainer(workspace, name string) (model.Container, error) {
 func (s *Store) ListContainers(workspace string) ([]model.Container, error) {
 	query := `SELECT name, workspace_name, source_kind, source, config_path, generated_config,
 	                 persist_state, agent_config, agent_config_pending,
-	                 git_guard, allow_privileged, config_digest, config_digest_fields, created_at
+	                 git_guard, allow_privileged, config_digest, config_digest_fields,
+		        mode, worktree_repo, created_at
 	          FROM containers`
 	args := []any{}
 	if workspace != "" {
@@ -80,6 +83,15 @@ func (s *Store) DeleteContainer(workspace, name string) error {
 	return requireOneRow(res, ErrNotFound)
 }
 
+// modeOrLegacy returns the mode a row is written with. A container built before
+// modes existed has none, and must not be stored as an empty string.
+func modeOrLegacy(m model.Mode) model.Mode {
+	if m == "" {
+		return model.ModeLegacy
+	}
+	return m
+}
+
 func scanContainer(sc scanner) (model.Container, error) {
 	var (
 		c         model.Container
@@ -88,11 +100,13 @@ func scanContainer(sc scanner) (model.Container, error) {
 		pending   int
 		guard     int
 		allowPriv int
+		mode      string
 		createdAt string
 	)
 	if err := sc.Scan(&c.Name, &c.WorkspaceName, &kind, &c.Source, &c.ConfigPath,
 		&c.GeneratedConfig, &persist, &c.AgentConfig, &pending,
-		&guard, &allowPriv, &c.ConfigDigest, &c.ConfigDigestFields, &createdAt); err != nil {
+		&guard, &allowPriv, &c.ConfigDigest, &c.ConfigDigestFields,
+		&mode, &c.WorktreeRepo, &createdAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return model.Container{}, ErrNotFound
 		}
@@ -103,6 +117,7 @@ func scanContainer(sc scanner) (model.Container, error) {
 	c.AgentConfigPending = pending != 0
 	c.GitGuard = guard != 0
 	c.AllowPrivileged = allowPriv != 0
+	c.Mode = model.Mode(mode)
 
 	t, err := parseTime(createdAt)
 	if err != nil {
@@ -123,9 +138,8 @@ func (s *Store) UpdateContainerConfig(workspace, name, config string) error {
 	return requireOneRow(res, ErrNotFound)
 }
 
-// SetAgentConfigPending records whether applying a container's agents.yaml is
-// still owed. Set before the first step of an apply and cleared after the last,
-// so an apply that fails or is interrupted leaves it set for the next start.
+// SetAgentConfigPending records whether applying the container's agents.yaml is
+// still owed.
 func (s *Store) SetAgentConfigPending(workspace, name string, pending bool) error {
 	res, err := s.db.Exec(
 		`UPDATE containers SET agent_config_pending = ?
@@ -137,8 +151,7 @@ func (s *Store) SetAgentConfigPending(workspace, name string, pending bool) erro
 }
 
 // SetConfigDigest records the digest of the configuration a container was just
-// built from. Written by create, and by a rebuild that found it changed and was
-// told to accept that, or that had none recorded yet.
+// built from.
 func (s *Store) SetConfigDigest(workspace, name, digest, fields string) error {
 	res, err := s.db.Exec(
 		`UPDATE containers SET config_digest = ?, config_digest_fields = ?

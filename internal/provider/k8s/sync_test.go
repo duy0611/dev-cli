@@ -46,7 +46,6 @@ func TestTarDirCarriesTheTree(t *testing.T) {
 	}
 	write("main.go", "package main", 0o644)
 	write("scripts/run.sh", "#!/bin/sh\n", 0o755)
-	// An agent in the container needs the history to branch and commit.
 	write(".git/HEAD", "ref: refs/heads/main\n", 0o644)
 	if err := os.Symlink("main.go", filepath.Join(dir, "link.go")); err != nil {
 		t.Fatalf("Symlink: %v", err)
@@ -63,7 +62,7 @@ func TestTarDirCarriesTheTree(t *testing.T) {
 			t.Errorf("%q is missing from the archive: %v", want, keys(entries))
 		}
 	}
-	// Without the mode, every script arrives unexecutable.
+	// Mode must survive, or every script arrives unexecutable.
 	if got := entries["scripts/run.sh"].Mode & 0o111; got == 0 {
 		t.Errorf("scripts/run.sh lost its executable bit (mode %o)", entries["scripts/run.sh"].Mode)
 	}
@@ -81,7 +80,7 @@ func TestTarDirCarriesTheTree(t *testing.T) {
 	}
 }
 
-// A stray socket — an editor's, a database's — should not stop a sync.
+// Sockets and fifos are skipped rather than failing the sync.
 func TestTarDirSkipsUnarchivableFiles(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "keep.txt"), []byte("x"), 0o644); err != nil {
@@ -130,17 +129,15 @@ func TestSeedWorkspaceStreamsIntoTheWorkspaceFolder(t *testing.T) {
 	if !strings.Contains(call, "tar -x -p -C /workspaces/api") {
 		t.Errorf("the seed unpacks somewhere unexpected: %q", call)
 	}
-	// -i, or kubectl never attaches the stream the archive is written to.
+	// -i, or kubectl never attaches stdin.
 	if !strings.Contains(call, "exec -i") {
 		t.Errorf("the seed did not attach stdin: %q", call)
 	}
 }
 
-// Sync applies the Secret and nothing else. The Deployment's absence is the
-// point: a server-side apply drops the fields it does not set, so re-applying
-// the Deployment without a rebuiltAt would clear that annotation, change the
-// pod template, and let the Recreate strategy destroy the work this command
-// exists to leave alone.
+// Only the Secret is applied: a server-side apply of the Deployment without
+// rebuiltAt clears that annotation and changes the template, so Recreate would
+// kill the pod.
 func TestSyncAppliesTheSecretAndNotTheDeployment(t *testing.T) {
 	s := clusterStubs(t, true)
 	c := k8sContainer(t)
@@ -169,8 +166,7 @@ func TestSyncAppliesTheSecretAndNotTheDeployment(t *testing.T) {
 	if got := obj.StringData["GH_TOKEN"]; got != "t0ken" {
 		t.Errorf("GH_TOKEN = %q, want %q", got, "t0ken")
 	}
-	// Belt and braces: a List carrying a Deployment would unmarshal with an
-	// unsurprising kind above and still restart the pod.
+	// The kind check above would miss a Deployment inside a List.
 	if strings.Contains(manifest, "Deployment") {
 		t.Errorf("the applied manifest names a Deployment, which would restart the pod: %s", manifest)
 	}
@@ -181,10 +177,8 @@ func TestSyncAppliesTheSecretAndNotTheDeployment(t *testing.T) {
 	}
 }
 
-// A setting the workspace no longer has must leave the cluster's copy. The
-// apply replaces the object's stringData wholesale, so this falls out of the
-// mechanism — but it is the operator-visible half of "rotate and unset", and
-// nothing else asserts it.
+// An unset setting leaves the Secret, since the apply replaces stringData
+// wholesale.
 func TestSyncCarriesAnUnsetKeyAway(t *testing.T) {
 	s := clusterStubs(t, true)
 	c := k8sContainer(t)
@@ -202,8 +196,6 @@ func TestSyncCarriesAnUnsetKeyAway(t *testing.T) {
 	}
 }
 
-// Settings belong to a container whether or not it has a folder. The old
-// refusal was about files, and there are none here to be missing.
 func TestSyncAcceptsAFolderlessContainer(t *testing.T) {
 	clusterStubs(t, true)
 
@@ -213,8 +205,7 @@ func TestSyncAcceptsAFolderlessContainer(t *testing.T) {
 	}
 }
 
-// The interface is optional by design, so the assertion the CLI makes has to
-// actually hold for this provider.
+// The CLI discovers Syncer by type assertion; this must hold.
 func TestProviderImplementsSyncer(t *testing.T) {
 	var p any = &Provider{}
 	if _, ok := p.(provider.Syncer); !ok {
@@ -230,9 +221,8 @@ func keys(m map[string]*tar.Header) []string {
 	return out
 }
 
-// There is no host tree to copy. Unpacking nothing over a workspace an agent is
-// working in would be worse than complaining, and the caller is Up rather than
-// the operator, so this is a bug report and not a usage error.
+// seedWorkspace is called only from Up, so a folderless container here is a
+// bug.
 func TestSeedWorkspaceRefusesAFolderlessContainer(t *testing.T) {
 	clusterStubs(t, true)
 

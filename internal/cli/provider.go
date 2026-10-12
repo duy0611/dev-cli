@@ -50,8 +50,7 @@ func runProviderRemove(a *app, name string) error {
 		return err
 	}
 
-	// Checked rather than left to the foreign key, so the message names the
-	// workspaces in the way instead of a constraint.
+	// Checked here so the message names the workspaces in the way.
 	users, err := st.WorkspacesUsing(name)
 	if err != nil {
 		return err
@@ -112,8 +111,8 @@ func runProviderConfigure(a *app, name, kind string, flags k8s.Config) error {
 		return usageError(err)
 	}
 
-	// Checked before the stored provider is, so a misspelt kind is reported as
-	// one rather than as an attempt to change the kind.
+	// Checked first, so a misspelt kind is reported as one and not as a kind
+	// change.
 	pk := model.ProviderKind(kind)
 	if pk != model.KindLocal && pk != model.KindK8s {
 		return usageErrorf("unknown provider kind %q (local, k8s)", kind)
@@ -124,9 +123,8 @@ func runProviderConfigure(a *app, name, kind string, flags k8s.Config) error {
 		return err
 	}
 
-	// Looked up before anything else is done with the input, for two reasons: a
-	// kind change has to be refused before the operator answers eight prompts,
-	// and the stored settings are what the unanswered ones fall back to.
+	// Looked up first: a kind change must be refused before any prompt, and the
+	// stored settings are the fallback for unanswered ones.
 	existing, err := existingProvider(st, name, pk)
 	if err != nil {
 		return err
@@ -141,10 +139,8 @@ func runProviderConfigure(a *app, name, kind string, flags k8s.Config) error {
 			}
 		}
 
-		// Ask for whatever the flags did not supply, but only at a terminal: a
-		// scripted run must fail naming the flag rather than block on a prompt
-		// nobody will see. Either way the stored settings are the fallback, so
-		// both paths change only what was named.
+		// Prompt only at a terminal. A scripted run must fail naming the flag.
+		// Either way, stored settings are the fallback.
 		if isTerminal(os.Stdin) {
 			p := newPrompter(os.Stdin, a.out)
 			if flags, err = promptK8s(context.Background(), p, flags, stored); err != nil {
@@ -154,9 +150,8 @@ func runProviderConfigure(a *app, name, kind string, flags k8s.Config) error {
 			flags = mergeK8s(flags, stored)
 		}
 
-		// Validated and defaulted now rather than at first use: a provider
-		// missing its registry would otherwise look fine until a create spends
-		// a minute building and then pushes nowhere.
+		// Validated now, not at first use, so a missing registry fails before a
+		// create builds and pushes nowhere.
 		cfg, err := k8s.ParseConfig(mustJSON(flags))
 		if err != nil {
 			return usageError(err)
@@ -177,16 +172,9 @@ func runProviderConfigure(a *app, name, kind string, flags k8s.Config) error {
 	return nil
 }
 
-// existingProvider returns the provider being reconfigured, or a zero value
-// when this is a new one.
-//
-// A changed kind is refused rather than applied. Workspaces go on naming the
-// provider and the containers under them stay in the engine they were created
-// in, so a flip leaves records pointing at an engine that has never heard of
-// them — `container list` then answers confidently and wrongly, and `remove`
-// can never reach the real container. `provider remove` already refuses while a
-// workspace names it, which is what makes remove-and-recreate the recoverable
-// route rather than a second copy of that rule here.
+// existingProvider returns the provider being reconfigured, or a zero value for
+// a new one. A changed kind is refused, since containers would stay in the old
+// engine and `remove` could never reach them.
 func existingProvider(st *store.Store, name string, kind model.ProviderKind) (model.Provider, error) {
 	p, err := st.GetProvider(name)
 	switch {
@@ -204,15 +192,12 @@ func existingProvider(st *store.Store, name string, kind model.ProviderKind) (mo
 	return p, nil
 }
 
-// clearMarker is the value that empties an optional setting.
-//
-// An omitted flag now means "keep what is stored", which on its own would leave
-// no way to remove a pull secret: an empty flag and an absent one are the same
-// string, and pressing return at a prompt keeps the default.
+// clearMarker empties an optional setting. An absent flag keeps the stored
+// value, and an empty one is indistinguishable from absent.
 const clearMarker = "-"
 
-// k8sSetting is one configurable setting: where it is being written, what the
-// stored provider has for it, and how to ask for it.
+// k8sSetting is one configurable setting: its target, its stored value and how
+// to ask for it.
 type k8sSetting struct {
 	target   *string
 	stored   string
@@ -221,8 +206,8 @@ type k8sSetting struct {
 	required bool
 }
 
-// k8sSettings pairs every setting with its stored counterpart, so the prompted
-// path and the scripted one walk one list and cannot drift apart.
+// k8sSettings pairs each setting with its stored value, so the prompted and
+// scripted paths walk one list.
 func k8sSettings(cfg *k8s.Config, stored k8s.Config, kubeContext, kubeNamespace string) []k8sSetting {
 	return []k8sSetting{
 		{&cfg.Context, stored.Context, "kubeconfig context", kubeContext, false},
@@ -237,14 +222,12 @@ func k8sSettings(cfg *k8s.Config, stored k8s.Config, kubeContext, kubeNamespace 
 	}
 }
 
-// mergeK8s fills in from the stored provider whatever the flags left out.
-//
-// The scripted half of the same rule the prompts follow, so that changing one
-// setting from a script does not drop the seven the operator did not repeat.
+// mergeK8s fills in what the flags left out from the stored provider, so
+// changing one setting keeps the rest.
 func mergeK8s(flags, stored k8s.Config) k8s.Config {
 	cfg := flags
-	// The kubeconfig defaults are the prompts' business: a scripted run takes
-	// what it was given, and ParseConfig supplies the rest.
+	// Kubeconfig defaults are for the prompts; a scripted run takes what it was
+	// given.
 	for _, s := range k8sSettings(&cfg, stored, "", "") {
 		switch *s.target {
 		case "":
@@ -256,13 +239,8 @@ func mergeK8s(flags, stored k8s.Config) k8s.Config {
 	return cfg
 }
 
-// promptK8s fills in the settings the flags left empty.
-//
-// Only the empty ones: a flag given on the command line is an answer already,
-// and asking again would make the flags pointless. Defaults come from the
-// stored provider first and the kubeconfig second, so re-running configure to
-// change one setting and pressing return through the rest is a no-op rather
-// than a reset to linux/amd64 and 1Gi.
+// promptK8s asks only for settings the flags left empty, with stored values as
+// defaults, so pressing return through is a no-op.
 func promptK8s(ctx context.Context, p *prompter, flags, stored k8s.Config) (k8s.Config, error) {
 	kubeContext, kubeNamespace := k8s.KubeconfigDefaults(ctx)
 	cfg := flags
@@ -279,8 +257,8 @@ func promptK8s(ctx context.Context, p *prompter, flags, stored k8s.Config) (k8s.
 
 		def := firstNonEmpty(s.stored, s.fallback)
 		label := s.label
-		// Advertised only where it does something: a required setting cannot
-		// be cleared, and neither can one that is already empty.
+		// Shown only where it does something: a required or already-empty
+		// setting cannot be cleared.
 		if def != "" && !s.required {
 			label += " (- to clear)"
 		}
@@ -314,13 +292,12 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-// mustJSON renders the flag-populated config so ParseConfig can apply the same
-// defaults and validation it applies to a stored one, rather than this file
-// duplicating them.
+// mustJSON renders the flags so ParseConfig applies the same defaults and
+// validation as to a stored one.
 func mustJSON(cfg k8s.Config) string {
 	b, err := json.Marshal(cfg)
 	if err != nil {
-		// Config is a flat struct of strings; there is no input that fails.
+		// Config is a flat struct of strings, so this cannot fail.
 		panic(err)
 	}
 	return string(b)
@@ -358,8 +335,7 @@ func runProviderList(a *app) error {
 	})
 }
 
-// providerExists reports whether a provider is configured, translating the
-// store's not-found into the command-level message.
+// providerExists translates not-found into the command-level message.
 func providerExists(st *store.Store, name string) error {
 	if _, err := st.GetProvider(name); err != nil {
 		if errors.Is(err, store.ErrNotFound) {

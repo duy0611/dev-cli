@@ -12,16 +12,13 @@ import (
 	"time"
 )
 
-// connect joins a container end and a host end with in-memory pipes, standing
-// in for whatever exec channel a provider would have established.
-//
-// Returns the path of the socket the container end is listening on.
+// connect starts a relay joined to a host end over in-memory pipes and returns
+// the path of its socket.
 func connect(t *testing.T, agentSocket string) string {
 	t.Helper()
 
-	// Short directory: a unix socket path is capped near 100 bytes by the
-	// kernel, and a t.TempDir() under a long test name can exceed it. This is
-	// the same reason the real thing puts its socket under /tmp.
+	// Short dir: unix socket paths are capped near 100 bytes, and t.TempDir can
+	// exceed that.
 	dir, err := os.MkdirTemp("", "rly")
 	if err != nil {
 		t.Fatal(err)
@@ -34,10 +31,9 @@ func connect(t *testing.T, agentSocket string) string {
 	return socket
 }
 
-// serveAt joins a container end listening on socket to a host end, with
-// in-memory pipes standing in for the exec channel. served closes when Serve
-// returns; stop ends the session the way the host really does, by closing the
-// container's input. Safe to call twice, and called at cleanup regardless.
+// serveAt runs Serve on socket joined to Host over in-memory pipes. stop ends
+// the session by closing the container's input, as the host does; it is
+// idempotent.
 func serveAt(t *testing.T, socket, agentSocket string) (served <-chan struct{}, stop func()) {
 	t.Helper()
 	toHost, hostIn := io.Pipe()       // container stdout -> host
@@ -74,8 +70,7 @@ func waitForSocket(t *testing.T, path string) {
 	t.Fatalf("socket %s never appeared", path)
 }
 
-// echoServer stands in for the agent: it returns whatever it is sent, which is
-// enough to prove bytes survive the round trip intact.
+// echoServer stands in for the agent by echoing what it is sent.
 func echoServer(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "echo")
@@ -128,9 +123,8 @@ func TestRelayRoundTrip(t *testing.T) {
 	}
 }
 
-// TestRelayConcurrent is the reason the stream is framed at all: `git fetch
-// --all` opens one agent connection per remote, and unframed they would
-// interleave into a corrupt protocol.
+// TestRelayConcurrent checks that concurrent connections do not cross on the
+// shared stream.
 func TestRelayConcurrent(t *testing.T) {
 	socket := connect(t, echoServer(t))
 
@@ -146,9 +140,8 @@ func TestRelayConcurrent(t *testing.T) {
 			}
 			defer func() { _ = conn.Close() }()
 
-			// Distinct per connection, and long enough to span several reads,
-			// so a crossed channel shows up as wrong content rather than by
-			// luck.
+			// Distinct content, larger than one read, so crossed channels are
+			// detectable.
 			want := strings.Repeat(string(rune('a'+i)), 4096)
 			if _, err := conn.Write([]byte(want)); err != nil {
 				t.Error(err)
@@ -167,8 +160,7 @@ func TestRelayConcurrent(t *testing.T) {
 	wg.Wait()
 }
 
-// TestRelayAgentUnreachable covers the agent socket going away: the client must
-// be told, not left waiting on a connection nothing will answer.
+// A client is closed with EOF when the agent is gone, rather than left to hang.
 func TestRelayAgentUnreachable(t *testing.T) {
 	socket := connect(t, filepath.Join(t.TempDir(), "absent"))
 
@@ -182,14 +174,12 @@ func TestRelayAgentUnreachable(t *testing.T) {
 	if _, err := conn.Write([]byte("anyone there?")); err != nil {
 		t.Fatal(err)
 	}
-	// EOF rather than a hang is the whole point.
 	if _, err := io.ReadAll(conn); err != nil {
 		t.Fatalf("expected a clean EOF, got %v", err)
 	}
 }
 
-// TestRelayWithRealAgent is the test that matters: a real ssh-agent, reached
-// through the relay by the real ssh-add, which speaks the actual protocol.
+// TestRelayWithRealAgent reaches a real ssh-agent through the relay.
 func TestRelayWithRealAgent(t *testing.T) {
 	for _, bin := range []string{"ssh-agent", "ssh-add", "ssh-keygen"} {
 		if _, err := exec.LookPath(bin); err != nil {
@@ -226,7 +216,6 @@ func TestRelayWithRealAgent(t *testing.T) {
 		t.Fatalf("ssh-add: %v\n%s", err, out)
 	}
 
-	// Now reach that agent through the relay instead of directly.
 	socket := connect(t, agentSocket)
 
 	list := exec.Command("ssh-add", "-l")
@@ -240,10 +229,8 @@ func TestRelayWithRealAgent(t *testing.T) {
 	}
 }
 
-// TestServeLeavesAReplacementInPlace is the hazard respawning creates: the old
-// relay can outlive its stream, and when it finally exits it must not take the
-// replacement's socket with it — Go's listener unlinks its path on close by
-// default, whoever that path belongs to by then.
+// The old relay's exit must not remove a replacement's socket: Go unlinks a
+// listener's path on close by default.
 func TestServeLeavesAReplacementInPlace(t *testing.T) {
 	dir, err := os.MkdirTemp("", "rly")
 	if err != nil {
@@ -273,9 +260,7 @@ func TestServeLeavesAReplacementInPlace(t *testing.T) {
 	}
 }
 
-// TestServeStandsDownWhenReplaced covers the other half: a relay whose path
-// now leads elsewhere can never be reached again, and without this it would
-// wait on a dead stream for the life of the container.
+// A relay whose path now leads elsewhere stands down rather than wait forever.
 func TestServeStandsDownWhenReplaced(t *testing.T) {
 	old := ownershipInterval
 	ownershipInterval = 10 * time.Millisecond
@@ -303,8 +288,7 @@ func TestServeStandsDownWhenReplaced(t *testing.T) {
 	}
 }
 
-// TestServeStandsDownWhenSocketDeleted: a relay whose socket was removed is
-// unreachable, and exiting is what lets the host notice and put a new one up.
+// A relay whose socket was removed stands down, so the host can respawn it.
 func TestServeStandsDownWhenSocketDeleted(t *testing.T) {
 	old := ownershipInterval
 	ownershipInterval = 10 * time.Millisecond

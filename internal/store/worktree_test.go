@@ -7,9 +7,8 @@ import (
 	"github.com/duy0611/dev-cli/internal/model"
 )
 
-// seedWorktreeContainer gives a worktree row something to hang off, since the
-// foreign key is what the cascade depends on. Built on the package's own seed,
-// which already creates the provider and workspace.
+// seedWorktreeContainer creates a workspace and a container on a checkout, to
+// show the worktree row does not depend on the container.
 func seedWorktreeContainer(t *testing.T, s *Store) {
 	t.Helper()
 	seed(t, s)
@@ -24,7 +23,7 @@ func seedWorktreeContainer(t *testing.T, s *Store) {
 func testWorktree() model.Worktree {
 	return model.Worktree{
 		WorkspaceName:  "ws",
-		ContainerName:  "feat",
+		Name:           "feat",
 		Repo:           "/src/app/.git",
 		Branch:         "feat",
 		Path:           "/wt/feat",
@@ -62,10 +61,9 @@ func TestGetWorktreeMissing(t *testing.T) {
 	}
 }
 
-// The cascade is what makes `container remove` safe to leave alone: it can
-// never leave a row describing a container that is gone. It depends on
-// PRAGMA foreign_keys = ON, which is invariant 6.
-func TestDeletingTheContainerTakesTheWorktree(t *testing.T) {
+// A checkout outlives any container on it: removing the container must leave
+// the record, or a checkout on disk would have nothing that names it.
+func TestDeletingTheContainerKeepsTheWorktree(t *testing.T) {
 	s := openTest(t)
 	seedWorktreeContainer(t, s)
 	if err := s.CreateWorktree(testWorktree()); err != nil {
@@ -75,12 +73,22 @@ func TestDeletingTheContainerTakesTheWorktree(t *testing.T) {
 	if err := s.DeleteContainer("ws", "feat"); err != nil {
 		t.Fatalf("DeleteContainer: %v", err)
 	}
-	if _, err := s.GetWorktree("ws", "feat"); !errors.Is(err, ErrNotFound) {
-		t.Errorf("worktree survived the container: %v", err)
+	if _, err := s.GetWorktree("ws", "feat"); err != nil {
+		t.Errorf("the worktree went with the container: %v", err)
 	}
 }
 
-// And so does deleting the workspace, two cascades deep.
+// A worktree needs no container at all.
+func TestWorktreeWithoutAContainer(t *testing.T) {
+	s := openTest(t)
+	seed(t, s)
+	if err := s.CreateWorktree(testWorktree()); err != nil {
+		t.Fatalf("CreateWorktree with no container: %v", err)
+	}
+}
+
+// Deleting the workspace still removes the worktree, via the cascade; this
+// needs PRAGMA foreign_keys = ON.
 func TestDeletingTheWorkspaceTakesTheWorktree(t *testing.T) {
 	s := openTest(t)
 	seedWorktreeContainer(t, s)

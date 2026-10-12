@@ -61,11 +61,9 @@ func runAudit(a *app, f auditFlags) error {
 	if err != nil {
 		return err
 	}
-	// Names are not resolved against the database. A container that has been
-	// removed still has history, and the log is the one place it can be read —
-	// so an unknown name matches nothing rather than exiting 3. Nor does
-	// --workspace default to the active workspace: this is the view across
-	// everything.
+	// Names are not checked against the database: a removed container still has
+	// history, and the log is the only place to read it. --workspace is not
+	// defaulted: this is the view across everything.
 	entries, err := audit.Read(filepath.Join(filepath.Dir(path), audit.FileName), filter,
 		func(line int, err error) { warnf(a, "audit log line %d skipped: %v", line, err) })
 	if err != nil {
@@ -112,8 +110,7 @@ func where(e audit.Entry) string {
 	}
 }
 
-// summarise is the one human line for a record. Per event, because what is
-// worth reading differs: an exit code for a command, an identity for a token.
+// summarise is the one human line for a record, chosen per event.
 func summarise(e audit.Entry) string {
 	str := func(k string) string { s, _ := e.Fields[k].(string); return s }
 	num := func(k string) (int, bool) { n, ok := e.Fields[k].(float64); return int(n), ok }
@@ -174,8 +171,7 @@ func elapsed(start, end string) string {
 }
 
 // dropSummary is the tail of a relay line: nothing for a relay that never
-// dropped, how often it came back, or — the fact the session's duration hides —
-// when it went down for good.
+// dropped, otherwise how often it dropped and when it went down for good.
 func dropSummary(v any) string {
 	drops, _ := v.([]any)
 	if len(drops) == 0 {

@@ -12,25 +12,18 @@ import (
 	"github.com/duy0611/dev-cli/internal/xpath"
 )
 
-// configCheck is a project's configuration as the devcontainer CLI merges it,
-// read once per command and asked two questions: does it reach the host
-// (escape), and is it the configuration the container was built from (drift).
-// One read for both, because each read is a CLI round trip that may fetch
-// feature metadata from a registry.
+// configCheck is a project's configuration as the devcontainer CLI merges it.
+// It is read once per command, since each read is a CLI round trip.
 type configCheck struct {
-	c       model.Container
-	merged  []byte
-	compose []string
-	// treeTargets are the git guard's working tree mounts, left out of the
-	// digest: they follow the operator's host git config, not the project's.
+	c           model.Container
+	merged      []byte
+	compose     []string
 	treeTargets []string
 }
 
 // readConfig reads c's merged configuration, or returns nil when there is
-// nothing to check: a generated configuration is dev's own, rendered from a
-// catalog with nothing privileged in it; and a provider that is not a
-// ConfigReader builds its own spec — the Kubernetes provider ignores a
-// document's privileged mode, mounts and runArgs entirely.
+// nothing to check: generated configurations are dev's own, and the Kubernetes
+// provider builds its own spec.
 func readConfig(ctx context.Context, p provider.Provider, c model.Container, plan gitGuardPlan) (*configCheck, error) {
 	if c.GeneratedConfig != "" {
 		return nil, nil
@@ -46,12 +39,8 @@ func readConfig(ctx context.Context, p provider.Provider, c model.Container, pla
 	return &configCheck{c: c, merged: merged, compose: compose, treeTargets: plan.treeTargets()}, nil
 }
 
-// escape refuses a configuration that asks its engine for the host, unless the
-// operator allowed it with --allow-privileged.
-//
-// Called at create before the row exists, at start, and at rebuild before the
-// old container is touched — so a refusal costs nothing and leaves nothing
-// behind.
+// escape refuses a configuration that reaches the host unless
+// --allow-privileged was given.
 func (a *app) escape(cc *configCheck) error {
 	if cc == nil || cc.c.AllowPrivileged {
 		return nil
@@ -67,8 +56,8 @@ func (a *app) escape(cc *configCheck) error {
 	for _, file := range cc.compose {
 		content, err := os.ReadFile(file)
 		if err != nil {
-			// Refused rather than skipped: a compose file the check cannot read
-			// is a configuration it has not checked.
+			// Refused rather than skipped: a compose file that cannot be read
+			// was not checked.
 			return fmt.Errorf("reading %s to check it: %w", file, err)
 		}
 		more, err := guard.Compose(xpath.Shorten(file), content, home)
@@ -94,7 +83,7 @@ func (a *app) escape(cc *configCheck) error {
 }
 
 // digest is the configuration's digest, or the zero Digest when there is
-// nothing to digest (see readConfig).
+// nothing to digest.
 func (cc *configCheck) digest() (guard.Digest, error) {
 	if cc == nil {
 		return guard.Digest{}, nil
@@ -106,15 +95,9 @@ func (cc *configCheck) digest() (guard.Digest, error) {
 	return guard.DigestOf(merged, cc.c.ConfigPath, cc.compose)
 }
 
-// guardNewContainer runs the create-time guards on a container whose row is
-// about to be written, and fills in the digest the row records. worktreeRepo
-// is git's common directory for a worktree container, so the configuration
-// checked carries the same mounts the container will start with; omitted for
-// any other.
-//
-// The container is materialised here exactly as start will materialise it —
-// generated document to a file, or the project's document merged with dev's
-// own mounts — because what is checked has to be what runs.
+// guardNewContainer runs the create-time guards and fills in the digest the row
+// records. The configuration is materialised exactly as start will materialise
+// it, so what is checked is what runs.
 func (a *app) guardNewContainer(ctx context.Context, workspace string, c *model.Container, worktreeRepo ...string) error {
 	if c.GeneratedConfig != "" {
 		return nil
@@ -135,9 +118,8 @@ func (a *app) guardNewContainer(ctx context.Context, workspace string, c *model.
 	if len(worktreeRepo) > 0 {
 		probe.WorktreeRepo = worktreeRepo[0]
 	}
-	// With the git guard's mounts, so the digest recorded here matches what
-	// the first start materialises. Not seeded: start does that, once the row
-	// exists and the container is about to be created.
+	// With the git guard's mounts, so the digest matches what the first start
+	// materialises.
 	plan, err := a.planGitGuard(ctx, probe, probe.WorktreeRepo, false, overridesConfig(p))
 	if err != nil {
 		return a.recordRefusal(*c, err)
@@ -166,13 +148,8 @@ func (a *app) guardNewContainer(ctx context.Context, workspace string, c *model.
 	return nil
 }
 
-// checkDrift refuses a rebuild whose configuration is not the one the
-// container was last built from, unless accept says to take it — and returns
-// the digest to record once the rebuild has happened.
-//
-// A row with no digest yet (created before this check, or with --no-start and
-// never started) records one without refusing: a container is guarded from its
-// first digest on, never retroactively.
+// checkDrift refuses a rebuild whose configuration differs from the one last
+// built, unless accept is set. Returns the digest to record afterwards.
 func (a *app) checkDrift(cc *configCheck, accept bool) (guard.Digest, error) {
 	live, err := cc.digest()
 	if err != nil || cc == nil {
@@ -205,8 +182,8 @@ func (a *app) checkDrift(cc *configCheck, accept bool) (guard.Digest, error) {
 			"review it, then pass --accept-config to rebuild with it", cc.c.Name, what)
 }
 
-// recordFirstDigest stores the digest of a configuration a container with none
-// recorded has just started from.
+// recordFirstDigest stores the digest of the configuration a container first
+// starts from.
 func (a *app) recordFirstDigest(cc *configCheck) error {
 	d, err := cc.digest()
 	if err != nil {
@@ -219,8 +196,8 @@ func (a *app) recordFirstDigest(cc *configCheck) error {
 	return st.SetConfigDigest(cc.c.WorkspaceName, cc.c.Name, d.Sum, d.Record())
 }
 
-// operatorHome is the home directory as the engine would see it: resolved, so
-// a mount naming it through a symlink is still recognised (invariant 2).
+// operatorHome is the home directory as the engine sees it, resolved through
+// symlinks.
 func operatorHome() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -232,10 +209,8 @@ func operatorHome() (string, error) {
 	return home, nil
 }
 
-// hostAccessOf is what container list shows under HOST: whether the container
-// may ask its engine for the host. "allowed" for a row created with
-// --allow-privileged — and for every row created before the guard existed,
-// which the migration left as it was — "refused" otherwise.
+// hostAccessOf is the HOST column: whether the container may ask its engine for
+// the host.
 func hostAccessOf(c model.Container) string {
 	if c.AllowPrivileged {
 		return "allowed"

@@ -10,13 +10,12 @@ import (
 	"github.com/tailscale/hujson"
 )
 
-// opencodeDir is opencode's configuration directory: on the state volume when
-// the container persists state, its own default otherwise.
+// opencodeDir is opencode's configuration directory.
 const opencodeDir = "${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"
 
-// configureOpencode merges into opencode.json rather than running a CLI:
-// opencode has none for plugins or MCP. Listing a package under plugin is the
-// whole job, since opencode installs what that list names when it starts.
+// configureOpencode merges into opencode.json, since opencode has no CLI for
+// plugins or MCP. Listing a package under plugin is enough; opencode installs
+// it at start.
 func configureOpencode(v agentcfg.View) ([]Step, error) {
 	var steps []Step
 	if len(v.Plugins) > 0 || len(v.MCP) > 0 {
@@ -30,16 +29,13 @@ func configureOpencode(v agentcfg.View) ([]Step, error) {
 }
 
 // mergeOpencode adds declared plugins and sets declared servers by name,
-// leaving every other plugin, server and key where it was — the same per-entry
-// promise `claude mcp add-json` makes. Unowned keys are held as raw JSON so
-// they round-trip without dev having to understand them.
+// leaving everything else in place. Unowned keys are kept as raw JSON, so they
+// round-trip.
 func mergeOpencode(current []byte, plugins []string, servers map[string]agentcfg.MCPServer) ([]byte, error) {
 	doc := map[string]json.RawMessage{}
 	if len(bytes.TrimSpace(current)) > 0 {
-		// opencode reads JSONC, so the file may carry comments and trailing
-		// commas. Standardize strips them; they do not survive the rewrite,
-		// which is the price of a program merging a file whose formatting it
-		// does not own. Cloned because Standardize works in place.
+		// opencode reads JSONC; comments and trailing commas do not survive
+		// the rewrite. Cloned because Standardize works in place.
 		std, err := hujson.Standardize(bytes.Clone(current))
 		if err != nil {
 			return nil, fmt.Errorf("opencode.json does not parse: %w", err)
@@ -47,8 +43,7 @@ func mergeOpencode(current []byte, plugins []string, servers map[string]agentcfg
 		if err := json.Unmarshal(std, &doc); err != nil {
 			return nil, fmt.Errorf("opencode.json is not an object: %w", err)
 		}
-		// null decodes without error and leaves the map nil; it means the
-		// same as an empty file.
+		// null leaves the map nil, which would panic on write.
 		if doc == nil {
 			doc = map[string]json.RawMessage{}
 		}
@@ -98,8 +93,7 @@ func mergeOpencode(current []byte, plugins []string, servers map[string]agentcfg
 		doc["mcp"] = raw
 	}
 
-	// A map marshals with sorted keys, which is what makes a second apply
-	// write the same bytes as the first.
+	// Sorted keys make a second apply write identical bytes.
 	out, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return nil, err
@@ -107,9 +101,9 @@ func mergeOpencode(current []byte, plugins []string, servers map[string]agentcfg
 	return append(out, '\n'), nil
 }
 
-// opencodeMCP renders one server in opencode's shape, with ${NAME} rewritten
-// to its {env:NAME}. The command itself is not rewritten; the spec recognises
-// references only in env, headers, args and url.
+// opencodeMCP renders one server in opencode's shape, rewriting ${NAME} to
+// {env:NAME}. The command is not rewritten: references are recognised only in
+// env, headers, args and url.
 func opencodeMCP(m agentcfg.MCPServer) any {
 	ref := func(s string) string {
 		return agentcfg.RewriteRefs(s, func(n string) string { return "{env:" + n + "}" })

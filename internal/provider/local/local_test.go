@@ -16,9 +16,8 @@ import (
 // callSeparator marks the end of one recorded call in a stub's log.
 const callSeparator = "--- call ---"
 
-// fakeBin writes an executable onto a temp PATH that records its own argv, one
-// argument per line, and prints stdout. Driving the real binaries is what the
-// smoke test is for; here the question is only what got called.
+// fakeBin is a stub executable on a temp PATH that records its argv and prints
+// stdout.
 type fakeBin struct {
 	dir string
 }
@@ -34,8 +33,7 @@ func newFakePath(t *testing.T) *fakeBin {
 func (f *fakeBin) install(t *testing.T, name, stdout string, code int) {
 	t.Helper()
 	log := filepath.Join(f.dir, name+".argv")
-	// Appended, with a marker between calls: one dev command can run the same
-	// binary more than once, and truncating would hide all but the last.
+	// Appended, not truncated: one command can run the same binary twice.
 	script := "#!/bin/sh\n" +
 		"for a in \"$@\"; do printf '%s\\n' \"$a\" >> " + shellQuote(log) + "; done\n" +
 		"printf '%s\\n' " + shellQuote(callSeparator) + " >> " + shellQuote(log) + "\n"
@@ -50,9 +48,7 @@ func (f *fakeBin) install(t *testing.T, name, stdout string, code int) {
 	}
 }
 
-// argvAll returns every call the named stub recorded, in order, one slice per
-// call. Up runs a second command after the CLI returns, so the last call is not
-// always the one under test.
+// argvAll returns every call the named stub recorded, in order.
 func (f *fakeBin) argvAll(t *testing.T, name string) [][]string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(f.dir, name+".argv"))
@@ -75,9 +71,7 @@ func (f *fakeBin) argvAll(t *testing.T, name string) [][]string {
 	return out
 }
 
-// argv returns the arguments of the stub's first call, which is the one a test
-// set out to make. Up runs a chown afterwards for a state-persisting container,
-// and that must not displace what is being asserted on.
+// argv returns the arguments of the stub's first call.
 func (f *fakeBin) argv(t *testing.T, name string) []string {
 	t.Helper()
 	calls := f.argvAll(t, name)
@@ -100,8 +94,7 @@ func testContainer() model.Container {
 }
 
 // calledWith reports whether any of the stub's calls holds want as a
-// consecutive run. For a command that runs a binary more than once — Remove
-// asks docker for the container id before removing any volume.
+// consecutive run.
 func (f *fakeBin) calledWith(t *testing.T, name string, want []string) bool {
 	t.Helper()
 	for _, argv := range f.argvAll(t, name) {
@@ -156,11 +149,8 @@ func TestUpPassesWorkspaceFolderAndIDLabels(t *testing.T) {
 	}
 }
 
-// A folderless container still hands the CLI a workspace folder — the
-// materialised temporary directory holding its generated config — and the
-// same id-labels as a folder container. The provider does not need to know
-// there is no project behind it; only the generated document's own
-// workspaceMount differs, and that is dcgen's concern, not Up's.
+// A folderless container passes the same workspace-folder and id-labels as a
+// folder one.
 func TestUpPassesWorkspaceFolderAndIDLabelsForAFolderlessContainer(t *testing.T) {
 	f := newFakePath(t)
 	f.install(t, devcontainerBin, "", 0)
@@ -183,9 +173,7 @@ func TestUpPassesWorkspaceFolderAndIDLabelsForAFolderlessContainer(t *testing.T)
 	}
 }
 
-// The invariant most likely to break silently: a call that spells the labels
-// differently looks up a container that does not exist, and the CLI creates a
-// second one rather than failing.
+// Up and exec must pass the same id-labels (invariant 1).
 func TestUpAndExecAgreeOnIDLabels(t *testing.T) {
 	f := newFakePath(t)
 	f.install(t, devcontainerBin, "", 0)
@@ -272,8 +260,7 @@ func TestExecPassesEnvAndCommand(t *testing.T) {
 	if !contains(argv, []string{"--remote-env", "GREETING=hello"}) {
 		t.Errorf("argv %v is missing the remote env", argv)
 	}
-	// The command has to come last, after every flag, or the CLI reads it as
-	// an argument to whichever flag precedes it.
+	// The command must come last, or the CLI reads it as a flag's argument.
 	if got := argv[len(argv)-2:]; got[0] != "printenv" || got[1] != "GREETING" {
 		t.Errorf("argv ends with %v, want the command last", got)
 	}
@@ -317,18 +304,18 @@ func TestStatusFiltersOnBothLabels(t *testing.T) {
 			t.Errorf("argv %v is missing %v", argv, want)
 		}
 	}
-	// -a, or a stopped container reads as absent and `start` creates a second.
+	// Without -a a stopped container reads as absent, and up creates a second.
 	if !contains(argv, []string{"-a"}) {
 		t.Errorf("argv %v does not include stopped containers", argv)
 	}
 }
 
-// Mounts reads docker's own report: RW false is read-only, and a container
-// the engine does not have is not an error.
+// TestMounts checks RW is mapped to ReadOnly, and that an absent container is
+// not an error.
 func TestMounts(t *testing.T) {
 	f := newFakePath(t)
-	// Every docker call prints the same thing, so ps sees an id and inspect
-	// the mounts; first() takes the first line for the id, the JSON is one.
+	// Every docker call gets this output: first() takes the id, and the JSON is
+	// one line.
 	f.install(t, dockerBin, `[{"Destination":"/workspaces/r","RW":true},{"Destination":"/workspaces/r/.githooks","RW":false}]`+"\n", 0)
 	got, exists, err := (&Provider{}).Mounts(context.Background(), testContainer())
 	if err != nil || !exists {
@@ -366,7 +353,7 @@ func TestRemoveForcesWhenPresent(t *testing.T) {
 	if err := (&Provider{}).Remove(context.Background(), testContainer()); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
-	// docker is asked for the container id first, so the removal is a later call.
+	// The id lookup comes first, so the removal is a later call.
 	if !f.calledWith(t, dockerBin, []string{"rm", "-f", "abc123"}) {
 		t.Errorf("docker calls %v did not force-remove the container", f.argvAll(t, dockerBin))
 	}
@@ -385,10 +372,7 @@ func TestMissingBinaryIsReportedByName(t *testing.T) {
 	}
 }
 
-// The config path is passed explicitly rather than left to the CLI's own
-// lookup, because a generated configuration lives in a temporary directory the
-// CLI would never find, and because being explicit costs nothing for a
-// project-owned one.
+// TestUpPassesTheConfigPath checks --config is passed explicitly.
 func TestUpPassesTheConfigPath(t *testing.T) {
 	f := newFakePath(t)
 	f.install(t, devcontainerBin, "", 0)
@@ -431,8 +415,7 @@ func folderlessContainer() model.Container {
 	}
 }
 
-// docker rm does not touch a named volume: it is external to the container, so
-// without this it survives every remove and accumulates until a disk fills.
+// docker rm does not remove named volumes, so Remove must delete them itself.
 func TestRemoveDeletesTheVolumeOfAFolderlessContainer(t *testing.T) {
 	f := newFakePath(t)
 	f.install(t, dockerBin, "abc123\n", 0)
@@ -445,8 +428,8 @@ func TestRemoveDeletesTheVolumeOfAFolderlessContainer(t *testing.T) {
 	}
 }
 
-// A folder container's work is on the host and there is no volume to remove.
-// Asking docker to remove one would fail on every remove.
+// TestRemoveDoesNotDeleteAVolumeForAFolderContainer checks no volume is touched
+// for a folder container.
 func TestRemoveDoesNotDeleteAVolumeForAFolderContainer(t *testing.T) {
 	f := newFakePath(t)
 	f.install(t, dockerBin, "abc123\n", 0)
@@ -475,9 +458,7 @@ func overrideContainer() model.Container {
 	return c
 }
 
-// The merged document reaches the CLI, and --config still names the project's
-// own file: both are accepted together, and --config is what keeps a relative
-// "dockerfile" anchored to the project rather than to the temporary directory.
+// The merged document and the project's --config are both passed (see Up).
 func TestUpPassesTheOverrideConfig(t *testing.T) {
 	f := newFakePath(t)
 	f.install(t, devcontainerBin, "", 0)
@@ -496,11 +477,7 @@ func TestUpPassesTheOverrideConfig(t *testing.T) {
 	}
 }
 
-// up and exec must carry the *same* merged document. This is the same shape of
-// mistake as the id labels: two commands that disagree reach two different
-// containers, or one reaches a container with no state volume, and nothing
-// reports an error. --override-config exists on both, unlike --mount, which is
-// what lets the two paths finally agree.
+// Up and exec must pass the same merged document.
 func TestUpAndExecAgreeOnTheOverrideConfig(t *testing.T) {
 	f := newFakePath(t)
 	f.install(t, devcontainerBin, "", 0)
@@ -522,9 +499,7 @@ func TestUpAndExecAgreeOnTheOverrideConfig(t *testing.T) {
 	}
 }
 
-// --mount is gone. It existed on up and not on exec, which is the asymmetry the
-// override removes; leaving it would also make docker refuse the run with
-// "duplicate mount destination" now that the merged document names the volume.
+// --mount would duplicate the volume the merged document already names.
 func TestUpNeverPassesMount(t *testing.T) {
 	f := newFakePath(t)
 	f.install(t, devcontainerBin, "", 0)
@@ -537,8 +512,7 @@ func TestUpNeverPassesMount(t *testing.T) {
 	}
 }
 
-// A generated document already names the volume in its own mounts, so
-// materialise builds no override for it and neither flag appears.
+// A generated document already names the volume, so no override is passed.
 func TestUpPassesNoOverrideForAGeneratedContainer(t *testing.T) {
 	f := newFakePath(t)
 	f.install(t, devcontainerBin, "", 0)
@@ -557,7 +531,8 @@ func TestUpPassesNoOverrideForAGeneratedContainer(t *testing.T) {
 	}
 }
 
-// Nothing to merge, nothing to pass.
+// TestUpPassesNoOverrideWhenStateIsOff checks no override is passed without
+// state.
 func TestUpPassesNoOverrideWhenStateIsOff(t *testing.T) {
 	f := newFakePath(t)
 	f.install(t, devcontainerBin, "", 0)
@@ -578,7 +553,7 @@ func TestExecNeverPassesMount(t *testing.T) {
 	}
 }
 
-// The volume outlives the container, so nothing else would ever remove it.
+// The state volume outlives the container, so Remove must delete it.
 func TestRemoveDeletesTheStateVolume(t *testing.T) {
 	f := newFakePath(t)
 	f.install(t, dockerBin, "abc123\n", 0)
@@ -593,10 +568,8 @@ func TestRemoveDeletesTheStateVolume(t *testing.T) {
 	}
 }
 
-// A project-owned container has no postCreateCommand dev may add to, so up
-// claims the directory itself. Guarded by a writability test: it runs on every
-// up, and a recursive chown over an agent's accumulated history is not worth
-// repeating once the volume is already the remote user's.
+// A project-owned container's state dir is claimed by up, with a follow-up
+// exec.
 func TestUpClaimsTheStateDirForAProjectOwnedContainer(t *testing.T) {
 	f := newFakePath(t)
 	f.install(t, devcontainerBin, "", 0)
@@ -617,8 +590,8 @@ func TestUpClaimsTheStateDirForAProjectOwnedContainer(t *testing.T) {
 	}
 }
 
-// A generated configuration chowns the directory in its own postCreateCommand,
-// so doing it here as well would be a second answer to the same question.
+// A generated container's state dir is chowned by its postCreateCommand, not
+// here.
 func TestUpDoesNotClaimTheStateDirForAGeneratedContainer(t *testing.T) {
 	f := newFakePath(t)
 	f.install(t, devcontainerBin, "", 0)
@@ -633,11 +606,116 @@ func TestUpDoesNotClaimTheStateDirForAGeneratedContainer(t *testing.T) {
 	}
 }
 
-// The overlay is local-only. k8s builds its own pod spec and ignores a
-// document's mounts, so it must not be handed a merged document — and a
-// project file that does not parse must not block a k8s command.
+// TestLocalProviderOverridesConfig checks the local provider implements
+// ConfigOverrider.
 func TestLocalProviderOverridesConfig(t *testing.T) {
 	if _, ok := any(&Provider{}).(provider.ConfigOverrider); !ok {
 		t.Error("local provider does not implement provider.ConfigOverrider")
+	}
+}
+
+// isolatedContainer is a container whose folder is copied into a volume.
+func isolatedContainer(t *testing.T) model.Container {
+	t.Helper()
+	c := testContainer()
+	c.Mode = model.ModeIsolated
+	c.Source = t.TempDir()
+	if err := os.WriteFile(filepath.Join(c.Source, "f.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// On first create, up skips the lifecycle hooks, seeds the folder, then runs
+// them.
+func TestUpSeedsAnIsolatedContainerBeforeItsLifecycleHooks(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, devcontainerBin, "", 0)
+	// No container yet, so this up creates it.
+	f.install(t, dockerBin, "", 0)
+
+	c := isolatedContainer(t)
+	if err := (&Provider{}).Up(context.Background(), c, nil); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	calls := f.argvAll(t, devcontainerBin)
+	var verbs []string
+	for _, argv := range calls {
+		verbs = append(verbs, argv[0])
+	}
+	want := []string{"up", "exec", "exec", "exec", "run-user-commands"}
+	if strings.Join(verbs, " ") != strings.Join(want, " ") {
+		t.Fatalf("devcontainer calls = %v, want %v", verbs, want)
+	}
+	if !contains(calls[0], []string{"--skip-post-create"}) {
+		t.Errorf("up did not skip the lifecycle hooks: %v", calls[0])
+	}
+	if !contains(calls[2], []string{"tar", "-x", "-p"}) {
+		t.Errorf("the third call does not unpack the folder: %v", calls[2])
+	}
+	if !contains(calls[3], []string{"sh", "-c"}) {
+		t.Errorf("the fourth call does not run the seed script: %v", calls[3])
+	}
+	for _, argv := range calls {
+		for _, label := range [][]string{{"--id-label", "dev.workspace=ws"}, {"--id-label", "dev.container=demo"}} {
+			if !contains(argv, label) {
+				t.Errorf("%s is missing %v: invariant 1", argv[0], label)
+			}
+		}
+	}
+}
+
+// An existing isolated container is never seeded again.
+func TestUpDoesNotReseedAnExistingIsolatedContainer(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, devcontainerBin, "", 0)
+	f.install(t, dockerBin, "abc123\n", 0)
+
+	if err := (&Provider{}).Up(context.Background(), isolatedContainer(t), nil); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	for _, argv := range f.argvAll(t, devcontainerBin) {
+		if argv[0] != "up" || contains(argv, []string{"--skip-post-create"}) {
+			t.Errorf("an existing isolated container was seeded again: %v", argv)
+		}
+	}
+}
+
+// The isolated workspace volume is removed with its container.
+func TestRemoveDeletesTheVolumeOfAnIsolatedContainer(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, dockerBin, "abc123\n", 0)
+
+	if err := (&Provider{}).Remove(context.Background(), isolatedContainer(t)); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if !f.calledWith(t, dockerBin, []string{"volume", "rm", "--force", "dev-ws-demo"}) {
+		t.Errorf("Remove did not delete the volume; docker calls were %v", f.argvAll(t, dockerBin))
+	}
+}
+
+// The workspace is claimed for the remote user before anything is unpacked into
+// it.
+func TestSeedClaimsTheWorkspaceBeforeUnpacking(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, devcontainerBin, "", 0)
+	f.install(t, dockerBin, "", 0)
+
+	if err := (&Provider{}).Up(context.Background(), isolatedContainer(t), nil); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	calls := f.argvAll(t, devcontainerBin)
+	claim, unpack := -1, -1
+	for i, argv := range calls {
+		joined := strings.Join(argv, " ")
+		if claim < 0 && strings.Contains(joined, "chown") && strings.Contains(joined, "/workspaces/demo") {
+			claim = i
+		}
+		if unpack < 0 && contains(argv, []string{"tar", "-x", "-p"}) {
+			unpack = i
+		}
+	}
+	if claim < 0 || unpack < 0 || claim > unpack {
+		t.Errorf("the workspace was not claimed before the unpack (claim at %d, unpack at %d): %v", claim, unpack, calls)
 	}
 }

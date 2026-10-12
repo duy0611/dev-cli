@@ -11,8 +11,8 @@ import (
 	"github.com/duy0611/dev-cli/internal/store"
 )
 
-// stubMergedConfig puts a devcontainer on PATH whose read-configuration
-// reports merged as the merged configuration, and which logs every call.
+// stubMergedConfig is a devcontainer whose read-configuration reports merged,
+// and logs each call.
 func stubMergedConfig(t *testing.T, merged string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -28,8 +28,6 @@ func stubMergedConfig(t *testing.T, merged string) string {
 	return log
 }
 
-// A configuration that reaches the host is refused at create, exit 2, and
-// leaves no row behind — the refusal costs nothing.
 func TestCreateRefusesAConfigurationThatReachesTheHost(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -70,8 +68,6 @@ func TestAllowPrivilegedCreatesItAnyway(t *testing.T) {
 	if !c.AllowPrivileged {
 		t.Error("AllowPrivileged not recorded")
 	}
-	// Allowed past the escape check, but still digested: the drift check
-	// applies whatever the container is allowed to ask for.
 	if c.ConfigDigest == "" {
 		t.Error("an allowed container recorded no digest")
 	}
@@ -80,8 +76,6 @@ func TestAllowPrivilegedCreatesItAnyway(t *testing.T) {
 	}
 }
 
-// A configuration that has come to ask for the host since create is refused at
-// rebuild, before the old container is touched.
 func TestRebuildRefusesAConfigurationThatNowReachesTheHost(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -91,8 +85,6 @@ func TestRebuildRefusesAConfigurationThatNowReachesTheHost(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(dir, "merged.json"), `{"mergedConfiguration":{"runArgs":["--pid=host"]}}`)
 
-	// --accept-config, because the change is drift too and that check runs
-	// first; accepting a configuration is not allowing it the host.
 	err := runIn(t, a, "container", "rebuild", "api", "--accept-config")
 	if exitCodeOf(err) != exitUsage || !strings.Contains(err.Error(), "--pid=host") {
 		t.Fatalf("rebuild: exit %d, %v", exitCodeOf(err), err)
@@ -102,8 +94,6 @@ func TestRebuildRefusesAConfigurationThatNowReachesTheHost(t *testing.T) {
 	}
 }
 
-// --no-start records the container with no engine involved; the first start
-// is where the check happens instead.
 func TestNoStartDefersTheCheckToStart(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -119,8 +109,6 @@ func TestNoStartDefersTheCheckToStart(t *testing.T) {
 	}
 }
 
-// A generated configuration is dev's own and holds nothing privileged, so the
-// CLI is not asked about it.
 func TestGeneratedConfigIsNotChecked(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -134,7 +122,6 @@ func TestGeneratedConfigIsNotChecked(t *testing.T) {
 	}
 }
 
-// A compose project's privileges live in the compose file.
 func TestCreateRefusesAPrivilegedComposeService(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -149,7 +136,6 @@ func TestCreateRefusesAPrivilegedComposeService(t *testing.T) {
 	}
 }
 
-// create records the digest of the configuration it checked.
 func TestCreateRecordsTheConfigDigest(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -162,8 +148,6 @@ func TestCreateRecordsTheConfigDigest(t *testing.T) {
 	}
 }
 
-// A configuration that changed since the container was built is refused at
-// rebuild, naming what changed, while the old container still exists.
 func TestRebuildRefusesAChangedConfiguration(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -216,7 +200,6 @@ func TestAcceptConfigRebuildsAndRecordsTheNewDigest(t *testing.T) {
 	if after == before || after == "" {
 		t.Errorf("digest not updated: %q -> %q", before, after)
 	}
-	// The next rebuild of the same configuration needs no flag.
 	if err := runIn(t, a, "container", "rebuild", "api"); err != nil {
 		t.Errorf("an unchanged rebuild after accepting was refused: %v", err)
 	}
@@ -226,8 +209,6 @@ func TestAcceptConfigRebuildsAndRecordsTheNewDigest(t *testing.T) {
 	}
 }
 
-// A row with no digest — here a --no-start container — records one at its
-// first start, and is guarded from then on.
 func TestFirstStartRecordsTheDigestOfARowWithNone(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -247,8 +228,6 @@ func TestFirstStartRecordsTheDigestOfARowWithNone(t *testing.T) {
 	}
 }
 
-// A row with no digest at rebuild records one without refusing: guarded from
-// its first digest on, never retroactively.
 func TestRebuildOfARowWithNoDigestRecordsOne(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)

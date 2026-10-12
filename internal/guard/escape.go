@@ -17,31 +17,18 @@ import (
 type Finding struct {
 	// What it asks for, as the operator would search for it.
 	What string
-	// From is the field of the merged configuration it was found in. A
-	// feature's privileged has already been OR'd into "privileged" by the CLI,
-	// so that field covers the project and every feature at once.
+	// From is the merged field it was found in. The CLI has already OR'd a
+	// feature's privileged into "privileged".
 	From string
 }
 
 func (f Finding) String() string { return f.What + " (" + f.From + ")" }
 
-// Escape returns everything in a merged configuration that gives the container
-// a way to the host: privileged mode, the engine's socket, a host namespace, a
-// device, or a bind mount of the host's root or the operator's home.
-//
-// Merged, because an override document cannot remove what a feature adds —
-// docker-in-docker declares privileged itself — so the only place to see the
-// whole of what will run is after the CLI has combined it.
-//
-// Not here, deliberately: capAdd, securityOpt and init. They widen what root
-// can do inside the container, not the way out of it, and the Go feature in
-// dev's own catalog asks for SYS_PTRACE and seccomp=unconfined so a debugger
-// works.
-//
-// home is the operator's home directory, resolved, so a mount of it or of any
-// directory above it is caught: on Docker Desktop and OrbStack /Users is shared
-// into the engine's VM, and such a mount reaches ~/.ssh and every credential
-// on the machine.
+// Escape returns every route in a merged configuration that reaches the host:
+// privileged mode, the engine socket, a host namespace, a device, or a bind
+// mount of the host root or the operator's home. home is resolved, so a mount
+// of any directory above it is caught; on macOS /Users is shared into the
+// engine's VM.
 func Escape(merged []byte, home string) ([]Finding, error) {
 	var doc struct {
 		Privileged bool              `json:"privileged"`
@@ -71,9 +58,7 @@ func Escape(merged []byte, home string) ([]Finding, error) {
 	return out.list, nil
 }
 
-// findings keeps the first of each identical finding, in order: the same route
-// asked for twice in one place needs changing once, while the same route in two
-// places is two things for the operator to change.
+// findings deduplicates identical findings, keeping their order.
 type findings struct {
 	list []Finding
 	seen map[Finding]bool
@@ -95,8 +80,7 @@ type mount struct {
 	kind, source, target string
 }
 
-// parseMount reads either spelling the CLI accepts: the string
-// "source=x,target=/y,type=bind" or the object {"source": "x", ...}.
+// parseMount reads either the string or the object form of a mounts entry.
 func parseMount(raw json.RawMessage) (mount, error) {
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
@@ -113,9 +97,8 @@ func parseMount(raw json.RawMessage) (mount, error) {
 	return mount{kind: obj.Type, source: obj.Source, target: obj.Target}, nil
 }
 
-// parseMountString reads docker's --mount syntax, which is also
-// devcontainer.json's string form: comma-separated key=value, with src and
-// source the same key.
+// parseMountString reads docker's --mount syntax, which devcontainer.json's
+// string form also uses.
 func parseMountString(s string) mount {
 	var m mount
 	for field := range strings.SplitSeq(s, ",") {
@@ -132,12 +115,9 @@ func parseMountString(s string) mount {
 	return m
 }
 
-// hostMount names what a mount reaches on the host, or "" when it reaches
-// nothing that matters.
-//
-// Only a bind mount reaches a host path. docker's --mount defaults the type to
-// volume, so an entry with no type is a named volume — whose name could be
-// anything, including "docker.sock", without touching the host.
+// hostMount names what a mount reaches on the host, or "". Only a bind mount
+// reaches a host path: an untyped mount is a named volume, whose name can be
+// anything, including docker.sock.
 func hostMount(m mount, home string) string {
 	if m.kind != "bind" || m.source == "" {
 		return ""
@@ -161,8 +141,8 @@ func hostPath(src, home string) string {
 	return ""
 }
 
-// isAncestorOrSelf reports whether dir is p or a directory above it.
-// /Users/mel is not above /Users/me: the comparison is by path segment.
+// isAncestorOrSelf reports whether dir is p or above it. It compares by path
+// segment, so /Users/mel is not above /Users/me.
 func isAncestorOrSelf(dir, p string) bool {
 	if dir == p {
 		return true
@@ -170,8 +150,8 @@ func isAncestorOrSelf(dir, p string) bool {
 	return strings.HasPrefix(p, strings.TrimSuffix(dir, "/")+"/")
 }
 
-// hostNamespaces are the runArgs that join one of the host's namespaces. Each
-// takes its value either after "=" or as the next argument.
+// hostNamespaces maps the runArgs flags that join a host namespace to their
+// canonical form.
 var hostNamespaces = map[string]string{
 	"--pid":     "--pid=host",
 	"--network": "--network=host",
@@ -181,8 +161,8 @@ var hostNamespaces = map[string]string{
 	"--uts":     "--uts=host",
 }
 
-// runArgs finds what docker run arguments ask of the host. docker accepts a
-// flag's value joined with "=" or as the next argument, so both are read.
+// runArgs finds what docker run arguments ask of the host. A flag's value may
+// be joined with = or be the next argument.
 func runArgs(args []string, home string) []string {
 	var out []string
 	for i := 0; i < len(args); i++ {
@@ -200,15 +180,14 @@ func runArgs(args []string, home string) []string {
 
 		switch flag {
 		case "--privileged":
-			// A bare flag; --privileged=false is the one value that is not.
+			// --privileged=false is the one valued form that is not privileged.
 			if !joined || value != "false" {
 				out = append(out, "privileged: true")
 			}
 		case "--device":
 			out = append(out, "--device "+next())
 		case "-v", "--volume":
-			// host:container[:opts]. A source without a leading slash is a
-			// named volume, not a host path.
+			// A source without a leading slash is a named volume.
 			if src, _, _ := strings.Cut(next(), ":"); strings.HasPrefix(src, "/") {
 				if what := hostPath(src, home); what != "" {
 					out = append(out, what)

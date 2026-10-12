@@ -14,18 +14,9 @@ func dialUnix(path string) (net.Conn, error) {
 	return net.Dial("unix", path)
 }
 
-// captureStderr redirects os.Stderr for the length of the test and returns a
-// function reporting what has been written to it so far.
-//
-// A pipe rather than a writer threaded through the code under test, because
-// the unexpected-exit warning goes straight to os.Stderr: it is written from a
-// goroutine that has no caller left to hand an error to. A goroutine drains
-// the pipe into a buffer instead of the accessor reading it, so that asking
-// what has been printed never blocks — a test asserting that *nothing* was
-// printed would otherwise wait on a write that is never coming.
-//
-// These tests must not run in parallel with each other: os.Stderr is process
-// global, and none of them call t.Parallel.
+// captureStderr redirects os.Stderr for the test and returns a func reporting
+// what has been written. Tests using it must not run in parallel: os.Stderr is
+// global.
 func captureStderr(t *testing.T) func() string {
 	t.Helper()
 	r, w, err := os.Pipe()
@@ -58,9 +49,8 @@ func captureStderr(t *testing.T) func() string {
 
 	t.Cleanup(func() {
 		os.Stderr = old
-		// The writer first: it is what makes the reader see EOF and stop. The
-		// wait keeps the goroutine from outliving the test and writing into a
-		// buffer nobody owns any more.
+		// Closing the writer ends the reader; waiting keeps the goroutine from
+		// outliving the test.
 		_ = w.Close()
 		<-done
 		_ = r.Close()
@@ -73,9 +63,7 @@ func captureStderr(t *testing.T) func() string {
 	}
 }
 
-// waitFor polls until cond holds, failing with msg if it never does. The
-// warning it is used for is printed from a goroutine, so there is no moment at
-// which a single check would be reliable.
+// waitFor polls until cond holds, failing with msg if it never does.
 func waitFor(t *testing.T, cond func() bool, msg string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -88,9 +76,8 @@ func waitFor(t *testing.T, cond func() bool, msg string) {
 	t.Error(msg)
 }
 
-// waitForGone waits for a path to disappear. Teardown is asynchronous — Close
-// kills the relay and the relay removes its own socket — so a bare Stat right
-// after Close would be a race.
+// waitForGone waits for path to disappear. Teardown is asynchronous, so a bare
+// Stat races.
 func waitForGone(t *testing.T, path string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -104,8 +91,8 @@ func waitForGone(t *testing.T, path string) {
 }
 
 // roundTrip sends msg through the socket at path and checks it comes back
-// intact. An error rather than a failure, so a caller can poll it while a
-// relay is coming up.
+// intact. It returns an error, not a failure, so a caller can poll while a
+// relay starts.
 func roundTrip(path, msg string) error {
 	conn, err := net.DialTimeout("unix", path, time.Second)
 	if err != nil {

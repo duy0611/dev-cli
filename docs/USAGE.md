@@ -76,26 +76,27 @@ dev container shell api
 ### Work a branch in its own checkout
 
 A worktree gives a branch its own directory, so an agent can work on it without
-disturbing what you have open. `dev worktree` makes the checkout and the
-container together, and removes them together.
+disturbing what you have open. `dev worktree` makes the checkout; a container
+on it is an ordinary `dev container create`, run from inside it.
 
 ```
-❯ dev worktree create fix-header --branch fix-header --path ~/wt/fix-header --generate
+❯ dev worktree create fix-header --branch fix-header --path ~/wt/fix-header
 worktree fix-header on branch fix-header at ~/wt/fix-header
-container fix-header is running
-```
-
-Run it from inside the repository, or name one with `--repo`. `--path` has no
-default: nothing appears on your disk in a place you did not choose.
-
-git works inside the container. A worktree's `.git` is a file pointing at an
-absolute path in the repository, so `dev` bind-mounts the repository at that
-same path — commits you make inside are commits the repository can see, sharing
-one object store.
-
-```
+run a container on it: cd ~/wt/fix-header && dev container create fix-header
+❯ cd ~/wt/fix-header
+❯ dev container create fix-header --generate
 ❯ dev container start-agent fix-header
 ```
+
+Run `worktree create` from inside the repository, or name one with `--repo`.
+`--path` has no default: nothing appears on your disk in a place you did not
+choose.
+
+git works inside the container. A worktree's `.git` is a file pointing at an
+absolute path in the repository, so `container create` asks git where that
+repository is and bind-mounts it at the same path — commits you make inside are
+commits the repository can see, sharing one object store. It does this for any
+worktree, including one made with plain `git worktree add`.
 
 A fresh checkout holds only what git tracks, so the `.env` files and
 dependency trees your project ignores are missing. List the ones worth carrying
@@ -112,10 +113,10 @@ node_modules/
 new one:
 
 ```
-❯ dev worktree create fix-header --branch fix-header --path ~/wt/fix-header --generate
+❯ dev worktree create fix-header --branch fix-header --path ~/wt/fix-header
 worktree fix-header on branch fix-header at ~/wt/fix-header
 copied 3 ignored paths from ~/src/app (.env, .env.local, node_modules/)
-container fix-header is running
+run a container on it: cd ~/wt/fix-header && dev container create fix-header
 ```
 
 On APFS and on btrfs or xfs the copy is a clone, costing neither time nor disk
@@ -125,28 +126,30 @@ built for the host rather than the container. A copied Python `.venv` still
 names the original checkout's path, so recreate it (`uv sync`,
 `python -m venv --clear`) rather than reuse it.
 
-When the branch is done:
+When the branch is done, remove the container, then the checkout:
 
 ```
+❯ dev container remove fix-header
 ❯ dev worktree remove fix-header
 worktree fix-header removed; branch fix-header kept
 ```
 
-The branch stays. git refuses to remove a checkout with uncommitted work in it,
-and so does this — pass `--force` when you mean it.
+`worktree remove` refuses while a container is still on the checkout. The
+branch stays. git refuses to remove a checkout with uncommitted work in it, and
+so does this — pass `--force` when you mean it.
 
 ```
 ❯ dev worktree list
-WORKSPACE  NAME        BRANCH      CHECKOUT  PATH
-default    fix-header  fix-header  ok        ~/wt/fix-header
+WORKSPACE  NAME        BRANCH      CHECKOUT  PATH             CONTAINERS
+default    fix-header  fix-header  ok        ~/wt/fix-header  fix-header
 ```
 
 `CHECKOUT` is read from git every time. `gone` means the checkout was removed
-outside `dev`; `dev worktree remove` still cleans up the container and the
-record.
+outside `dev`; `dev worktree remove` still drops the record. `CONTAINERS` names
+the containers whose folder is the checkout.
 
-Local providers only. A pod has no host bind mounts, so the paths a worktree
-depends on cannot resolve there.
+A container on a worktree needs a local provider. A pod has no host bind
+mounts, so the paths a worktree depends on cannot resolve there.
 
 ### A scratch sandbox with no project
 
@@ -252,7 +255,7 @@ workspace, so you do not retype its tools:
 ```sh
 dev container create scratch --from api --no-folder
 dev container create other   --from api --folder ~/src/other
-dev worktree  create fix     --from api --branch fix --path ~/src/api-fix
+dev container create fix     --from api --folder ~/wt/api-fix   # a worktree checkout
 ```
 
 It copies three things from the source: its tool list, whether it keeps agent
@@ -423,24 +426,28 @@ local socket, so it works the same way from a pod.
 A container's workspace is your checkout, bind-mounted, so anything running in
 it can write anywhere in it — including `.git`. Host git runs programs named
 there: `core.fsmonitor` in `.git/config` runs on every `git status`, which your
-editor runs every few seconds, and hooks run on commit, checkout and push. So
-`dev` keeps the container from changing what host git runs:
+editor runs every few seconds, and hooks run on commit, checkout and push.
+[SECURITY.md](SECURITY.md) explains the risk and how to choose a mode; this
+section is what each mode does.
 
-- `.git/config` is read-only inside the container.
-- `.git/hooks` is a copy only the container sees, seeded from your hooks at
-  create and reset to them at every `rebuild` — a hook an agent installs runs
-  in the container and never on your host.
-- `.git` itself cannot be renamed or replaced from inside.
-- For a worktree container, the same applies to the repository's config and
-  hooks, and to the checkout's `.git` file and its administration files.
+**Guarded** (`--mode guarded`, the default on the local provider) mounts `.git`
+read-only, whole. Nothing under it can be written from inside — not its config,
+not its hooks, not a planted `commondir`, under any spelling of the name — and
+your own git on the host is unaffected: you can commit, push, set upstreams and
+change configuration while the container runs.
 
-What still works inside: `fetch`, `pull`, `commit`, `push origin <branch>`,
-`checkout -b`, and `git config --global` (which writes the state volume, not
-your repository). What does not: `git config <key>` and `git remote add` fail,
-and `push -u` / `checkout -b x origin/y` succeed but print
-`could not write config file` instead of recording the upstream. Hook installers
-that set `core.hooksPath`, such as husky, fail inside — run them once on the
-host and the container sees the result.
+What works inside: `git status`, `diff`, `log`, `blame`, anything that only
+reads. What does not: `commit`, `add`, `stash`, creating a branch, `fetch` and
+`pull`, all of which write to `.git` and fail with `Read-only file system`. You
+review the agent's edits in your checkout and commit them yourself. Tell the
+agent so in your project's agent instructions, or it will keep trying.
+
+A guarded container has no use for the ssh agent, so it gets none:
+`--ssh-agent` is refused, and a workspace created with `--ssh-forward` does not
+forward into it.
+
+For a git worktree, the repository's common directory is mounted read-only at
+its own path instead.
 
 Host git can also be pointed *into* the working tree: a `core.hooksPath` such as
 `.githooks` or `.husky`, or an `include.path` naming a file in the checkout.
@@ -451,7 +458,7 @@ counts too — and:
 
 - mounts each one read-only inside the container, with every directory between
   it and the workspace root pinned so it cannot be renamed away. The agent can
-  still read and run the hooks, and commit, but not change them.
+  still read and run the hooks, but not change them.
 - refuses a path no mount can hold, naming it and the setting: one that does
   not exist yet (`core.hooksPath .husky` before husky has created it), or one
   reached through a symlink inside the workspace, which the container could
@@ -459,6 +466,11 @@ counts too — and:
 - refuses a running or stopped container created before the setting appeared —
   you ran `make hooks` on the host after `create` — because mounts are fixed
   when a container is created. `dev container rebuild <name>` gives it them.
+- refuses one where a file held this way has become writable from inside. A
+  read-only mount on a single file is lifted when the file is saved on the host
+  — git and most editors save by renaming a new file over the old — and stays
+  lifted until the container restarts. `dev container stop` and `start` put it
+  back. Directories are not affected.
 
 None of this is decided at create, since the setting usually arrives later.
 Nor does it count as a configuration change for `rebuild`'s drift check: the
@@ -471,36 +483,56 @@ runs whatever the branch you check out puts there. Copying hooks into
 `.git/hooks` instead — this repository's `make hooks` does — makes installing a
 changed hook a step you take after reading it.
 
-A project whose `devcontainer.json` names its own `workspaceMount` or
-`workspaceFolder` puts `.git` where `dev` cannot aim a mount. For those, `dev`
-fingerprints `.git`, and whatever host git runs from the working tree, before
-each `exec`, `shell` and `start-agent` and compares it after, exiting 1 and
-naming what changed. That is detection, not prevention:
-between the change and the report, your editor's `git status` may already have
-run it. Do not run git in that checkout until you have restored what it names.
+What guarded does not cover:
 
-Two routes no mount can close:
+- **A submodule's `.git` file.** It sits in the working tree and points your git
+  at the submodule's repository; the container can repoint it. `create` warns
+  when the folder has submodules.
+- **A worktree checkout's `.git` file**, for the same reason. `create` warns
+  when the folder is a worktree.
+- **A nested repository** the agent creates in the working tree, which your
+  editor may find and run git in.
+- **A project whose `devcontainer.json` names its own `workspaceMount` or
+  `workspaceFolder`.** That puts `.git` where `dev` cannot mount it, so `create`
+  refuses it in guarded mode.
+- **Files that run only when you run them** — `.envrc`, `.vscode/tasks.json`, a
+  `Makefile`, `package.json` scripts, a hook manager's config in the tree
+  (lefthook's `lefthook.yml`, pre-commit's `.pre-commit-config.yaml`). The agent
+  edits those like any other file. Review before running workspace code.
 
-- A `.git/commondir` file, which points git at another directory's config. `dev`
-  refuses to run any command while one is present, and reports one that appears
-  during a command.
-- A nested repository the agent adds to the index as a submodule entry: host
-  `git status` goes into it and runs its config. Turn that off on your host with
-  `git config --global diff.ignoreSubmodules all`, at the cost of submodule
-  status in your own repositories.
+**Isolated** (`--mode isolated`) never shares your folder with the container.
+On first create, `dev` copies it into a volume the container owns: the working
+tree as it is — uncommitted changes, untracked and ignored files, so `.env` and
+`node_modules` come along — and the repository rebuilt from a git bundle, with
+the branch you have checked out and your `origin` URL. Nothing of your `.git`
+itself is copied, so neither its config nor its hooks reach the container. The
+project's lifecycle commands (`postCreateCommand` and the rest) run after the
+copy, so an install step finds the project there. The image needs git for this.
 
-And what the guard does not try to cover: workspace files that run only when
-*you* run them, not because git does — `.envrc`, `.vscode/tasks.json`, a
-`Makefile`, `package.json` scripts, and hook managers that dispatch from a
-config file in the tree (lefthook's `lefthook.yml`, pre-commit's
-`.pre-commit-config.yaml`), whose installed hook is guarded but whose config is
-not. The agent edits those like any other file. Review before running workspace
-code there.
+The agent then commits, branches and rebases as it would anywhere, and pushes
+and signs through the ssh relay. Bring its work home with
+[`dev container fetch`](#container):
 
-The guard is set at create for a folder that is a git repository; `container
-list` and the audit log record it. Containers created before it existed are not
-guarded until recreated. The local provider only: a k8s pod has no host bind
-mount, and its workspace is a copy host git never reads.
+```sh
+dev container fetch api
+git log --oneline main..api/agent-work   # review before you merge
+```
+
+Nothing the container does reaches your folder or your git, so isolated mode
+covers everything guarded does not. What it costs: you do not see the agent's
+edits on your machine until you fetch, and the volume is the only copy of its
+work until then. `dev container remove` refuses while the container holds
+commits your folder lacks or changes nobody committed; `--force` removes it
+anyway. `rebuild` keeps the volume.
+
+**Containers created before modes** keep the guard they were created with:
+`.git` writable, with `.git/config` read-only as a single file and `.git/hooks`
+a copy only the container sees. That guard has two known gaps — a git command
+on your host that writes repository configuration (`push -u`, `remote add`, your
+editor publishing a branch) lifts it until the container restarts, and on
+macOS a write to `.git/CONFIG` gets past it — and, for a project that moves its
+workspace, it only fingerprints `.git` around each command. Recreate such a
+container in a mode.
 
 ### Keep an agent's plugins across a rebuild
 
@@ -818,9 +850,9 @@ which is how you clean up after an engine that no longer exists.
 **`no active workspace; run: dev workspace use NAME`** — every container command
 acts on one workspace. Set the active one, or pass `--workspace NAME`.
 
-**`give --folder PATH, or --no-folder for a container with no host folder`** —
-`create` will not guess. A forgotten `--folder` would otherwise build an empty
-sandbox, which you notice only when the agent cannot find your code.
+**`… would mount everything under it`** — `create` was run from your home
+directory or `/`, or given one as `--folder`. With no `--folder`, `create` uses
+the current directory, so `cd` into the project first, or pass `--folder PATH`.
 
 **`no devcontainer config in …`** — the folder ships none. Add `--generate`, or
 run it at a terminal and accept the offer.
@@ -1013,12 +1045,12 @@ Removing the active workspace leaves none active rather than a dangling pointer.
 ### container
 
 ```
-dev container create NAME --folder PATH [--generate] [--tools LIST] [--no-persist-state]
-                         [--agent-config PATH | --no-agent-config] [--no-start]
+dev container create NAME [--folder PATH] [--mode guarded|isolated] [--generate] [--tools LIST]
+                         [--no-persist-state] [--agent-config PATH | --no-agent-config] [--no-start]
                          [--allow-privileged]
 dev container create NAME --no-folder [--tools LIST] [--no-persist-state]
                          [--agent-config PATH | --no-agent-config] [--no-start]
-dev container create NAME --from SOURCE (--folder PATH | --no-folder) [--tools +ID,-ID]
+dev container create NAME --from SOURCE [--folder PATH | --no-folder] [--tools +ID,-ID]
                          [--no-persist-state] [--agent-config PATH | --no-agent-config] [--no-start]
 dev container list [--all] [--timeout DURATION]
 dev container start NAME
@@ -1030,16 +1062,20 @@ dev container shell NAME [--kube-token] [--ssh-agent|--no-ssh-agent]
 dev container exec NAME [--kube-token] [--ssh-agent|--no-ssh-agent] -- CMD [ARGS...]
 dev container start-agent NAME [--agent claude|codex|hermes|opencode] [--kube-token] [--ssh-agent|--no-ssh-agent] [-- ARGS...]
 dev container sync NAME
+dev container fetch NAME
 dev container tools
 dev container config show NAME
 ```
 
-**`create`** takes `--folder PATH` or `--no-folder`, never both and never
-neither.
+**`create`** takes `--folder PATH` or `--no-folder`, never both. With neither,
+the folder is the current directory, and `create` prints which one it used.
+The host's root and your home directory are refused as a folder: either would
+mount everything under it.
 
 | Flag | Meaning |
 |---|---|
-| `--folder` | host folder holding the project; bind-mounted on local, copied in on k8s |
+| `--folder` | host folder holding the project; bind-mounted on local, copied in on k8s. Default: the current directory |
+| `--mode` | `guarded`: the folder live, `.git` read-only; `isolated`: a copy the agent owns. Default `guarded` on local, `isolated` on k8s. Fixed for the container's life |
 | `--no-folder` | no host directory at all; work lives in a volume `dev` owns |
 | `--generate` | render a base Ubuntu configuration when the folder ships none |
 | `--tools` | comma-separated catalog tools for a generated container |
@@ -1048,6 +1084,11 @@ neither.
 | `--no-agent-config` | apply no agents.yaml, even if the project has one |
 | `--from` | start from another generated container's tools and settings in this workspace |
 | `--no-start` | record the container without starting it |
+
+The mode is fixed when the container is created and kept by `rebuild`; see
+[What a container can do to your git](#what-a-container-can-do-to-your-git). A
+`--no-folder` container takes no mode. `--mode guarded` on a k8s workspace is
+exit 2, since a pod cannot mount your folder live.
 
 With `--from`, `--generate` is implied and `--tools` takes only `+`/`-` changes.
 A source that does not exist is exit 3. A source built from a project's own
@@ -1109,11 +1150,12 @@ is `generated` when `dev` rendered the configuration (`--generate` or
 `--no-folder`) and `project` when the folder ships its own, STATE says
 whether its agents' configuration is on a volume, and HOST says whether the
 container may ask its engine for the host — `allowed` for one created with
-`--allow-privileged` or before that check existed, `refused` otherwise. GIT is
-`guarded` when host git is shielded from what the container writes under
-`.git` (see [What a container can do to your git](#what-a-container-can-do-to-your-git)),
-`off` for a repository folder created before that existed, and `-` when there
-is no host `.git`.
+`--allow-privileged` or before that check existed, `refused` otherwise. MODE is
+`guarded` or `isolated` (see
+[What a container can do to your git](#what-a-container-can-do-to-your-git)),
+`legacy` for a container created before modes, and `-` for a folderless one.
+A legacy container that was guarded prints a warning on every `start`, `exec`,
+`shell` and `start-agent`, since its guard can lapse; recreate it in a mode.
 
 **`start`** creates the container if the engine has none, which is what makes
 `create --no-start` followed by `start` work.
@@ -1171,6 +1213,17 @@ running pod alone; on local it exits 0 having done nothing, because every
 command already resolves the settings afresh. The container has to be running
 either way.
 
+**`fetch`** brings an isolated container's branches into the folder it was
+created from, as `NAME/<branch>` remote-tracking refs — nothing local changes,
+and you decide what to merge. They travel as a git bundle, so only commit data
+crosses, checked as it arrives. Uncommitted work stays in the container. A
+guarded or folderless container has nothing to fetch (exit 2), and a folder that
+has gone is exit 1.
+
+**`remove`** on an isolated container first asks it what it holds: commits on
+any branch your folder lacks, or uncommitted changes. Either refuses the
+removal (exit 2), naming them; `fetch` and commit inside first, or `--force`.
+
 **`tools`** lists the catalog, marking each entry official or community.
 **`config show`** prints the configuration a container is built from: the
 generated document, or for a project-owned container the merged one, with the
@@ -1180,15 +1233,13 @@ path it came from on stderr.
 
 ```
 dev worktree create NAME --branch B --path P [--repo R] [--base REF]
-                         [--include-file PATH] [--generate] [--tools LIST] [--from SOURCE]
-                         [--no-persist-state] [--agent-config PATH | --no-agent-config]
-                         [--no-start] [--no-herdr] [--allow-privileged] [--workspace W]
+                         [--include-file PATH] [--no-herdr] [--workspace W]
 dev worktree list [--all] [--workspace W]
 dev worktree remove NAME [--force] [--workspace W]
 ```
 
-`NAME` names both the checkout's record and the container: one name, so there
-is nothing extra to remember when the two are removed together.
+`worktree` makes and removes git worktree checkouts. A container on one is made
+with `dev container create` from inside the checkout, or with `--folder`.
 
 **`create`**
 
@@ -1200,29 +1251,12 @@ is nothing extra to remember when the two are removed together.
 | `--base` | start point for a new branch |
 | `--include-file` | more patterns of ignored files to copy in, on top of the source's `.worktreeinclude` |
 | `--no-herdr` | do not register the checkout with Herdr |
-| `--no-start` | record the container without starting it |
-| `--generate` | generate a base Ubuntu configuration when the checkout ships none |
-| `--tools` | comma-separated tools to install in a generated container (see: dev container tools) |
-| `--no-persist-state` | do not give the container a volume for its agents' configuration |
-| `--agent-config` | apply this agents.yaml instead of the checkout's `.devcontainer/agents.yaml` |
-| `--no-agent-config` | apply no agents.yaml, even if the checkout has one |
-| `--from` | start from another generated container's tools and settings in this workspace |
 
 `--branch` and `--path` are required; `--path` has no default, so nothing
 appears on disk somewhere you did not choose. `--base` only has an effect when
 the branch does not already exist — passing it for one that does is a usage
-error, not a silent no-op.
-
-`--from` behaves as it does on `container create`. The source is checked before
-git runs, so a missing or project-owned source leaves no checkout and no new
-branch behind. The check for a configuration in the checkout itself can only run
-after the checkout exists; if the branch ships one, the checkout is removed
-again. The source may itself be a worktree container, but its bind mounts are
-never copied.
-
-Local providers only: a workspace on the k8s provider is refused, since a pod
-has no host bind mounts and the two absolute paths a worktree depends on
-cannot resolve there.
+error, not a silent no-op. A name already taken in the workspace is refused
+before git runs.
 
 Ignored files are copied in from the *source* checkout: the one holding the
 working directory — from inside a linked worktree, that worktree — or the one
@@ -1245,31 +1279,32 @@ A missing or unreadable `--include-file` is a usage error before anything is
 created; so is passing one from a bare repository, which has no checkout to
 copy from. A copy that fails removes the checkout again. Nothing about the copy
 is recorded, and `remove` needs no `--force` on its account, since git removes
-ignored files with the checkout.
+ignored files with the checkout. A project that ignores its `.devcontainer/` and
+lists it gets that configuration copied too, so a container made there uses it.
 
-The copy happens before the devcontainer configuration is looked for, so a
-project that ignores its `.devcontainer/` and lists it gets that configuration
-used.
-
-A checkout of a repository that ships its own `.devcontainer` keeps it
-untouched — `dev` never writes into a project's folder — and its bind mounts
-are merged into the document at invocation time instead, the same way the
-agent-state mount is for any other project-owned container.
+**A container on a worktree.** `dev container create` on a worktree checkout
+asks git for the repository and bind-mounts it at its own host path, alongside
+the checkout at its own. A checkout of a repository that ships its own
+`.devcontainer` keeps it untouched — `dev` never writes into a project's folder
+— and those mounts are merged into the document at invocation time instead, the
+same way the agent-state mount is for any other project-owned container. It
+needs a local provider.
 
 **`list`** reads the checkouts git still knows about, live, every time. The
 CHECKOUT column reads `ok` or `gone`; `gone` means the checkout was removed
-outside `dev`, and `dev worktree remove` still cleans up the container and the
-record either way.
+outside `dev`, and `dev worktree remove` still drops the record. CONTAINERS
+names the containers whose folder is the checkout, or `-`.
 
-**`remove`** takes the container from the engine first, then asks git to
-remove the checkout, then drops the record. git refuses a checkout holding
-modified or untracked files; that refusal leaves the record intact so the
-command is retryable, and `--force` passes through to git. The branch is never
-deleted — the checkout is scaffolding, the branch is the work.
+**`remove`** refuses while a container is on the checkout, naming it: remove it
+first with `dev container remove`. Then it asks git to remove the checkout, then
+drops the record. git refuses a checkout holding modified or untracked files;
+that refusal leaves the record intact so the command is retryable, and `--force`
+passes through to git. The branch is never deleted — the checkout is
+scaffolding, the branch is the work.
 
-`dev container remove` on a worktree-backed container still works: it removes
-the container and warns that the checkout at its path was left behind, naming
-`dev worktree remove` as what would have taken both.
+`dev container remove` on a container on a worktree removes the container and
+leaves the checkout and its record. `dev workspace remove` refuses while the
+workspace holds worktrees, as it does for containers.
 
 ### audit
 

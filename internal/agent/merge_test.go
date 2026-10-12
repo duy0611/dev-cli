@@ -108,7 +108,7 @@ func TestMergeHermesKeepsCommentsAndOtherKeys(t *testing.T) {
 	if err := yaml.Unmarshal(out, &doc); err != nil {
 		t.Fatal(err)
 	}
-	// hermes expands ${NAME} itself when it loads config.yaml.
+	// ${NAME} passes through for hermes to expand.
 	if doc.MCP["ctx"].Env["K"] != "${K}" || doc.MCP["web"].Headers["Authorization"] != "Bearer ${T}" {
 		t.Errorf("mcp_servers = %+v", doc.MCP)
 	}
@@ -129,7 +129,7 @@ func TestMergeHermesFromNothingAndFromNull(t *testing.T) {
 	}
 }
 
-// A rebuild re-applies over a volume that already holds the last apply.
+// A rebuild re-applies over a file the last apply wrote.
 func TestMergesAreIdempotent(t *testing.T) {
 	once, err := mergeOpencode([]byte(`{"plugin":["a"]}`), []string{"a", "b"}, testServers)
 	if err != nil {
@@ -178,7 +178,7 @@ func TestOpencodeAndHermesSteps(t *testing.T) {
 		t.Errorf("hermes steps = %+v", h)
 	}
 
-	// Nothing to merge means no file is touched at all.
+	// No declared content means no file is touched.
 	o, _ = configureOpencode(agentcfg.View{})
 	h, _ = configureHermes(agentcfg.View{})
 	if len(o) != 0 || len(h) != 0 {
@@ -186,8 +186,7 @@ func TestOpencodeAndHermesSteps(t *testing.T) {
 	}
 }
 
-// JSON null is valid where an object belongs; json.Unmarshal leaves the map
-// nil and a write to it panics, which would exit 2 with a stack trace.
+// JSON null must not leave the map nil, or a write to it panics.
 func TestMergeOpencodeTreatsNullAsEmpty(t *testing.T) {
 	for _, current := range []string{`null`, `{"mcp": null}`, `{"plugin": null}`} {
 		out, err := mergeOpencode([]byte(current), []string{"p"}, testServers)
