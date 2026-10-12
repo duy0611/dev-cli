@@ -79,6 +79,9 @@ internal/agent/       which agents exist, how to invoke and configure them
 internal/agentcfg/    reading a project's agents.yaml
 internal/dcconfig/    locating a project's .devcontainer config
 internal/dcgen/       generating one: the tool catalog, render, reverse map
+internal/gitguard/    what host git runs: the guarded mounts, the tree search
+internal/gitwt/       git worktrees: add, remove, list, which repository
+internal/seed/        an isolated container's first contents: tree + bundle
 internal/xpath/       physical paths, name and env-key validation
 test/smoke/           end-to-end, behind the `smoke` build tag
 ```
@@ -185,11 +188,14 @@ cannot implement it.
    k8s `Up` calls `seedWorkspace` only for a folder-backed container, since
    there is no host tree to stream otherwise.
 
-   `seedWorkspace` is unexported and called from exactly one place — `Up`, on
-   first create. That is what keeps it safe: it unpacks a tar over the
-   workspace, so reaching it from the CLI would hand the operator a way to
-   destroy whatever an agent had half-done. `container sync` pushes settings
-   and never files.
+   `seedWorkspace` is unexported and called from exactly one place on each
+   provider — `Up`, on first create. That is what keeps it safe: it unpacks a
+   tar over the workspace, so reaching it from the CLI would hand the operator
+   a way to destroy whatever an agent had half-done. `container sync` pushes
+   settings and never files. The local provider's seeds an isolated container
+   (invariant 12) and has `up --skip-post-create` hold the lifecycle commands
+   back until it has, then runs them with `run-user-commands`; a recreate
+   keeps the volume and is never seeded.
 
    The generated document also carries a `postCreateCommand` that chowns the
    mount to `vscode`. Docker creates a named volume owned by root, and unlike a
@@ -291,6 +297,42 @@ cannot implement it.
     k8s refuses a container on a worktree outright: a pod has no host bind
     mounts, and a streamed copy of the object store would drift from the host
     with nothing to push it back.
+
+12. **A container's mode is guarded or isolated, and a guarded `.git` is one
+    read-only directory mount.** The mode is a column, fixed at create and kept
+    by `rebuild` for invariant 10's reason; `legacy` is what migration 0008
+    wrote for every row that predates modes, and those keep the single-file
+    guard they were made with. Nothing else ever writes `legacy`.
+
+    Never a read-only mount on a single file inside a writable `.git`. git
+    replaces its files by writing a lock and renaming it over the original,
+    and since Linux 3.18 renaming over a file that is a mount point in another
+    mount namespace detaches the mount — so `.git/config` became writable the
+    moment the host wrote its config, at once on Linux and about 1.5 s later
+    on a macOS podman machine, while `inspect` went on reporting it read-only.
+    On a case-insensitive host `.git/CONFIG` also went around it. git never
+    replaces `.git` itself, and a case variant of a directory name resolved to
+    the mount in every test, so guarded mounts all of `.git` read-only
+    (`gitguard.ReadOnlyMounts`, `ReadOnlyWorktreeMounts`) — at the cost of the
+    agent's commits, which is the mode's trade, and of the ssh relay, which a
+    container that cannot commit has no use for. The smoke tests in PR #28
+    are the evidence.
+
+    What guarded still holds read-only as single files — a file an
+    `include.path` names in the working tree — is probed from inside the
+    container before each command by opening it for append and writing
+    nothing (`probeHeldFiles`). Not `test -w`: busybox's decides from mode bits
+    and calls a read-only mount writable as root. Not `inspect`, which reports
+    the mount as configured.
+
+    Isolated copies the folder into the workspace volume and never mounts it.
+    The repository crosses as a git bundle (`internal/seed`), never as `.git`'s
+    files, so the host's config and hooks stay on the host and a worktree's
+    `.git` file, which names a host path, is never copied. `dev container
+    fetch` brings branches back the same way, into remote-tracking refs, with
+    `transfer.fsckObjects`; host git reads commit data from the container and
+    nothing else. `remove` refuses while the volume holds work the folder
+    lacks, since it is the only copy.
 
 ## Kubernetes provider (experimental)
 

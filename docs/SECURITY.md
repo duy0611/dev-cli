@@ -4,10 +4,6 @@
 the one way such an agent can reach outside its container that is easy to
 miss, how `dev` stops it, and what is left for you to decide.
 
-The two modes described here are designed in
-`docs/specs/2026-10-12-container-modes-design.md` and not yet released. Until
-they are, every container is what "Containers created before modes" describes.
-
 ## The short version
 
 - Choose a mode when you create a container: `dev container create NAME
