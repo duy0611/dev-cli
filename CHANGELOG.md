@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.13.0](https://github.com/duy0611/dev-cli/compare/v0.12.0...v0.13.0) (2026-10-12)
+
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** worktree create no longer takes the container flags (--generate, --tools, --from, --no-start, --no-persist-state, --agent-config, --no-agent-config, --allow-privileged); run dev container create in the checkout instead.
+
+### Features
+
+* **cli:** default container create's folder to the current directory ([83022c9](https://github.com/duy0611/dev-cli/commit/83022c9f5da4eba73e912c69a38c67aa189045f2))
+* **cli:** guarded mode mounts .git read-only as one directory ([e2704c7](https://github.com/duy0611/dev-cli/commit/e2704c7d5cf28a7ea46d6aa1da573ae92968c38e))
+* **cli:** isolated mode copies the folder into a volume the container owns ([470b418](https://github.com/duy0611/dev-cli/commit/470b418cdf3093aa6f780e40ce68bab418506561))
+* **cli:** show each container's mode, and warn about legacy ones ([6f6bb7f](https://github.com/duy0611/dev-cli/commit/6f6bb7f5fd8ec80981e0e13ef1ed43d5e04bded5))
+* **cli:** workspace init --from copies a workspace's settings ([9c0d402](https://github.com/duy0611/dev-cli/commit/9c0d402027ab8f496706b2d8783e2d3ca556fe34))
+* **cli:** worktree create makes the checkout only ([c96e3b3](https://github.com/duy0611/dev-cli/commit/c96e3b3a13ef30f1f1f980b7c0d2d3602a9e5a66))
+* **herdr:** name the agent after its container ([0f11957](https://github.com/duy0611/dev-cli/commit/0f119570bf2224efea648bd09f73b415489da3f5))
+* **k8s:** default PVC size to 1Gi ([40956ba](https://github.com/duy0611/dev-cli/commit/40956ba6853a35dc95221417ff1e08324132242a))
+* **store:** record a container's mode and worktree repository ([89f3353](https://github.com/duy0611/dev-cli/commit/89f335399f7b0070bf43c300dd22a3f983d15e4a))
+
+
+### Bug Fixes
+
+* **cli:** trust the mounted repository inside the container ([022f899](https://github.com/duy0611/dev-cli/commit/022f8999b8baf79312c96bf123a28a96e641fe80))
+* **local:** seed an isolated container as the remote user, with no git guard ([73cbfcd](https://github.com/duy0611/dev-cli/commit/73cbfcd2d610428497065cc25a03f9352f3b74eb))
+
 ## [0.12.0](https://github.com/duy0611/dev-cli/compare/v0.11.0...v0.12.0) (2026-10-10)
 
 
