@@ -482,3 +482,54 @@ func TestIsolatedGetsNoGitGuardMounts(t *testing.T) {
 		t.Errorf("an isolated container got a hooks copy at %s", hooks)
 	}
 }
+
+// A bind-mounted checkout can arrive owned by someone other than the container
+// user — a macOS podman machine does not remap it — and git then refuses the
+// repository as dubious ownership. After start, the container's own git config
+// trusts the paths dev mounted there: the checkout, and a worktree's repository.
+func TestStartTrustsTheMountedRepository(t *testing.T) {
+	requireGit(t)
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	calls, _ := stubCapturingDevcontainer(t)
+	stubEngineWithMounts(t, "")
+	repo := initRepo(t)
+	path := filepath.Join(t.TempDir(), "wt")
+	gitIn(t, repo, "worktree", "add", "-q", "-b", "feat", path)
+
+	if err := runContainerCreate(t.Context(), a, "", "feat", path,
+		createOpts{generate: true, tools: []string{"yq"}}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	c := containerRow(t, a, "feat")
+	log := callsIn(t, calls)
+	for _, dir := range []string{c.Source, c.WorktreeRepo} {
+		if !strings.Contains(log, "safe.directory") || !strings.Contains(log, dir) {
+			t.Errorf("start did not mark %s safe inside the container:\n%s", dir, log)
+		}
+	}
+	// --global inside the container: the file GIT_CONFIG_GLOBAL names on the
+	// state volume, never the repository's own config.
+	if !strings.Contains(log, "config --global --add safe.directory") {
+		t.Errorf("safe.directory was not written to the container's global config:\n%s", log)
+	}
+	if strings.Contains(log, "config --local") {
+		t.Errorf("safe.directory was written to the repository's own config:\n%s", log)
+	}
+}
+
+// Isolated mounts nothing of the host, so there is nothing to trust.
+func TestStartTrustsNothingForAnIsolatedContainer(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	calls, _ := stubCapturingDevcontainer(t)
+	stubEngineWithMounts(t, "")
+	requireGit(t)
+	if err := runContainerCreate(t.Context(), a, "", "api", initRepo(t),
+		createOpts{generate: true, tools: []string{"yq"}, mode: model.ModeIsolated}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if strings.Contains(callsIn(t, calls), "safe.directory") {
+		t.Errorf("an isolated container was given safe.directory entries:\n%s", callsIn(t, calls))
+	}
+}

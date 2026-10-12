@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -529,6 +530,44 @@ func dedupe(s []string) []string {
 func isGitCheckout(folder string) bool {
 	_, ok := gitguard.LayoutOf(folder)
 	return ok
+}
+
+// trustMountedRepository adds the repository paths dev bind-mounts into a
+// container to git's safe.directory there. A macOS podman machine passes the
+// host's ownership through instead of remapping it to the container user, and
+// git then refuses the repository as dubious ownership.
+//
+// Written to the file GIT_CONFIG_GLOBAL names when the container persists
+// state, which is the state volume: never the project's .git/config, and
+// nothing a rebuild discards. A container without that volume uses the
+// remote user's ~/.gitconfig. Each path is added only when missing, so a
+// restart does not pile up duplicates.
+func trustMountedRepository(ctx context.Context, p provider.Provider, c model.Container) error {
+	if c.SourceKind != model.SourceFolder || c.Mode == model.ModeIsolated {
+		return nil
+	}
+	dirs := []string{c.WorktreeRepo}
+	if c.WorktreeRepo != "" {
+		dirs = append(dirs, c.Source)
+	} else if layout, ok := gitguard.LayoutOf(c.Source); ok {
+		dirs = []string{path.Dir(layout.ContainerGitDir)}
+	} else {
+		return nil
+	}
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		var stderr bytes.Buffer
+		err := p.Exec(ctx, c, []string{"sh", "-c",
+			`command -v git >/dev/null || exit 0
+git config --global --get-all safe.directory | grep -qxF "$1" || git config --global --add safe.directory "$1"`,
+			"trust", dir}, provider.ExecOpts{Stdout: io.Discard, Stderr: &stderr})
+		if err != nil {
+			return fmt.Errorf("trusting %s in container %s: %w: %s", dir, c.Name, err, strings.TrimSpace(stderr.String()))
+		}
+	}
+	return nil
 }
 
 // modeOf is what container list shows under MODE: the container's mode, and

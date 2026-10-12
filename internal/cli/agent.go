@@ -175,6 +175,9 @@ func (a *app) ensureAgentPresent(ctx context.Context, t *target, ag agent.Agent,
 	if err := t.provider.Rebuild(ctx, t.container, environ, false); err != nil {
 		return err
 	}
+	if err := trustMountedRepository(ctx, t.provider, t.container); err != nil {
+		return err
+	}
 	if !agentInstalled(ctx, t, ag) {
 		return fmt.Errorf("%s is still missing after the rebuild; add it to %s",
 			ag.Binary, t.container.ConfigPath)

@@ -86,10 +86,10 @@ worse. It makes the checkout's pointer agree with the container and the
 repository's backlink disagree with both, which is the pruning case above
 rather than a fix for it, and it writes into a file the host's git owns.
 
-`safe.directory` needs nothing: the devcontainer CLI UID-remaps a bind mount to
-the host user, so the checkout and `.git` arrive owned by the user the container
-runs as. This is the same remapping the state volume does *not* get, which is
-why that one needs a chown and these do not.
+`safe.directory` is set at start and rebuild: a macOS podman machine passes the
+host's ownership through instead of remapping it to the container user, and git
+then refuses the repository as dubious ownership. `dev` adds the checkout and
+the repository to the container's global git config, never the project's.
 
 ### Why not mount the whole repository
 

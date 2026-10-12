@@ -790,6 +790,9 @@ func (a *app) start(ctx context.Context, workspace string, c model.Container) er
 	if err := p.Up(ctx, c, environ); err != nil {
 		return err
 	}
+	if err := trustMountedRepository(ctx, p, c); err != nil {
+		return err
+	}
 	// A row with no digest — created with --no-start, or before the drift
 	// check existed — gets the one it just started from, so the next rebuild
 	// has something to compare against. Never overwritten here: start does not
@@ -981,6 +984,9 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 				return err
 			}
 			if err := t.provider.Rebuild(cmd.Context(), t.container, environ, noCache); err != nil {
+				return err
+			}
+			if err := trustMountedRepository(cmd.Context(), t.provider, t.container); err != nil {
 				return err
 			}
 			// After the rebuild succeeded, never before: a failed rebuild
