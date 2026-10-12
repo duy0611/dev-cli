@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/duy0611/dev-cli/internal/agent"
+	"github.com/duy0611/dev-cli/internal/herdr"
 	"github.com/duy0611/dev-cli/internal/model"
 	"github.com/duy0611/dev-cli/internal/provider"
 	"github.com/spf13/cobra"
@@ -125,6 +126,7 @@ func runContainerStartAgent(ctx context.Context, a *app, workspace, name, agentI
 	if err := os.Setenv("HERDR_AGENT", ag.ID); err != nil {
 		return err
 	}
+	defer herdr.NameAgent(ctx, t.container.Name)()
 
 	argv := ag.Command(extra)
 	started := time.Now()
