@@ -403,10 +403,16 @@ Beyond the invariants above, these are the parts that bite:
   `read-configuration` emits *plural* merged fields (`onCreateCommands`),
   reports a null `workspaceFolder` when unset, and shells out to `docker ps`
   even to read a file.
-- **Every non-obvious line carries a comment explaining *why*,** usually naming
-  the failure it prevents. Match that density. Most of what is hard here is
-  container and platform trivia, and an uncommented workaround reads as
-  removable.
+- **Comments are written as one senior engineer to another,** and only to
+  clarify a complex block of logic. Never a junior-level comment that says
+  what the code plainly does (what a loop iterates, what a call returns), and
+  never requirements or design decisions: those belong in `docs/specs` and in
+  this file.
+- **Comment the why, never the what,** and only where a future reader would
+  misread the intent without it — typically a platform or tool quirk that makes
+  correct code look wrong or removable. A short doc comment on a package or an
+  exported name, saying what it is, is fine; a paragraph of rationale on it is
+  not.
 - **Prompt only at a terminal.** `provider configure` asks for whatever its
   flags left empty, but `isTerminal(os.Stdin)` guards the prompting: a scripted
   run has to fail naming the missing flag rather than block on a question
