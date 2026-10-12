@@ -98,6 +98,10 @@ func hasMount(mounts []string, target string, readonly bool) bool {
 	return false
 }
 
+// The tests from here to the working-tree ones exercise the single-file guard,
+// which only a legacy container — one from before modes — still runs. They
+// make one with createOpts.legacy.
+
 func TestCreateOnAGitRepositoryMountsTheGuard(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -105,7 +109,7 @@ func TestCreateOnAGitRepositoryMountsTheGuard(t *testing.T) {
 	root := gitRepoWithConfig(t, `{"image":"ubuntu"}`)
 	writeFile(t, filepath.Join(root, ".git", "hooks", "pre-commit"), "#!/bin/sh\nexit 0\n")
 
-	if err := runContainerCreate(t.Context(), a, "", "api", root, createOpts{}); err != nil {
+	if err := runContainerCreate(t.Context(), a, "", "api", root, createOpts{legacy: true}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	if !containerRow(t, a, "api").GitGuard {
@@ -134,7 +138,7 @@ func TestGeneratedConfigGetsTheGuardWithoutStoringIt(t *testing.T) {
 	root, _ := filepath.EvalSymlinks(initRepo(t))
 
 	if err := runContainerCreate(t.Context(), a, "", "api", root,
-		createOpts{generate: true, tools: []string{"yq"}}); err != nil {
+		createOpts{generate: true, tools: []string{"yq"}, legacy: true}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	gitdir := "/workspaces/" + filepath.Base(root) + "/.git"
@@ -167,7 +171,7 @@ func TestCustomWorkspaceMountFallsBackToFingerprinting(t *testing.T) {
 	root := gitRepoWithConfig(t, `{"image":"ubuntu","workspaceFolder":"/src"}`)
 	stubEngineDocker(t)
 
-	if err := runContainerCreate(t.Context(), a, "", "api", root, createOpts{}); err != nil {
+	if err := runContainerCreate(t.Context(), a, "", "api", root, createOpts{legacy: true}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	for _, m := range mountsUsedForUp(t, calls, captured) {
@@ -201,7 +205,7 @@ func TestPlantedCommondirRefusesTheNextCommand(t *testing.T) {
 	stubCapturingDevcontainer(t)
 	stubEngineDocker(t)
 	root := gitRepoWithConfig(t, `{"image":"ubuntu"}`)
-	if err := runContainerCreate(t.Context(), a, "", "api", root, createOpts{}); err != nil {
+	if err := runContainerCreate(t.Context(), a, "", "api", root, createOpts{legacy: true}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	writeFile(t, filepath.Join(root, ".git", "commondir"), "/elsewhere\n")
@@ -219,7 +223,7 @@ func TestRebuildReseedsTheHooksCopy(t *testing.T) {
 	seedWorkspace(t, a)
 	stubCapturingDevcontainer(t)
 	root := gitRepoWithConfig(t, `{"image":"ubuntu"}`)
-	if err := runContainerCreate(t.Context(), a, "", "api", root, createOpts{}); err != nil {
+	if err := runContainerCreate(t.Context(), a, "", "api", root, createOpts{legacy: true}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	hooks, _ := hooksCopyDir("ws", "api")
@@ -239,7 +243,7 @@ func TestRemoveDeletesTheHooksCopy(t *testing.T) {
 	stubCapturingDevcontainer(t)
 	stubEngineDocker(t)
 	root := gitRepoWithConfig(t, `{"image":"ubuntu"}`)
-	if err := runContainerCreate(t.Context(), a, "", "api", root, createOpts{}); err != nil {
+	if err := runContainerCreate(t.Context(), a, "", "api", root, createOpts{legacy: true}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	hooks, _ := hooksCopyDir("ws", "api")
@@ -265,7 +269,7 @@ func TestWorktreeContainerMountsTheGuard(t *testing.T) {
 		t.Fatalf("worktree create: %v", err)
 	}
 	if err := runContainerCreate(t.Context(), a, "", "feat", path,
-		createOpts{generate: true, tools: []string{"yq"}}); err != nil {
+		createOpts{generate: true, tools: []string{"yq"}, legacy: true}); err != nil {
 		t.Fatalf("container create: %v", err)
 	}
 	st, _ := a.store()
@@ -422,7 +426,7 @@ func TestCustomWorkspaceMountFingerprintsTheTreeHooks(t *testing.T) {
 	writeFile(t, hook, "#!/bin/sh\n")
 	gitIn(t, root, "config", "core.hooksPath", ".githooks")
 	stubEngineDocker(t)
-	if err := runContainerCreate(t.Context(), a, "", "api", root, createOpts{}); err != nil {
+	if err := runContainerCreate(t.Context(), a, "", "api", root, createOpts{legacy: true}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 

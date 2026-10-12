@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -130,6 +131,9 @@ func (a *app) planGitDir(c model.Container, worktreeRepo string, seed bool) (git
 	if !c.GitGuard || c.SourceKind != model.SourceFolder {
 		return gitGuardPlan{}, nil, nil
 	}
+	if c.Mode == model.ModeGuarded {
+		return planGuardedGitDir(c, worktreeRepo)
+	}
 	hooks, err := hooksCopyDir(c.WorkspaceName, c.Name)
 	if err != nil {
 		return gitGuardPlan{}, nil, err
@@ -195,6 +199,65 @@ func (a *app) planGitDir(c model.Container, worktreeRepo string, seed bool) (git
 	}
 	return gitGuardPlan{mounts: gitguard.Mounts(layout, hooks), gitdir: layout.GitDir},
 		&treeScope{checkout: c.Source, roots: []gitguard.Root{root}, shielded: shielded}, nil
+}
+
+// planGuardedGitDir is planGitDir for a guarded container: .git, or a
+// worktree's common directory, mounted read-only whole. No hooks copy, no
+// commondir check, no fingerprint — with nothing under .git writable, there is
+// nothing left for any of them to catch.
+//
+// The working tree is still searched, since host git can be pointed into it
+// by a core.hooksPath or an include, and the read-only .git is listed as
+// shielded so nothing under it is mounted a second time.
+func planGuardedGitDir(c model.Container, worktreeRepo string) (gitGuardPlan, *treeScope, error) {
+	if worktreeRepo != "" {
+		return gitGuardPlan{mounts: gitguard.ReadOnlyWorktreeMounts(worktreeRepo)}, &treeScope{
+			checkout: c.Source,
+			roots:    []gitguard.Root{{Host: c.Source, Container: c.Source}},
+			shielded: []string{worktreeRepo},
+		}, nil
+	}
+	layout, ok := gitguard.LayoutOf(c.Source)
+	if !ok {
+		// Not a repository today; nothing to guard.
+		return gitGuardPlan{}, nil, nil
+	}
+	if c.GeneratedConfig == "" && c.ConfigPath != "" {
+		custom, err := namesWorkspaceMount(c.ConfigPath)
+		if err != nil {
+			return gitGuardPlan{}, nil, err
+		}
+		if custom {
+			// Refused at create; a project edited since is refused here, for
+			// the same reason — no mount can be aimed at a .git dev cannot
+			// locate, and guarded is a promise of prevention.
+			return gitGuardPlan{}, nil, &overlayError{movedWorkspaceError(c.ConfigPath)}
+		}
+	}
+	root := gitguard.Root{Host: filepath.Dir(layout.GitDir), Container: path.Dir(layout.ContainerGitDir)}
+	return gitGuardPlan{mounts: gitguard.ReadOnlyMounts(layout)},
+		&treeScope{checkout: c.Source, roots: []gitguard.Root{root}, shielded: []string{layout.GitDir}}, nil
+}
+
+// namesWorkspaceMount reports whether the project's devcontainer.json at path
+// says where its workspace goes, which puts .git where dev cannot see.
+func namesWorkspaceMount(path string) (bool, error) {
+	project, err := os.ReadFile(path)
+	if err != nil {
+		return false, fmt.Errorf("reading %s: %w", path, err)
+	}
+	custom, err := dcgen.NamesWorkspaceMount(project)
+	if err != nil {
+		return false, &overlayError{fmt.Errorf("reading %s: %w", path, err)}
+	}
+	return custom, nil
+}
+
+// movedWorkspaceError is the refusal for a guarded container whose project
+// moves its workspace.
+func movedWorkspaceError(path string) error {
+	return usageErrorf("%s sets workspaceMount or workspaceFolder, which puts .git where dev cannot "+
+		"mount it read-only; create the container with --mode isolated", xpath.Shorten(path))
 }
 
 // treeRefusal is a working tree path host git runs that no mount can hold.
@@ -265,6 +328,50 @@ func (a *app) checkTreeMounts(ctx context.Context, p provider.Provider, c model.
 		c.Name, strings.Join(missing, "\n  "), c.Name)
 }
 
+// probeHeldFiles refuses to run anything in a guarded container where a file
+// held read-only in the working tree has stopped being read-only.
+//
+// Files only. A read-only mount on a single file is detached when the host
+// renames over it — an editor's safe save, git's lock-and-rename — and inspect
+// goes on reporting the mount as configured, so checkTreeMounts cannot see it.
+// A directory mount is never renamed over and is not probed.
+//
+// From inside the container, by opening the file for append and writing
+// nothing: open(2) fails with EROFS on a read-only mount and changes neither
+// content nor mtime otherwise. Not `test -w`, which busybox decides from mode
+// bits and, as root, answers yes for a read-only mount.
+func (a *app) probeHeldFiles(ctx context.Context, t *target) error {
+	if t.container.Mode != model.ModeGuarded {
+		return nil
+	}
+	var opened []string
+	for _, b := range t.gitGuard.tree {
+		if !b.ReadOnly {
+			continue
+		}
+		if info, err := os.Stat(b.Host); err != nil || info.IsDir() {
+			continue
+		}
+		err := t.provider.Exec(ctx, t.container,
+			[]string{"sh", "-c", "( : >> \"$1\" ) 2>/dev/null", "probe", b.Container},
+			provider.ExecOpts{Stdout: io.Discard, Stderr: io.Discard})
+		if err == nil {
+			opened = append(opened, b.Container+", for "+b.Why)
+		}
+	}
+	if len(opened) == 0 {
+		return nil
+	}
+	a.record("refused", t.container.WorkspaceName, t.container.Name, map[string]any{
+		"reason":   "git",
+		"findings": opened,
+	})
+	return fmt.Errorf("host git runs files in container %s's workspace that it can now write:\n  %s\n"+
+		"a file saved on the host lifts its read-only mount until the container restarts: "+
+		"dev container stop %s, then start it again",
+		t.container.Name, strings.Join(opened, "\n  "), t.container.Name)
+}
+
 // hooksCopyDir is the host directory holding a container's copy of the hooks,
 // beside the database: hooks/<workspace>/<container>. Created 0700 and
 // resolved, since the engine resolves the mount's source path inside its VM
@@ -298,6 +405,9 @@ func removeHooksCopy(workspace, container string) {
 // the git finding is still recorded in the audit log either way.
 func (a *app) guardedRun(ctx context.Context, t *target, run func() error) error {
 	if err := a.checkTreeMounts(ctx, t.provider, t.container, t.gitGuard); err != nil {
+		return err
+	}
+	if err := a.probeHeldFiles(ctx, t); err != nil {
 		return err
 	}
 	w, err := a.watchGitGuard(t.container, t.gitGuard)

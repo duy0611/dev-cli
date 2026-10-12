@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -70,6 +71,12 @@ type createOpts struct {
 	// allowPrivileged is --allow-privileged: let the configuration ask its
 	// engine for the host. See checkEscape.
 	allowPrivileged bool
+	// mode is --mode: guarded or isolated, empty for the provider's default.
+	mode model.Mode
+	// legacy records the row as a container from before modes, under the
+	// single-file git guard. No flag sets it: it exists so that guard, which
+	// every row the migration marked legacy still runs, keeps its tests.
+	legacy bool
 }
 
 func newContainerCreateCmd(a *app) *cobra.Command {
@@ -115,6 +122,8 @@ func newContainerCreateCmd(a *app) *cobra.Command {
 	}
 	addWorkspaceFlag(cmd, &workspace)
 	cmd.Flags().StringVar(&folder, "folder", "", "host folder holding the project (default: the current directory)")
+	cmd.Flags().Var(modeFlag{&opts.mode}, "mode",
+		"guarded (the folder live, .git read-only) or isolated (a copy the agent owns); fixed for the container's life")
 	cmd.Flags().BoolVar(&opts.noStart, "no-start", false, "record the container without starting it")
 	cmd.Flags().BoolVar(&opts.noFolder, "no-folder", false,
 		"create a container with no host folder; its work lives in a volume dev owns")
@@ -170,6 +179,13 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 	wsName, err := a.workspaceName(workspace)
 	if err != nil {
 		return err
+	}
+	mode, err := a.modeFor(wsName, opts)
+	if err != nil {
+		return err
+	}
+	if opts.legacy && mode == model.ModeGuarded {
+		mode = model.ModeLegacy
 	}
 	// Before the source below is resolved, so it renders from the tools and
 	// inherited choices --from carries rather than asking for them.
@@ -230,6 +246,11 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 			return err
 		}
 	}
+	if mode == model.ModeGuarded {
+		if err := checkGuarded(a, source, configPath, worktreeRepo); err != nil {
+			return err
+		}
+	}
 
 	// Advisory, and nothing is stored: the project can gain or lose a compose
 	// file later, so every invocation re-derives this.
@@ -270,6 +291,7 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 		// Kept on the row, like the workspace mount it accompanies, so every
 		// later command mounts the same repository without asking git again.
 		WorktreeRepo: worktreeRepo,
+		Mode:         mode,
 	}
 	// After the source is known, since the default file lives in it, and
 	// before the row is written, so a malformed agents.yaml creates nothing.
@@ -296,7 +318,10 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 	if opts.noFolder {
 		a.printf("container %s (workspace %s) with no folder\n", name, wsName)
 	} else {
-		a.printf("container %s (workspace %s) from %s\n", name, wsName, xpath.Shorten(source))
+		a.printf("container %s (workspace %s, %s) from %s\n", name, wsName, mode, xpath.Shorten(source))
+		if mode == model.ModeGuarded && c.GitGuard {
+			a.printf("guarded: the agent can read this repository's history but not commit; you commit and push\n")
+		}
 	}
 
 	if opts.noStart {
@@ -305,9 +330,103 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 	return a.start(ctx, wsName, c)
 }
 
-// folderSource works out what a --folder container is built from: the resolved
-// path, the project's own config if it has one, and a generated document if it
-// does not.
+// modeFor decides a new container's mode: what --mode said, checked against
+// the folder and the provider, or the provider's default.
+//
+// Guarded on local and isolated on k8s, so that a create with no flag works on
+// both: a pod has no host bind mounts, so a live folder is impossible there,
+// and copying the folder in is what the k8s provider has always done.
+func (a *app) modeFor(wsName string, opts createOpts) (model.Mode, error) {
+	if opts.noFolder {
+		if opts.mode != "" {
+			// Nothing to describe: no checkout is reached either way.
+			return "", usageErrorf("--mode applies to a folder; a --no-folder container has no checkout to guard or isolate")
+		}
+		return model.ModeNone, nil
+	}
+	kind, err := a.providerKind(wsName)
+	if err != nil {
+		return "", err
+	}
+	switch opts.mode {
+	case "":
+		if kind == model.KindK8s {
+			return model.ModeIsolated, nil
+		}
+		return model.ModeGuarded, nil
+	case model.ModeGuarded:
+		if kind == model.KindK8s {
+			return "", usageErrorf("--mode guarded needs a local provider: a pod cannot mount your folder live; " +
+				"use --mode isolated, the k8s default")
+		}
+		return model.ModeGuarded, nil
+	case model.ModeIsolated:
+		if kind != model.KindK8s {
+			// Until the local provider can seed a volume, an isolated row
+			// would bind-mount the folder live while saying it does not.
+			return "", usageErrorf("--mode isolated is not available on the local provider yet")
+		}
+		return model.ModeIsolated, nil
+	default:
+		return "", usageErrorf("unknown mode %q; use guarded or isolated", opts.mode)
+	}
+}
+
+// checkGuarded refuses what guarded mode cannot protect at all, and warns about
+// what it protects only in part.
+//
+// Refused: a project that names its own workspace mount, since .git then lands
+// where no read-only mount can be aimed. Warned: the .git files outside .git
+// that point host git at a repository — a submodule's, a worktree's — which
+// sit in the writable tree. Each warning names isolated mode, the one that
+// covers them.
+func checkGuarded(a *app, source, configPath, worktreeRepo string) error {
+	// A folder that is not a repository has no .git to guard, and a project
+	// file that does not parse is reported by the commands that read it.
+	if !isGitCheckout(source) && worktreeRepo == "" {
+		return nil
+	}
+	if configPath != "" {
+		custom, err := namesWorkspaceMount(configPath)
+		if err != nil {
+			return usageError(err)
+		}
+		if custom {
+			return movedWorkspaceError(configPath)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(source, ".gitmodules")); err == nil {
+		warnf(a, "this repository has submodules; guarded mode cannot stop the container repointing "+
+			"a submodule's .git file at a config of its own, which your git would then run. "+
+			"Use --mode isolated if that matters for this repository")
+	}
+	if worktreeRepo != "" {
+		warnf(a, "this folder is a git worktree; guarded mode cannot stop the container repointing "+
+			"its .git file at a config of its own, which your git would then run. "+
+			"Use --mode isolated if that matters for this repository")
+	}
+	return nil
+}
+
+// modeFlag parses --mode. Only the two a create may ask for: legacy is what
+// the migration writes for rows that predate modes, and none what a folderless
+// container is, so neither is a choice.
+type modeFlag struct{ target *model.Mode }
+
+func (f modeFlag) String() string {
+	if f.target == nil {
+		return ""
+	}
+	return string(*f.target)
+}
+
+func (f modeFlag) Set(v string) error {
+	*f.target = model.Mode(v)
+	return nil
+}
+
+func (modeFlag) Type() string { return "mode" }
+
 // refuseBroadFolder refuses the host's root or the operator's home as a
 // container's folder. Either mounts everything under it — every project, every
 // key in ~/.ssh — and the likeliest way to ask for one is a forgotten cd now
@@ -331,6 +450,9 @@ func refuseBroadFolder(folder string) error {
 	return nil
 }
 
+// folderSource works out what a --folder container is built from: the resolved
+// path, the project's own config if it has one, and a generated document if it
+// does not.
 func folderSource(ctx context.Context, wsName, name, folder string, opts createOpts, a *app) (source, configPath, generated, worktreeRepo string, err error) {
 	// Physical path, before anything stores or mounts it: the engine resolves
 	// the string inside its VM on macOS, where /tmp is a real directory rather

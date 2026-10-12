@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/duy0611/dev-cli/internal/model"
 	"github.com/duy0611/dev-cli/internal/provider"
 	"github.com/duy0611/dev-cli/internal/relay"
 )
@@ -68,6 +69,9 @@ func (f sshAgentFlags) override() (*bool, error) {
 // workspace's setting, unless the command's flag overrode it. The same rule
 // forwardAgent applies, for the audit record.
 func agentForwarded(t *target, override *bool) bool {
+	if t.container.Mode == model.ModeGuarded {
+		return false
+	}
 	if override != nil {
 		return *override
 	}
@@ -77,6 +81,22 @@ func agentForwarded(t *target, override *bool) bool {
 func (a *app) forwardAgent(ctx context.Context, t *target, override *bool,
 	environ []provider.EnvVar) ([]provider.EnvVar, func(), error) {
 	noop := func() {}
+	// A guarded container cannot commit, branch or fetch, since each writes to
+	// its read-only .git. What the relay could still do there is push commits
+	// that already exist — the operator's, made on the host — which is the one
+	// thing nobody asked it to. So none: refused when asked for by flag, and
+	// skipped, said once, when the workspace forwards by default.
+	if t.container.Mode == model.ModeGuarded {
+		if override != nil && *override {
+			return nil, noop, usageErrorf("container %s is guarded and cannot commit, so it has no use for "+
+				"the ssh agent; push from your machine, or use an isolated container", t.container.Name)
+		}
+		if override == nil && t.workspace.SSHForward {
+			fmt.Fprintf(os.Stderr, "dev: not forwarding the ssh agent into %s: a guarded container cannot commit, "+
+				"so pushing is done from your machine\n", t.container.Name)
+		}
+		return environ, noop, nil
+	}
 	forward := t.workspace.SSHForward
 	if override != nil {
 		forward = *override

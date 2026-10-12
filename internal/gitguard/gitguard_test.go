@@ -271,3 +271,28 @@ func TestCommondirPlanted(t *testing.T) {
 		t.Error("planted commondir not reported")
 	}
 }
+
+// A guarded checkout's .git is one read-only directory mount and nothing
+// inside it: a file mount is detached by a host rename, and on a
+// case-insensitive host a case variant of its name goes around it.
+func TestReadOnlyMountsOfAnOrdinaryCheckout(t *testing.T) {
+	root := repo(t)
+	l, _ := LayoutOf(root)
+	got := ReadOnlyMounts(l)
+	want := []string{"source=" + l.GitDir + ",target=" + l.ContainerGitDir + ",type=bind,readonly"}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Errorf("ReadOnlyMounts = %v, want %v", got, want)
+	}
+}
+
+// For a worktree, the repository's common directory is read-only at its own
+// path. The checkout's .git file stays in the writable tree: a single-file
+// mount on it would fail as every other one did, so it is a documented gap
+// rather than a mount that only looks like a guard.
+func TestReadOnlyWorktreeMounts(t *testing.T) {
+	got := ReadOnlyWorktreeMounts("/src/app/.git")
+	want := []string{"source=/src/app/.git,target=/src/app/.git,type=bind,readonly"}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Errorf("ReadOnlyWorktreeMounts = %v, want %v", got, want)
+	}
+}

@@ -426,24 +426,28 @@ local socket, so it works the same way from a pod.
 A container's workspace is your checkout, bind-mounted, so anything running in
 it can write anywhere in it — including `.git`. Host git runs programs named
 there: `core.fsmonitor` in `.git/config` runs on every `git status`, which your
-editor runs every few seconds, and hooks run on commit, checkout and push. So
-`dev` keeps the container from changing what host git runs:
+editor runs every few seconds, and hooks run on commit, checkout and push.
+[SECURITY.md](SECURITY.md) explains the risk and how to choose a mode; this
+section is what each mode does.
 
-- `.git/config` is read-only inside the container.
-- `.git/hooks` is a copy only the container sees, seeded from your hooks at
-  create and reset to them at every `rebuild` — a hook an agent installs runs
-  in the container and never on your host.
-- `.git` itself cannot be renamed or replaced from inside.
-- For a worktree container, the same applies to the repository's config and
-  hooks, and to the checkout's `.git` file and its administration files.
+**Guarded** (`--mode guarded`, the default on the local provider) mounts `.git`
+read-only, whole. Nothing under it can be written from inside — not its config,
+not its hooks, not a planted `commondir`, under any spelling of the name — and
+your own git on the host is unaffected: you can commit, push, set upstreams and
+change configuration while the container runs.
 
-What still works inside: `fetch`, `pull`, `commit`, `push origin <branch>`,
-`checkout -b`, and `git config --global` (which writes the state volume, not
-your repository). What does not: `git config <key>` and `git remote add` fail,
-and `push -u` / `checkout -b x origin/y` succeed but print
-`could not write config file` instead of recording the upstream. Hook installers
-that set `core.hooksPath`, such as husky, fail inside — run them once on the
-host and the container sees the result.
+What works inside: `git status`, `diff`, `log`, `blame`, anything that only
+reads. What does not: `commit`, `add`, `stash`, creating a branch, `fetch` and
+`pull`, all of which write to `.git` and fail with `Read-only file system`. You
+review the agent's edits in your checkout and commit them yourself. Tell the
+agent so in your project's agent instructions, or it will keep trying.
+
+A guarded container has no use for the ssh agent, so it gets none:
+`--ssh-agent` is refused, and a workspace created with `--ssh-forward` does not
+forward into it.
+
+For a git worktree, the repository's common directory is mounted read-only at
+its own path instead.
 
 Host git can also be pointed *into* the working tree: a `core.hooksPath` such as
 `.githooks` or `.husky`, or an `include.path` naming a file in the checkout.
@@ -454,7 +458,7 @@ counts too — and:
 
 - mounts each one read-only inside the container, with every directory between
   it and the workspace root pinned so it cannot be renamed away. The agent can
-  still read and run the hooks, and commit, but not change them.
+  still read and run the hooks, but not change them.
 - refuses a path no mount can hold, naming it and the setting: one that does
   not exist yet (`core.hooksPath .husky` before husky has created it), or one
   reached through a symlink inside the workspace, which the container could
@@ -462,6 +466,11 @@ counts too — and:
 - refuses a running or stopped container created before the setting appeared —
   you ran `make hooks` on the host after `create` — because mounts are fixed
   when a container is created. `dev container rebuild <name>` gives it them.
+- refuses one where a file held this way has become writable from inside. A
+  read-only mount on a single file is lifted when the file is saved on the host
+  — git and most editors save by renaming a new file over the old — and stays
+  lifted until the container restarts. `dev container stop` and `start` put it
+  back. Directories are not affected.
 
 None of this is decided at create, since the setting usually arrives later.
 Nor does it count as a configuration change for `rebuild`'s drift check: the
@@ -474,36 +483,34 @@ runs whatever the branch you check out puts there. Copying hooks into
 `.git/hooks` instead — this repository's `make hooks` does — makes installing a
 changed hook a step you take after reading it.
 
-A project whose `devcontainer.json` names its own `workspaceMount` or
-`workspaceFolder` puts `.git` where `dev` cannot aim a mount. For those, `dev`
-fingerprints `.git`, and whatever host git runs from the working tree, before
-each `exec`, `shell` and `start-agent` and compares it after, exiting 1 and
-naming what changed. That is detection, not prevention:
-between the change and the report, your editor's `git status` may already have
-run it. Do not run git in that checkout until you have restored what it names.
+What guarded does not cover:
 
-Two routes no mount can close:
+- **A submodule's `.git` file.** It sits in the working tree and points your git
+  at the submodule's repository; the container can repoint it. `create` warns
+  when the folder has submodules.
+- **A worktree checkout's `.git` file**, for the same reason. `create` warns
+  when the folder is a worktree.
+- **A nested repository** the agent creates in the working tree, which your
+  editor may find and run git in.
+- **A project whose `devcontainer.json` names its own `workspaceMount` or
+  `workspaceFolder`.** That puts `.git` where `dev` cannot mount it, so `create`
+  refuses it in guarded mode.
+- **Files that run only when you run them** — `.envrc`, `.vscode/tasks.json`, a
+  `Makefile`, `package.json` scripts, a hook manager's config in the tree
+  (lefthook's `lefthook.yml`, pre-commit's `.pre-commit-config.yaml`). The agent
+  edits those like any other file. Review before running workspace code.
 
-- A `.git/commondir` file, which points git at another directory's config. `dev`
-  refuses to run any command while one is present, and reports one that appears
-  during a command.
-- A nested repository the agent adds to the index as a submodule entry: host
-  `git status` goes into it and runs its config. Turn that off on your host with
-  `git config --global diff.ignoreSubmodules all`, at the cost of submodule
-  status in your own repositories.
+Isolated mode covers all of these, since your folder is never shared with the
+container.
 
-And what the guard does not try to cover: workspace files that run only when
-*you* run them, not because git does — `.envrc`, `.vscode/tasks.json`, a
-`Makefile`, `package.json` scripts, and hook managers that dispatch from a
-config file in the tree (lefthook's `lefthook.yml`, pre-commit's
-`.pre-commit-config.yaml`), whose installed hook is guarded but whose config is
-not. The agent edits those like any other file. Review before running workspace
-code there.
-
-The guard is set at create for a folder that is a git repository; `container
-list` and the audit log record it. Containers created before it existed are not
-guarded until recreated. The local provider only: a k8s pod has no host bind
-mount, and its workspace is a copy host git never reads.
+**Containers created before modes** keep the guard they were created with:
+`.git` writable, with `.git/config` read-only as a single file and `.git/hooks`
+a copy only the container sees. That guard has two known gaps — a git command
+on your host that writes repository configuration (`push -u`, `remote add`, your
+editor publishing a branch) lifts it until the container restarts, and on
+macOS a write to `.git/CONFIG` gets past it — and, for a project that moves its
+workspace, it only fingerprints `.git` around each command. Recreate such a
+container in a mode.
 
 ### Keep an agent's plugins across a rebuild
 
@@ -1016,8 +1023,8 @@ Removing the active workspace leaves none active rather than a dangling pointer.
 ### container
 
 ```
-dev container create NAME [--folder PATH] [--generate] [--tools LIST] [--no-persist-state]
-                         [--agent-config PATH | --no-agent-config] [--no-start]
+dev container create NAME [--folder PATH] [--mode guarded|isolated] [--generate] [--tools LIST]
+                         [--no-persist-state] [--agent-config PATH | --no-agent-config] [--no-start]
                          [--allow-privileged]
 dev container create NAME --no-folder [--tools LIST] [--no-persist-state]
                          [--agent-config PATH | --no-agent-config] [--no-start]
@@ -1045,6 +1052,7 @@ mount everything under it.
 | Flag | Meaning |
 |---|---|
 | `--folder` | host folder holding the project; bind-mounted on local, copied in on k8s. Default: the current directory |
+| `--mode` | `guarded`: the folder live, `.git` read-only; `isolated`: a copy the agent owns. Default `guarded` on local, `isolated` on k8s. Fixed for the container's life |
 | `--no-folder` | no host directory at all; work lives in a volume `dev` owns |
 | `--generate` | render a base Ubuntu configuration when the folder ships none |
 | `--tools` | comma-separated catalog tools for a generated container |
@@ -1053,6 +1061,12 @@ mount everything under it.
 | `--no-agent-config` | apply no agents.yaml, even if the project has one |
 | `--from` | start from another generated container's tools and settings in this workspace |
 | `--no-start` | record the container without starting it |
+
+The mode is fixed when the container is created and kept by `rebuild`; see
+[What a container can do to your git](#what-a-container-can-do-to-your-git). A
+`--no-folder` container takes no mode. `--mode guarded` on a k8s workspace is
+exit 2, since a pod cannot mount your folder live; isolated on the local
+provider is not available yet.
 
 With `--from`, `--generate` is implied and `--tools` takes only `+`/`-` changes.
 A source that does not exist is exit 3. A source built from a project's own

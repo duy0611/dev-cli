@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // runExpectFail runs dev and returns its combined output, failing the test if
@@ -46,14 +47,34 @@ func gitFixture(t *testing.T) string {
 	return dir
 }
 
-// TestSmokeGitGuard drives the git guard against a real engine and the real
-// devcontainer CLI, which is the only place the unit tests' assumptions about
-// file bind mounts and the CLI's git-root layout get checked.
+// TestSmokeGitGuard drives guarded mode against a real engine and the real
+// devcontainer CLI: .git is read-only whole, by any name, before and after host
+// git writes its config, and host git keeps working beside the container.
+//
+// The host writes are the point. The single-file guard this replaced held until
+// host git renamed a new config over the old one, which detaches a file mount
+// on Linux at once and on a macOS podman machine about 1.5s later; a directory
+// mount is never renamed over. Each check after a host write is therefore
+// watched for a few seconds rather than made once.
 func TestSmokeGitGuard(t *testing.T) {
 	requireBinaries(t, "devcontainer", "docker", "git")
 	t.Setenv("DEV_STATE", t.TempDir())
 	bin := buildBinary(t)
 	project := gitFixture(t)
+	hostGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = project
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("host git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(project, "f.txt"), []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hostGit("add", "f.txt")
+	hostGit("commit", "-q", "-m", "init")
+
 	const name = "dev-smoke-gitguard"
 	dev := func(args ...string) string { t.Helper(); return run(t, bin, args...) }
 	t.Cleanup(func() { _ = exec.Command(bin, "container", "remove", name, "--force").Run() })
@@ -63,46 +84,79 @@ func TestSmokeGitGuard(t *testing.T) {
 	t.Log("creating a guarded container; the first run pulls an image")
 	dev("container", "create", name, "--folder", project)
 
-	gitdir := "/workspaces/" + filepath.Base(project) + "/.git"
-	sh := func(script string) string {
+	ws := "/workspaces/" + filepath.Base(project)
+	gitdir := ws + "/.git"
+	sh := func(script string) (string, error) {
 		t.Helper()
-		return dev("container", "exec", name, "--", "sh", "-c", script)
+		out, err := exec.Command(bin, "container", "exec", name, "--", "sh", "-c", script).CombinedOutput()
+		return string(out), err
 	}
 
-	// config is read-only: a write from inside fails, and the host file is
-	// untouched.
-	sh("if echo '[core]' >> " + gitdir + "/config 2>/dev/null; then echo WROTE; else echo refused; fi | grep -q refused")
-	host, err := os.ReadFile(filepath.Join(project, ".git", "config"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(host), "fsmonitor") {
-		t.Errorf("host .git/config changed: %s", host)
+	// The cost of the mode: reading works, writing to the repository does not.
+	// alpine has no git, so the read side is checked with a plain read; git's
+	// own refusal is the same EROFS any writer gets.
+	if out, err := sh("cat " + gitdir + "/HEAD"); err != nil {
+		t.Errorf("reading .git inside failed: %v\n%s", err, out)
 	}
 
-	// hooks are a copy: the project's hook is there, and a hook written inside
-	// never reaches the host.
-	sh("test -x " + gitdir + "/hooks/pre-commit")
-	sh("printf '#!/bin/sh\\necho pwned\\n' > " + gitdir + "/hooks/post-checkout && chmod +x " + gitdir + "/hooks/post-checkout")
-	if _, err := os.Stat(filepath.Join(project, ".git", "hooks", "post-checkout")); !os.IsNotExist(err) {
-		t.Error("a hook written in the container reached the host")
+	// Every route into .git, by any spelling: the exact names, a new file, and
+	// the case variants that got past single-file mounts on macOS.
+	probes := map[string]string{
+		"config":           gitdir + "/config",
+		"info/attributes":  gitdir + "/info/attributes",
+		"a new hook":       gitdir + "/hooks/smoke-probe",
+		"commondir":        gitdir + "/commondir",
+		"CONFIG":           gitdir + "/CONFIG",
+		".GIT/config":      ws + "/.GIT/config",
+		"HOOKS/a new hook": gitdir + "/HOOKS/smoke-probe-upper",
 	}
+	tryAll := func(when string) {
+		t.Helper()
+		for label, path := range probes {
+			if out, err := sh("echo '# smoke-probe' >> " + path); err == nil {
+				t.Errorf("%s: a write to %s succeeded inside the container: %s", when, label, out)
+			}
+		}
+		for _, f := range []string{"commondir", filepath.Join("hooks", "smoke-probe"), filepath.Join("hooks", "smoke-probe-upper")} {
+			if _, err := os.Stat(filepath.Join(project, ".git", f)); err == nil {
+				t.Errorf("%s: the container created .git/%s on the host", when, f)
+			}
+		}
+		b, err := os.ReadFile(filepath.Join(project, ".git", "config"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), "smoke-probe") {
+			t.Errorf("%s: a write from the container reached the host's .git/config:\n%s", when, b)
+		}
+	}
+	tryAll("before any host write")
 
 	// .git cannot be renamed away from under the guard.
-	sh("if mv " + gitdir + " " + gitdir + ".old 2>/dev/null; then echo MOVED; else echo refused; fi | grep -q refused")
-
-	// rebuild resets the hooks copy to the project's.
-	dev("container", "rebuild", name)
-	sh("test ! -e " + gitdir + "/hooks/post-checkout")
-
-	// A planted commondir makes the next command refuse to run.
-	if err := os.WriteFile(filepath.Join(project, ".git", "commondir"), []byte("/elsewhere\n"), 0o644); err != nil {
-		t.Fatal(err)
+	if out, err := sh("mv " + gitdir + " " + gitdir + ".old"); err == nil {
+		t.Errorf("renaming .git inside succeeded: %s", out)
 	}
-	if out := runExpectFail(t, bin, "container", "exec", name, "--", "true"); !strings.Contains(out, "commondir") {
-		t.Errorf("planted commondir not reported:\n%s", out)
+
+	// What broke the single-file guard: host git rewriting its config, setting
+	// an upstream, committing. Each must succeed, and the guard must hold.
+	for _, args := range [][]string{
+		{"config", "smoke.host", "1"},
+		{"branch", "smoke-side"},
+		{"branch", "-u", strings.TrimSpace(gitOut(t, project, "rev-parse", "--abbrev-ref", "HEAD")), "smoke-side"},
+		{"commit", "-q", "--allow-empty", "-m", "host commit while the container runs"},
+	} {
+		hostGit(args...)
+		label := "after host git " + strings.Join(args, " ")
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, err := sh("( : >> " + gitdir + "/config ) 2>/dev/null"); err == nil {
+				t.Errorf("%s: .git/config opens for write inside the container", label)
+				break
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+		tryAll(label)
 	}
-	_ = os.Remove(filepath.Join(project, ".git", "commondir"))
 
 	// A core.hooksPath set on the host after create — `make hooks`, husky —
 	// points host git into the workspace. The running container predates it,
@@ -114,18 +168,18 @@ func TestSmokeGitGuard(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(hooksDir, "commit-msg"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	gitHost := exec.Command("git", "config", "core.hooksPath", ".githooks")
-	gitHost.Dir = project
-	if out, err := gitHost.CombinedOutput(); err != nil {
-		t.Fatalf("git config: %v\n%s", err, out)
-	}
+	hostGit("config", "core.hooksPath", ".githooks")
 	if out := runExpectFail(t, bin, "container", "exec", name, "--", "true"); !strings.Contains(out, "rebuild") {
 		t.Errorf("a container predating core.hooksPath was not refused:\n%s", out)
 	}
 	dev("container", "rebuild", name)
-	tree := "/workspaces/" + filepath.Base(project) + "/.githooks"
-	sh("if echo pwned >> " + tree + "/commit-msg 2>/dev/null; then echo WROTE; else echo refused; fi | grep -q refused")
-	sh("if mv " + tree + " " + tree + ".old 2>/dev/null; then echo MOVED; else echo refused; fi | grep -q refused")
+	tree := ws + "/.githooks"
+	if out, err := sh("echo pwned >> " + tree + "/commit-msg"); err == nil {
+		t.Errorf("a write to the tree hooks succeeded: %s", out)
+	}
+	if out, err := sh("mv " + tree + " " + tree + ".old"); err == nil {
+		t.Errorf("renaming the tree hooks succeeded: %s", out)
+	}
 
 	// The audit log holds the run, and no setting value.
 	if out := dev("audit", "--container", name); !strings.Contains(out, "create") || !strings.Contains(out, "exec") {

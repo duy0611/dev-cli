@@ -94,6 +94,38 @@ func Mounts(l Layout, hooks string) []string {
 	}
 }
 
+// ReadOnlyMounts returns the mounts entry that guards an ordinary checkout in
+// guarded mode: all of .git, read-only, as one directory mount.
+//
+// One directory and nothing inside it, which is what makes it hold where
+// Mounts does not. Host git replaces files *inside* .git by writing a lock
+// and renaming it over the original, and since Linux 3.18 renaming over a
+// file that is a mount point in another namespace detaches the mount — so a
+// read-only mount on .git/config opens the moment the host writes its config.
+// git never replaces .git itself, so a mount on the directory survives. And on
+// a case-insensitive host, .git/CONFIG misses a mount on .git/config but
+// resolves through the directory mount, so it is refused too.
+//
+// The cost is that nothing under .git is writable: the agent can read history
+// but cannot commit, branch or fetch. That is guarded mode's trade.
+func ReadOnlyMounts(l Layout) []string {
+	return []string{bind(l.GitDir, l.ContainerGitDir, true)}
+}
+
+// ReadOnlyWorktreeMounts returns the mounts entry that guards a worktree
+// container in guarded mode: the repository's common directory, read-only at
+// its own host path, so the checkout's gitdir line resolves (invariant 11) and
+// nothing under it can be written.
+//
+// The checkout's own .git file is left alone. It sits in the writable tree
+// and host git follows it, so a container can repoint it — but a single-file
+// mount on it would be detached by a host rewrite and, on macOS, gone around
+// by .GIT, exactly as the mounts this replaces were. A documented gap is
+// better than a mount that only looks like a guard.
+func ReadOnlyWorktreeMounts(common string) []string {
+	return []string{bind(common, common, true)}
+}
+
 // WorktreeMounts returns the mounts entries that guard a worktree container,
 // whose checkout and common directory are each mounted at their own host path
 // (invariant 11). common is git's common directory, checkout the worktree.

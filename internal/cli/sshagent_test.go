@@ -389,3 +389,50 @@ func TestRelayDropsFields(t *testing.T) {
 		t.Errorf("relayDrops = %v, want %v", got, want)
 	}
 }
+
+// A guarded container cannot commit, so the only thing the relay could still
+// do there is push what the operator committed. --ssh-agent is refused, by
+// name of the mode, before anything tries to forward.
+func TestForwardAgentRefusedOnAGuardedContainer(t *testing.T) {
+	a, _ := newTestApp(t)
+	on := true
+	t2 := &target{
+		workspace: model.Workspace{Name: "ws"},
+		container: model.Container{Name: "api", Mode: model.ModeGuarded},
+		provider:  notForwarder{},
+	}
+
+	_, _, err := a.forwardAgent(context.Background(), t2, &on, nil)
+	if got := exitCodeOf(err); got != exitUsage {
+		t.Fatalf("exit code = %d (%v), want %d", got, err, exitUsage)
+	}
+	if !strings.Contains(err.Error(), "guarded") {
+		t.Errorf("error %q does not name the mode", err)
+	}
+}
+
+// A workspace that forwards does not forward into a guarded container: a
+// passthrough, with no relay attempted and no error.
+func TestWorkspaceForwardingSkipsAGuardedContainer(t *testing.T) {
+	a, _ := newTestApp(t)
+	in := []provider.EnvVar{{Key: "FOO", Value: "bar"}}
+	t2 := &target{
+		workspace: model.Workspace{Name: "ws", SSHForward: true},
+		container: model.Container{Name: "api", Mode: model.ModeGuarded},
+		provider:  notForwarder{},
+	}
+
+	out, stop, err := a.forwardAgent(context.Background(), t2, nil, in)
+	if err != nil {
+		t.Fatalf("forwardAgent: %v", err)
+	}
+	stop()
+	for _, e := range out {
+		if e.Key == sshAuthSockKey {
+			t.Error("SSH_AUTH_SOCK was set for a guarded container")
+		}
+	}
+	if agentForwarded(t2, nil) {
+		t.Error("the audit record would say the agent was forwarded")
+	}
+}

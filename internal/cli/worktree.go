@@ -225,6 +225,23 @@ func rollback(ctx context.Context, a *app, repo, path string) {
 	}
 }
 
+// providerKind is the kind of the provider a workspace names.
+func (a *app) providerKind(workspace string) (model.ProviderKind, error) {
+	st, err := a.store()
+	if err != nil {
+		return "", err
+	}
+	ws, err := st.GetWorkspace(workspace)
+	if err != nil {
+		return "", err
+	}
+	rec, err := st.GetProvider(ws.ProviderName)
+	if err != nil {
+		return "", err
+	}
+	return rec.Kind, nil
+}
+
 // requireLocalProvider refuses a workspace whose provider is not local.
 //
 // For a container on a worktree checkout: Kubernetes has no host bind mounts,
