@@ -349,3 +349,35 @@ func TestTrackedAndAllFiles(t *testing.T) {
 		t.Errorf("AllFiles = %v, want [.env .gitignore f]", all)
 	}
 }
+
+// A linked worktree answers with the repository it belongs to.
+func TestWorktreeRepoOfALinkedWorktree(t *testing.T) {
+	requireGit(t)
+	repo := initRepo(t)
+	wt := filepath.Join(tempDir(t), "wt")
+	run(t, repo, "worktree", "add", "-q", wt, "-b", "feat")
+
+	got, ok := WorktreeRepo(t.Context(), wt)
+	if !ok || got != filepath.Join(repo, ".git") {
+		t.Errorf("WorktreeRepo = %q, %v; want the repository's .git", got, ok)
+	}
+}
+
+// The main checkout, a subdirectory of one, and a folder outside any
+// repository are not linked worktrees: their .git is reached directly, so no
+// second mount is needed.
+func TestWorktreeRepoOfAnythingElse(t *testing.T) {
+	requireGit(t)
+	repo := initRepo(t)
+	sub := filepath.Join(repo, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for label, dir := range map[string]string{
+		"main checkout": repo, "subdirectory": sub, "outside a repository": tempDir(t),
+	} {
+		if got, ok := WorktreeRepo(t.Context(), dir); ok {
+			t.Errorf("%s: WorktreeRepo = %q, true; want not a worktree", label, got)
+		}
+	}
+}

@@ -142,6 +142,29 @@ func BranchExists(ctx context.Context, repo, branch string) bool {
 	return cmd.Run() == nil
 }
 
+// WorktreeRepo returns the repository's common directory when dir is in a
+// linked worktree, and false for anything else — the main checkout, a folder
+// outside any repository.
+//
+// A linked worktree is told apart by its git directory differing from the
+// common one: the main checkout's are the same directory, while a worktree's
+// is <common>/worktrees/<name>. Asked of git rather than by reading the .git
+// file, so a worktree git knows about is recognised however it was made.
+func WorktreeRepo(ctx context.Context, dir string) (string, bool) {
+	cmd := exec.CommandContext(ctx, gitBin,
+		"rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", false
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) != 2 || lines[0] == lines[1] {
+		return "", false
+	}
+	return lines[1], true
+}
+
 // Toplevel returns the root of the checkout holding dir.
 //
 // Unlike CommonDir, this answers the worktree dir is in, not the repository —

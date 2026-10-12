@@ -261,10 +261,12 @@ func TestWorktreeContainerMountsTheGuard(t *testing.T) {
 	repo := initRepo(t)
 	path := filepath.Join(t.TempDir(), "wt")
 
-	opts := baseOpts(repo, path)
-	opts.create.noStart = false
-	if err := runWorktreeCreate(t.Context(), a, "", "feat", opts); err != nil {
+	if err := runWorktreeCreate(t.Context(), a, "", "feat", checkoutOpts(repo, path)); err != nil {
 		t.Fatalf("worktree create: %v", err)
+	}
+	if err := runContainerCreate(t.Context(), a, "", "feat", path,
+		createOpts{generate: true, tools: []string{"yq"}}); err != nil {
+		t.Fatalf("container create: %v", err)
 	}
 	st, _ := a.store()
 	w, err := st.GetWorktree("ws", "feat")

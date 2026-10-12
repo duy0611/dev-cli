@@ -56,18 +56,21 @@ func TestSmokeWorktree(t *testing.T) {
 	}
 
 	path := filepath.Join(t.TempDir(), "wt")
+	// The container first: worktree remove refuses while one is on the
+	// checkout.
 	t.Cleanup(func() {
-		_ = exec.Command(bin, "worktree", "remove", name, "--workspace", ws, "--force").Run()
 		_ = exec.Command(bin, "container", "remove", name, "--workspace", ws, "--force").Run()
+		_ = exec.Command(bin, "worktree", "remove", name, "--workspace", ws, "--force").Run()
 	})
 
 	dev("provider", "configure", "dev-smoke-worktree-local", "--kind", "local")
 	dev("workspace", "init", ws, "--provider", "dev-smoke-worktree-local")
 
-	t.Log("creating the worktree; the first run pulls a base image")
 	dev("worktree", "create", name, "--workspace", ws,
-		"--repo", repo, "--branch", "feat", "--path", path,
-		"--generate", "--tools", "yq", "--no-herdr")
+		"--repo", repo, "--branch", "feat", "--path", path, "--no-herdr")
+	t.Log("creating a container on the worktree; the first run pulls a base image")
+	dev("container", "create", name, "--workspace", ws, "--folder", path,
+		"--generate", "--tools", "yq")
 
 	// dev bind-mounts the checkout at its *resolved* path (invariant 2 and the
 	// gitdir invariant both turn on this): xpath.Resolve runs after the add and
@@ -111,6 +114,11 @@ func TestSmokeWorktree(t *testing.T) {
 		t.Errorf("the worktree registration was pruned away:\n%s", list)
 	}
 
+	// Refused while the container is on it, then removed once it is not.
+	if out, err := exec.Command(bin, "worktree", "remove", name, "--workspace", ws).CombinedOutput(); err == nil {
+		t.Errorf("worktree remove succeeded with a container still on it:\n%s", out)
+	}
+	dev("container", "remove", name, "--workspace", ws)
 	// No --force, deliberately: everything carried over is ignored, and git
 	// removes ignored files with the checkout. A copy that blocked removal
 	// would turn every seeded worktree into one that needs forcing.

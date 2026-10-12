@@ -12,6 +12,7 @@ import (
 
 	"github.com/duy0611/dev-cli/internal/dcconfig"
 	"github.com/duy0611/dev-cli/internal/dcgen"
+	"github.com/duy0611/dev-cli/internal/gitwt"
 	"github.com/duy0611/dev-cli/internal/model"
 	"github.com/duy0611/dev-cli/internal/provider"
 	"github.com/duy0611/dev-cli/internal/store"
@@ -183,9 +184,10 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 	}
 
 	var (
-		source     string
-		configPath string
-		generated  string
+		source       string
+		configPath   string
+		generated    string
+		worktreeRepo string
 	)
 	if opts.noFolder {
 		// No project, so nothing can ship a configuration and there is nothing
@@ -212,12 +214,20 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 			}
 		}
 	} else {
-		source, configPath, generated, err = folderSource(wsName, name, folder, opts, a)
+		source, configPath, generated, worktreeRepo, err = folderSource(ctx, wsName, name, folder, opts, a)
 		if err != nil {
 			return err
 		}
 		if defaulted {
 			a.printf("using %s (the current directory)\n", xpath.Shorten(source))
+		}
+	}
+
+	// A worktree's .git file and the repository's backlink are both absolute
+	// host paths, which a pod cannot reach.
+	if worktreeRepo != "" {
+		if err := a.requireLocalProvider(wsName); err != nil {
+			return err
 		}
 	}
 
@@ -253,9 +263,13 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 		// The operator's choice, by flag, and nothing else's: a project file
 		// the agent can edit must not be able to grant it.
 		AllowPrivileged: opts.allowPrivileged,
-		// A folder that is a git repository today. Fixed at create, like the
-		// other guards; a folderless container has no host .git at all.
-		GitGuard: !opts.noFolder && isGitCheckout(source),
+		// A folder that is a git repository today, a worktree's included.
+		// Fixed at create, like the other guards; a folderless container has
+		// no host .git at all.
+		GitGuard: !opts.noFolder && (isGitCheckout(source) || worktreeRepo != ""),
+		// Kept on the row, like the workspace mount it accompanies, so every
+		// later command mounts the same repository without asking git again.
+		WorktreeRepo: worktreeRepo,
 	}
 	// After the source is known, since the default file lives in it, and
 	// before the row is written, so a malformed agents.yaml creates nothing.
@@ -317,14 +331,24 @@ func refuseBroadFolder(folder string) error {
 	return nil
 }
 
-func folderSource(wsName, name, folder string, opts createOpts, a *app) (source, configPath, generated string, err error) {
+func folderSource(ctx context.Context, wsName, name, folder string, opts createOpts, a *app) (source, configPath, generated, worktreeRepo string, err error) {
 	// Physical path, before anything stores or mounts it: the engine resolves
 	// the string inside its VM on macOS, where /tmp is a real directory rather
 	// than a symlink to /private/tmp, so an unresolved path mounts an empty
 	// directory with no error to show for it.
 	source, err = xpath.Resolve(folder)
 	if err != nil {
-		return "", "", "", usageError(err)
+		return "", "", "", "", usageError(err)
+	}
+	// A linked worktree's .git file names its repository by absolute host
+	// path, so the container needs that repository mounted at the same path or
+	// git fails inside it (invariant 11). Read from git here rather than from
+	// a worktree row, so one made by `git worktree add` or by Herdr is mounted
+	// as correctly as one dev made.
+	mount := dcgen.Mount{}
+	if repo, ok := gitwt.WorktreeRepo(ctx, source); ok {
+		worktreeRepo = repo
+		mount = worktreeMount(repo, source)
 	}
 	configPath, err = dcconfig.Find(source)
 	switch {
@@ -332,30 +356,31 @@ func folderSource(wsName, name, folder string, opts createOpts, a *app) (source,
 		// The project ships one. Generating a second would shadow the
 		// definition the project owns, with no way to tell from the outside
 		// which of the two built the container.
-		return "", "", "", usageErrorf("%s already has a devcontainer config; --generate would shadow it",
+		return "", "", "", "", usageErrorf("%s already has a devcontainer config; --generate would shadow it",
 			xpath.Shorten(source))
 	case err != nil && !errors.Is(err, dcconfig.ErrNoConfig):
-		return "", "", "", usageError(err)
+		return "", "", "", "", usageError(err)
 	}
 
 	if errors.Is(err, dcconfig.ErrNoConfig) {
 		// A folder with no configuration of its own is not the end of the
 		// road: dev can render one, and keeps it in the database rather than
 		// writing into a project it does not own. The zero Mount leaves the
-		// CLI's own bind mount of the folder in place.
-		generated, err = generatedConfigFor(name, opts.generate, opts.tools, dcgen.Mount{},
+		// CLI's own bind mount of the folder in place; a worktree's names both
+		// of its host paths.
+		generated, err = generatedConfigFor(name, opts.generate, opts.tools, mount,
 			stateFor(!opts.noPersistState, wsName, name), os.Stdin, a.out)
 		if err != nil {
-			return "", "", "", err
+			return "", "", "", "", err
 		}
 		if generated == "" {
-			return "", "", "", usageErrorf("no devcontainer config in %s "+
+			return "", "", "", "", usageErrorf("no devcontainer config in %s "+
 				"(--generate builds a base Ubuntu one; dev container tools lists what it can add)",
 				source)
 		}
 		configPath = ""
 	}
-	return source, configPath, generated, nil
+	return source, configPath, generated, worktreeRepo, nil
 }
 
 // composeWarning says why a compose project will not get its state volume, or
@@ -723,27 +748,10 @@ func runContainerRemove(ctx context.Context, a *app, workspace, name string, for
 		return err
 	}
 
-	// A warning rather than a refusal: `container remove` can perfectly well
-	// remove this container, and an operator who wants the container gone and
-	// the checkout kept has no other way to say so. What they must not have is
-	// a checkout on disk that nothing records.
-	w, wtErr := st.GetWorktree(t.workspace.Name, name)
-	if wtErr == nil {
-		warnf(a, "%s was a worktree; the checkout at %s stays on disk "+
-			"(dev worktree remove %s would have taken both)",
-			name, xpath.Shorten(w.Path), name)
-	}
-
+	// A container on a worktree checkout leaves the checkout and its record:
+	// both belong to the worktree, which `dev worktree remove` takes.
 	if err := st.DeleteContainer(t.workspace.Name, name); err != nil {
 		return err
-	}
-	// The worktree row no longer goes with the container by cascade, and
-	// while `worktree create` still makes the two together, a row naming a
-	// container that is gone would mislead `worktree list`.
-	if wtErr == nil {
-		if err := st.DeleteWorktree(t.workspace.Name, name); err != nil {
-			return err
-		}
 	}
 	removeHooksCopy(t.workspace.Name, name)
 	a.record("remove", t.workspace.Name, name, nil)

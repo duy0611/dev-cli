@@ -273,16 +273,24 @@ cannot implement it.
     container through `--override-config`, on `up` and `exec` alike (see
     invariant 10; there is no separate `--mount` route to keep off `execArgs`,
     because none of this uses `--mount`). `model.Container.WorktreeRepo` carries
-    the common directory into that merge for the length of one invocation; it is
-    set by `a.resolve` and `a.start` from the `worktrees` table, not persisted,
-    and empty for any container that is not worktree-backed. Both mounts are
-    rebuilt from the `worktrees` row in `rewriteGeneratedTools`, because that
-    function re-renders the whole generated document and drops anything it
-    cannot derive, exactly as in invariant 10.
+    the common directory into that merge. It is a column, read from git by
+    `container create` (`gitwt.WorktreeRepo`) and fixed then like the workspace
+    mount, so a worktree made by plain `git worktree add` is mounted as
+    correctly as one `dev worktree create` made; it is empty for any container
+    whose folder is not a linked worktree. Both mounts are rebuilt from it in
+    `rewriteGeneratedTools`, because that function re-renders the whole
+    generated document and drops anything it cannot derive, exactly as in
+    invariant 10.
 
-    k8s refuses worktrees outright: a pod has no host bind mounts, and a
-    streamed copy of the object store would drift from the host with nothing to
-    push it back.
+    `dev worktree create` makes the checkout and records it; it makes no
+    container. The `worktrees` table belongs to the workspace, not to a
+    container: `worktree remove` refuses while a container's folder is the
+    checkout, and `workspace remove` refuses while worktrees exist, so a
+    checkout on disk is never left with no row naming it.
+
+    k8s refuses a container on a worktree outright: a pod has no host bind
+    mounts, and a streamed copy of the object store would drift from the host
+    with nothing to push it back.
 
 ## Kubernetes provider (experimental)
 

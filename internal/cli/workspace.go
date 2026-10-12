@@ -70,6 +70,20 @@ func runWorkspaceRemove(a *app, name string) error {
 		return usageErrorf("workspace %s still holds %d container(s): %s",
 			name, len(names), strings.Join(names, ", "))
 	}
+	// Worktrees too: the rows would go by cascade and leave checkouts on disk
+	// that nothing records, which `dev worktree remove` could no longer find.
+	worktrees, err := st.ListWorktrees(name)
+	if err != nil {
+		return err
+	}
+	if len(worktrees) > 0 {
+		names := make([]string, 0, len(worktrees))
+		for _, w := range worktrees {
+			names = append(names, w.Name)
+		}
+		return usageErrorf("workspace %s still holds %d worktree(s): %s; remove them with dev worktree remove",
+			name, len(names), strings.Join(names, ", "))
+	}
 
 	if err := st.DeleteWorkspace(name); err != nil {
 		return err

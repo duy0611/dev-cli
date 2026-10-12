@@ -48,26 +48,29 @@ func initRepo(t *testing.T) string {
 	return dir
 }
 
-// baseOpts is a worktree create that always keeps herdr out of a unit test:
-// a host that has herdr installed should not have its daemon probed or its
-// sidebar written to just because a test made a checkout.
-func baseOpts(repo, path string) worktreeOpts {
-	return worktreeOpts{
-		repo: repo, branch: "feat", path: path, noHerdr: true,
-		create: createOpts{generate: true, noStart: true, tools: []string{"yq"}},
+// worktreeWithContainer makes a checkout with `worktree create` and a
+// container on it with `container create`, both named name — what one
+// `worktree create` used to do. opts are the container's; the defaults
+// generate a configuration and do not start, so no engine is needed.
+func worktreeWithContainer(t *testing.T, a *app, name, repo, path string, opts createOpts) {
+	t.Helper()
+	wo := checkoutOpts(repo, path)
+	wo.branch = name
+	if err := runWorktreeCreate(t.Context(), a, "", name, wo); err != nil {
+		t.Fatalf("worktree create %s: %v", name, err)
 	}
+	containerOn(t, a, name, path, opts)
 }
 
-func TestWorktreeCreateWritesBothRows(t *testing.T) {
+// A container on a checkout `worktree create` made gets the repository mounted
+// at its own host path, or git does not work inside it.
+func TestContainerOnAWorktreeBindsTheRepository(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
 	repo := initRepo(t)
 	path := filepath.Join(t.TempDir(), "wt")
-
-	if err := runWorktreeCreate(t.Context(), a, "", "feat", baseOpts(repo, path)); err != nil {
-		t.Fatalf("worktree create: %v", err)
-	}
+	worktreeWithContainer(t, a, "feat", repo, path, createOpts{})
 
 	st, err := a.store()
 	if err != nil {
@@ -91,20 +94,19 @@ func TestWorktreeCreateWritesBothRows(t *testing.T) {
 		t.Errorf("worktree path %q and container source %q disagree", w.Path, c.Source)
 	}
 	// The repository is the common directory, which is what gets mounted.
-	if !strings.HasSuffix(w.Repo, ".git") {
-		t.Errorf("repo = %q, want git's common directory", w.Repo)
+	if !strings.HasSuffix(w.Repo, ".git") || c.WorktreeRepo != w.Repo {
+		t.Errorf("repo = %q, container's = %q; want git's common directory on both", w.Repo, c.WorktreeRepo)
 	}
-	// The generated document carries both mounts, or git will not work inside.
 	if !strings.Contains(c.GeneratedConfig, w.Repo) {
 		t.Errorf("generated config does not bind the repository:\n%s", c.GeneratedConfig)
 	}
 }
 
-// A checkout of a repository that ships its own .devcontainer takes the
-// project's config untouched — dev may not write into it (invariant 9) — so it
-// gets no generated document, and its two bind mounts are merged into a
-// per-invocation override instead (dcgen.OverlayWorktree).
-func TestWorktreeCreateUsesTheProjectsOwnConfig(t *testing.T) {
+// A container on a checkout of a repository that ships its own .devcontainer
+// takes the project's config untouched — dev may not write into it (invariant
+// 9) — so it gets no generated document, and its two bind mounts are merged
+// into a per-invocation override instead (dcgen.OverlayWorktree).
+func TestContainerOnAWorktreeUsesTheProjectsOwnConfig(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -127,11 +129,13 @@ func TestWorktreeCreateUsesTheProjectsOwnConfig(t *testing.T) {
 		}
 	}
 
-	opts := baseOpts(repo, filepath.Join(t.TempDir(), "wt"))
-	opts.create.generate = false // the project ships one
-	opts.create.tools = nil
-	if err := runWorktreeCreate(t.Context(), a, "", "feat", opts); err != nil {
+	path := filepath.Join(t.TempDir(), "wt")
+	if err := runWorktreeCreate(t.Context(), a, "", "feat", checkoutOpts(repo, path)); err != nil {
 		t.Fatalf("worktree create: %v", err)
+	}
+	// The project ships one, so neither --generate nor --tools.
+	if err := runContainerCreate(t.Context(), a, "", "feat", path, createOpts{noStart: true}); err != nil {
+		t.Fatalf("container create: %v", err)
 	}
 
 	st, err := a.store()
@@ -148,48 +152,10 @@ func TestWorktreeCreateUsesTheProjectsOwnConfig(t *testing.T) {
 	if c.ConfigPath == "" {
 		t.Error("the project's own config was not recorded")
 	}
-	// The worktree row is still written: it is what materialise reads to build
-	// the merged override, and what `remove` reads to find the checkout.
-	if _, err := st.GetWorktree("ws", "feat"); err != nil {
-		t.Errorf("no worktree row for a project-owned checkout: %v", err)
-	}
-}
-
-// --generate over a project that ships its own config would shadow it, with no
-// way to tell from outside which of the two built the container.
-func TestWorktreeCreateRefusesToShadowAProjectConfig(t *testing.T) {
-	requireGit(t)
-	a, _ := newTestApp(t)
-	seedWorkspace(t, a)
-	repo := initRepo(t)
-
-	dc := filepath.Join(repo, ".devcontainer")
-	if err := os.MkdirAll(dc, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dc, "devcontainer.json"),
-		[]byte(`{"name":"project","image":"ubuntu"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	for _, args := range [][]string{{"add", "-A"}, {"commit", "-qm", "add devcontainer"}} {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = repo
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-
-	path := filepath.Join(t.TempDir(), "wt")
-	err := runWorktreeCreate(t.Context(), a, "", "feat", baseOpts(repo, path))
-	if err == nil {
-		t.Fatal("--generate was accepted over a project's own config")
-	}
-	if got := exitCodeOf(err); got != exitUsage {
-		t.Errorf("exit code = %d, want %d", got, exitUsage)
-	}
-	// And the checkout was rolled back, since the create failed.
-	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
-		t.Errorf("the checkout at %s outlived a failed create", path)
+	// The repository is on the row: it is what materialise reads to build the
+	// merged override.
+	if c.WorktreeRepo == "" {
+		t.Error("no repository recorded for a project-owned worktree container")
 	}
 }
 
@@ -199,9 +165,8 @@ func TestWorktreeCreateOutsideARepository(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
 
-	opts := baseOpts("", filepath.Join(t.TempDir(), "wt"))
 	// A directory that is not a repository, standing in for the working one.
-	opts.repo = t.TempDir()
+	opts := checkoutOpts(t.TempDir(), filepath.Join(t.TempDir(), "wt"))
 
 	err := runWorktreeCreate(t.Context(), a, "", "feat", opts)
 	if err == nil {
@@ -223,15 +188,15 @@ func TestWorktreeCreateOutsideARepositoryWritesNothing(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
 
-	opts := baseOpts(t.TempDir(), filepath.Join(t.TempDir(), "wt"))
+	opts := checkoutOpts(t.TempDir(), filepath.Join(t.TempDir(), "wt"))
 	_ = runWorktreeCreate(t.Context(), a, "", "feat", opts)
 
 	st, err := a.store()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.GetContainer("ws", "feat"); err == nil {
-		t.Error("a container row was written for a failed create")
+	if _, err := st.GetWorktree("ws", "feat"); err == nil {
+		t.Error("a worktree row was written for a failed create")
 	}
 }
 
@@ -243,7 +208,7 @@ func TestWorktreeCreateRefusesAnExistingPath(t *testing.T) {
 	repo := initRepo(t)
 	path := t.TempDir() // exists
 
-	err := runWorktreeCreate(t.Context(), a, "", "feat", baseOpts(repo, path))
+	err := runWorktreeCreate(t.Context(), a, "", "feat", checkoutOpts(repo, path))
 	if err == nil {
 		t.Fatal("worktree create succeeded onto an existing directory")
 	}
@@ -265,7 +230,7 @@ func TestWorktreeCreateRejectsBaseWithAnExistingBranch(t *testing.T) {
 		t.Fatalf("git branch: %v\n%s", err, out)
 	}
 
-	opts := baseOpts(repo, filepath.Join(t.TempDir(), "wt"))
+	opts := checkoutOpts(repo, filepath.Join(t.TempDir(), "wt"))
 	opts.branch = "existing"
 	opts.base = "HEAD"
 
@@ -279,9 +244,10 @@ func TestWorktreeCreateRejectsBaseWithAnExistingBranch(t *testing.T) {
 }
 
 // Kubernetes has no host bind mounts, so the two pointers a worktree depends on
-// cannot resolve there. Refusing is honest; seeding the files would look like
-// it worked.
-func TestWorktreeCreateRefusesK8s(t *testing.T) {
+// cannot resolve there. Refusing a container on one is honest; seeding the
+// files would look like it worked. The checkout itself is the host's, so
+// worktree create does not care which provider the workspace names.
+func TestContainerOnAWorktreeRefusesK8s(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
 	if err := runProviderConfigure(a, "kp", "k8s", k8s.Config{Context: "c", Registry: "r"}); err != nil {
@@ -291,46 +257,41 @@ func TestWorktreeCreateRefusesK8s(t *testing.T) {
 		t.Fatalf("workspace init: %v", err)
 	}
 	repo := initRepo(t)
-
-	err := runWorktreeCreate(t.Context(), a, "kws", "feat",
-		baseOpts(repo, filepath.Join(t.TempDir(), "wt")))
-	if err == nil {
-		t.Fatal("worktree create succeeded on a k8s workspace")
+	path := filepath.Join(t.TempDir(), "wt")
+	if err := runWorktreeCreate(t.Context(), a, "kws", "feat", checkoutOpts(repo, path)); err != nil {
+		t.Fatalf("worktree create on a k8s workspace: %v", err)
 	}
+
+	err := runContainerCreate(t.Context(), a, "kws", "feat", path,
+		createOpts{generate: true, noStart: true, tools: []string{"yq"}})
 	if got := exitCodeOf(err); got != exitUsage {
-		t.Errorf("exit code = %d, want %d", got, exitUsage)
+		t.Fatalf("exit code = %d (%v), want %d", got, err, exitUsage)
 	}
 	if !strings.Contains(err.Error(), "local") {
 		t.Errorf("error %q does not say the provider must be local", err)
 	}
 }
 
-// A failed create leaves no checkout behind.
-func TestWorktreeCreateRollsBackTheCheckout(t *testing.T) {
+// A taken name is refused before git runs, so it leaves no checkout behind.
+func TestWorktreeCreateRefusesATakenName(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
 	repo := initRepo(t)
-	path := filepath.Join(t.TempDir(), "wt")
-
-	// A container of this name already exists, so the record write fails after
-	// the checkout has been made.
-	st, err := a.store()
-	if err != nil {
+	if err := runWorktreeCreate(t.Context(), a, "", "feat",
+		checkoutOpts(repo, filepath.Join(t.TempDir(), "wt1"))); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.CreateContainer(model.Container{
-		Name: "feat", WorkspaceName: "ws",
-		SourceKind: model.SourceFolder, Source: "/elsewhere",
-	}); err != nil {
-		t.Fatal(err)
-	}
+	path := filepath.Join(t.TempDir(), "wt2")
+	opts := checkoutOpts(repo, path)
+	opts.branch = "other"
 
-	if err := runWorktreeCreate(t.Context(), a, "", "feat", baseOpts(repo, path)); err == nil {
-		t.Fatal("worktree create succeeded with the name taken")
+	err := runWorktreeCreate(t.Context(), a, "", "feat", opts)
+	if got := exitCodeOf(err); got != exitUsage {
+		t.Fatalf("exit code = %d (%v), want %d", got, err, exitUsage)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Errorf("the checkout at %s outlived a failed create", path)
+		t.Errorf("the checkout at %s outlived a refused create", path)
 	}
 }
 
@@ -345,9 +306,7 @@ func TestWorktreeContainerIsNotRemovedAsFolderless(t *testing.T) {
 	seedWorkspace(t, a)
 	repo := initRepo(t)
 	path := filepath.Join(t.TempDir(), "wt")
-	if err := runWorktreeCreate(t.Context(), a, "", "feat", baseOpts(repo, path)); err != nil {
-		t.Fatal(err)
-	}
+	worktreeWithContainer(t, a, "feat", repo, path, createOpts{})
 
 	st, err := a.store()
 	if err != nil {
@@ -362,32 +321,25 @@ func TestWorktreeContainerIsNotRemovedAsFolderless(t *testing.T) {
 	}
 }
 
-func TestWorktreeRemoveTakesBoth(t *testing.T) {
+func TestWorktreeRemoveTakesTheCheckoutAndItsRecord(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
 	repo := initRepo(t)
 	path := filepath.Join(t.TempDir(), "wt")
-	if err := runWorktreeCreate(t.Context(), a, "", "feat", baseOpts(repo, path)); err != nil {
+	if err := runWorktreeCreate(t.Context(), a, "", "feat", checkoutOpts(repo, path)); err != nil {
 		t.Fatal(err)
 	}
 
-	// --force, because make test runs with no engine on PATH: what is being
-	// asserted is that the container and worktree rows are gone together, not
-	// what docker would have said.
-	if err := runWorktreeRemove(t.Context(), a, "", "feat", true); err != nil {
+	if err := runWorktreeRemove(t.Context(), a, "", "feat", false); err != nil {
 		t.Fatalf("worktree remove: %v", err)
 	}
-
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("the checkout at %s survived remove", path)
 	}
 	st, err := a.store()
 	if err != nil {
 		t.Fatal(err)
-	}
-	if _, err := st.GetContainer("ws", "feat"); err == nil {
-		t.Error("the container row survived remove")
 	}
 	if _, err := st.GetWorktree("ws", "feat"); err == nil {
 		t.Error("the worktree row survived remove")
@@ -401,11 +353,10 @@ func TestWorktreeRemoveKeepsTheBranch(t *testing.T) {
 	seedWorkspace(t, a)
 	repo := initRepo(t)
 	if err := runWorktreeCreate(t.Context(), a, "", "feat",
-		baseOpts(repo, filepath.Join(t.TempDir(), "wt"))); err != nil {
+		checkoutOpts(repo, filepath.Join(t.TempDir(), "wt"))); err != nil {
 		t.Fatal(err)
 	}
-	// --force for the reason above: no engine on PATH under make test.
-	if err := runWorktreeRemove(t.Context(), a, "", "feat", true); err != nil {
+	if err := runWorktreeRemove(t.Context(), a, "", "feat", false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -420,34 +371,20 @@ func TestWorktreeRemoveKeepsTheBranch(t *testing.T) {
 	}
 }
 
-// stubDocker puts a fake docker on PATH that answers every call with success
-// and no output, so the local provider's Remove reaches the point of asking
-// git — this is the only test in this file that needs the container removal
-// itself to succeed, in order to isolate git's own refusal.
-func stubDocker(t *testing.T) {
-	t.Helper()
-	dir := t.TempDir()
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// The row is written last, so a refusal leaves the record intact and the
-// command retryable.
+// The row is removed last, so git's refusal on a dirty checkout leaves the
+// record intact and the command retryable.
 func TestWorktreeRemoveKeepsTheRowWhenGitRefuses(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
 	repo := initRepo(t)
 	path := filepath.Join(t.TempDir(), "wt")
-	if err := runWorktreeCreate(t.Context(), a, "", "feat", baseOpts(repo, path)); err != nil {
+	if err := runWorktreeCreate(t.Context(), a, "", "feat", checkoutOpts(repo, path)); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(path, "unsaved"), []byte("work"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	stubDocker(t)
 
 	if err := runWorktreeRemove(t.Context(), a, "", "feat", false); err == nil {
 		t.Fatal("remove succeeded on a dirty checkout")
@@ -490,10 +427,7 @@ func TestRebuildToolsKeepsTheWorktreeMount(t *testing.T) {
 	seedWorkspace(t, a)
 	repo := initRepo(t)
 
-	if err := runWorktreeCreate(t.Context(), a, "", "feat",
-		baseOpts(repo, filepath.Join(t.TempDir(), "wt"))); err != nil {
-		t.Fatal(err)
-	}
+	worktreeWithContainer(t, a, "feat", repo, filepath.Join(t.TempDir(), "wt"), createOpts{})
 	if err := rewriteGeneratedTools(t.Context(), a, "", "feat", []string{"+node"}); err != nil {
 		t.Fatalf("rebuild --tools: %v", err)
 	}
@@ -549,7 +483,7 @@ func TestRebuildToolsInventsNoWorktreeMount(t *testing.T) {
 	}
 }
 
-// A container that is not worktree-backed is not a worktree to remove.
+// A container's name is not a worktree to remove.
 func TestWorktreeRemoveRefusesAPlainContainer(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
@@ -571,36 +505,28 @@ func TestWorktreeRemoveRefusesAPlainContainer(t *testing.T) {
 	}
 }
 
-// `container remove` on a worktree-backed container takes the container and
-// leaves the checkout, because the cascade drops the row that recorded it. A
-// warning rather than a refusal: an operator who wants the container gone and
-// the checkout kept has no other way to say so, and the warning is what stops
-// the checkout becoming an orphan nobody can explain.
-func TestContainerRemoveWarnsAboutTheCheckout(t *testing.T) {
+// `container remove` on a container on a worktree takes the container and
+// leaves the checkout and its record, which belong to the worktree.
+func TestContainerRemoveLeavesTheWorktree(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
 	repo := initRepo(t)
 	path := filepath.Join(t.TempDir(), "wt")
-	if err := runWorktreeCreate(t.Context(), a, "", "feat", baseOpts(repo, path)); err != nil {
-		t.Fatal(err)
-	}
+	worktreeWithContainer(t, a, "feat", repo, path, createOpts{})
 
-	warnings := captureStderr(t, func() {
-		if err := runContainerRemove(t.Context(), a, "", "feat", true); err != nil {
-			t.Fatalf("container remove: %v", err)
-		}
-	})
-
-	if !strings.Contains(warnings, path) {
-		t.Errorf("warning %q does not name the leftover checkout", warnings)
+	if err := runContainerRemove(t.Context(), a, "", "feat", true); err != nil {
+		t.Fatalf("container remove: %v", err)
 	}
-	if !strings.Contains(warnings, "worktree remove") {
-		t.Errorf("warning %q does not name the command that cleans it up", warnings)
-	}
-	// The checkout is still there: the warning is a warning, not an action.
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("container remove deleted the checkout: %v", err)
+	}
+	st, err := a.store()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.GetWorktree("ws", "feat"); err != nil {
+		t.Errorf("container remove took the worktree record: %v", err)
 	}
 }
 
@@ -661,7 +587,7 @@ func TestWorktreeCreateCopiesTheListedIgnoredFiles(t *testing.T) {
 	writeFile(t, filepath.Join(repo, ".worktreeinclude"), ".env\nnode_modules/\n")
 	path := filepath.Join(t.TempDir(), "wt")
 
-	if err := runWorktreeCreate(t.Context(), a, "", "feat", baseOpts(repo, path)); err != nil {
+	if err := runWorktreeCreate(t.Context(), a, "", "feat", checkoutOpts(repo, path)); err != nil {
 		t.Fatalf("worktree create: %v", err)
 	}
 
@@ -684,7 +610,7 @@ func TestWorktreeCreateCopiesNothingUnasked(t *testing.T) {
 	repo := seededRepo(t)
 	path := filepath.Join(t.TempDir(), "wt")
 
-	if err := runWorktreeCreate(t.Context(), a, "", "feat", baseOpts(repo, path)); err != nil {
+	if err := runWorktreeCreate(t.Context(), a, "", "feat", checkoutOpts(repo, path)); err != nil {
 		t.Fatalf("worktree create: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(path, ".env")); !os.IsNotExist(err) {
@@ -706,7 +632,7 @@ func TestWorktreeCreateIncludeFileAddsToTheManifest(t *testing.T) {
 	writeFile(t, extra, "node_modules/\n")
 	path := filepath.Join(t.TempDir(), "wt")
 
-	opts := baseOpts(repo, path)
+	opts := checkoutOpts(repo, path)
 	opts.includeFile = extra
 	if err := runWorktreeCreate(t.Context(), a, "", "feat", opts); err != nil {
 		t.Fatalf("worktree create: %v", err)
@@ -725,7 +651,7 @@ func TestWorktreeCreateRefusesAMissingIncludeFile(t *testing.T) {
 	repo := seededRepo(t)
 	path := filepath.Join(t.TempDir(), "wt")
 
-	opts := baseOpts(repo, path)
+	opts := checkoutOpts(repo, path)
 	opts.includeFile = filepath.Join(t.TempDir(), "nope")
 	err := runWorktreeCreate(t.Context(), a, "", "feat", opts)
 	if got := exitCodeOf(err); got != exitUsage {
@@ -751,7 +677,7 @@ func TestWorktreeCreateRollsBackAFailedCopy(t *testing.T) {
 	}
 	path := filepath.Join(t.TempDir(), "wt")
 
-	err := runWorktreeCreate(t.Context(), a, "", "feat", baseOpts(repo, path))
+	err := runWorktreeCreate(t.Context(), a, "", "feat", checkoutOpts(repo, path))
 	if err == nil || !strings.Contains(err.Error(), ".env") {
 		t.Fatalf("worktree create = %v, want an error naming .env", err)
 	}
@@ -762,14 +688,14 @@ func TestWorktreeCreateRollsBackAFailedCopy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.GetContainer("ws", "feat"); err == nil {
-		t.Error("a container row outlived a failed copy")
+	if _, err := st.GetWorktree("ws", "feat"); err == nil {
+		t.Error("a worktree row outlived a failed copy")
 	}
 }
 
-// A project that ignores its .devcontainer and lists it gets that config used:
-// the copy happens before the config is looked for.
-func TestWorktreeCreateFindsACopiedDevcontainer(t *testing.T) {
+// A project that ignores its .devcontainer and lists it gets it copied into the
+// checkout, so a container made there afterwards uses it.
+func TestWorktreeCreateCopiesAnIgnoredDevcontainer(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -781,11 +707,12 @@ func TestWorktreeCreateFindsACopiedDevcontainer(t *testing.T) {
 		`{"name":"project","image":"ubuntu"}`)
 	writeFile(t, filepath.Join(repo, ".worktreeinclude"), ".devcontainer/\n")
 
-	opts := baseOpts(repo, filepath.Join(t.TempDir(), "wt"))
-	opts.create.generate = false
-	opts.create.tools = nil
-	if err := runWorktreeCreate(t.Context(), a, "", "feat", opts); err != nil {
+	path := filepath.Join(t.TempDir(), "wt")
+	if err := runWorktreeCreate(t.Context(), a, "", "feat", checkoutOpts(repo, path)); err != nil {
 		t.Fatalf("worktree create: %v", err)
+	}
+	if err := runContainerCreate(t.Context(), a, "", "feat", path, createOpts{noStart: true}); err != nil {
+		t.Fatalf("container create: %v", err)
 	}
 	st, err := a.store()
 	if err != nil {
@@ -812,14 +739,14 @@ func TestWorktreeCreateIncludeFileFromABareRepository(t *testing.T) {
 	extra := filepath.Join(t.TempDir(), "extra")
 	writeFile(t, extra, ".env\n")
 
-	opts := baseOpts(bare, filepath.Join(t.TempDir(), "wt"))
+	opts := checkoutOpts(bare, filepath.Join(t.TempDir(), "wt"))
 	opts.includeFile = extra
 	err := runWorktreeCreate(t.Context(), a, "", "feat", opts)
 	if got := exitCodeOf(err); got != exitUsage {
 		t.Errorf("exit code = %d (%v), want %d", got, err, exitUsage)
 	}
 
-	opts = baseOpts(bare, filepath.Join(t.TempDir(), "wt"))
+	opts = checkoutOpts(bare, filepath.Join(t.TempDir(), "wt"))
 	if err := runWorktreeCreate(t.Context(), a, "", "feat", opts); err != nil {
 		t.Errorf("worktree create from a bare repository without the flag: %v", err)
 	}
@@ -834,11 +761,203 @@ func TestWorktreeRemoveNeedsNoForceAfterACopy(t *testing.T) {
 	repo := seededRepo(t)
 	writeFile(t, filepath.Join(repo, ".worktreeinclude"), ".env\nnode_modules/\n")
 	path := filepath.Join(t.TempDir(), "wt")
-	if err := runWorktreeCreate(t.Context(), a, "", "feat", baseOpts(repo, path)); err != nil {
+	if err := runWorktreeCreate(t.Context(), a, "", "feat", checkoutOpts(repo, path)); err != nil {
 		t.Fatalf("worktree create: %v", err)
 	}
 
 	if err := gitwt.Remove(t.Context(), repo, path, false); err != nil {
 		t.Errorf("removing a seeded checkout without --force: %v", err)
 	}
+}
+
+// --- container create on a worktree folder ----------------------------------
+
+// A worktree made by plain git, with no dev record of it at all, still gets
+// the two mounts invariant 11 requires: the repository is read from git at
+// create and kept on the container row.
+func TestContainerCreateOnAWorktreeFolderRecordsItsRepository(t *testing.T) {
+	requireGit(t)
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	repo := initRepo(t)
+	path := filepath.Join(t.TempDir(), "wt")
+	gitIn(t, repo, "worktree", "add", "-q", "-b", "feat", path)
+
+	if err := runContainerCreate(t.Context(), a, "", "feat", path,
+		createOpts{generate: true, noStart: true, tools: []string{"yq"}}); err != nil {
+		t.Fatalf("container create on a worktree: %v", err)
+	}
+
+	st, err := a.store()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := st.GetContainer("ws", "feat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := gitwt.CommonDir(t.Context(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.WorktreeRepo != want {
+		t.Errorf("worktree_repo = %q, want the repository's common directory %q", c.WorktreeRepo, want)
+	}
+	if !strings.Contains(c.GeneratedConfig, want) {
+		t.Errorf("generated config does not bind the repository:\n%s", c.GeneratedConfig)
+	}
+	if !strings.Contains(c.GeneratedConfig, `"workspaceFolder": "`+c.Source+`"`) {
+		t.Errorf("generated config does not mount the checkout at its host path:\n%s", c.GeneratedConfig)
+	}
+}
+
+// An ordinary checkout is not a worktree, and gets no repository mount.
+func TestContainerCreateOnAPlainCheckoutRecordsNoRepository(t *testing.T) {
+	requireGit(t)
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	repo := initRepo(t)
+
+	if err := runContainerCreate(t.Context(), a, "", "api", repo,
+		createOpts{generate: true, noStart: true, tools: []string{"yq"}}); err != nil {
+		t.Fatalf("container create: %v", err)
+	}
+	st, err := a.store()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := st.GetContainer("ws", "api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.WorktreeRepo != "" {
+		t.Errorf("worktree_repo = %q, want empty for an ordinary checkout", c.WorktreeRepo)
+	}
+}
+
+// --- worktree create makes the checkout only -------------------------------
+
+func TestWorktreeCreateMakesOnlyTheCheckout(t *testing.T) {
+	requireGit(t)
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	repo := initRepo(t)
+	path := filepath.Join(t.TempDir(), "wt")
+
+	if err := runWorktreeCreate(t.Context(), a, "", "feat", checkoutOpts(repo, path)); err != nil {
+		t.Fatalf("worktree create: %v", err)
+	}
+	st, err := a.store()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.GetContainer("ws", "feat"); err == nil {
+		t.Error("worktree create made a container; that is container create's job now")
+	}
+	w, err := st.GetWorktree("ws", "feat")
+	if err != nil {
+		t.Fatalf("worktree row: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(w.Path, ".git")); err != nil {
+		t.Errorf("no checkout at %s: %v", w.Path, err)
+	}
+}
+
+// A worktree outlives any container on it, so removing it while one still
+// runs there would pull the folder out from under that container.
+func TestWorktreeRemoveRefusesWhileAContainerUsesIt(t *testing.T) {
+	requireGit(t)
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	repo := initRepo(t)
+	path := filepath.Join(t.TempDir(), "wt")
+	if err := runWorktreeCreate(t.Context(), a, "", "feat", checkoutOpts(repo, path)); err != nil {
+		t.Fatal(err)
+	}
+	containerOn(t, a, "agent", path, createOpts{})
+
+	err := runWorktreeRemove(t.Context(), a, "", "feat", true)
+	if got := exitCodeOf(err); got != exitUsage {
+		t.Fatalf("exit code = %d (%v), want %d", got, err, exitUsage)
+	}
+	if !strings.Contains(err.Error(), "agent") {
+		t.Errorf("error %q does not name the container", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("the checkout went despite the refusal: %v", err)
+	}
+}
+
+// Removing every workspace row by cascade would leave checkouts on disk that
+// nothing records, so a workspace with worktrees is refused like one with
+// containers.
+func TestWorkspaceRemoveRefusesWhileItHasWorktrees(t *testing.T) {
+	requireGit(t)
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	repo := initRepo(t)
+	if err := runWorktreeCreate(t.Context(), a, "", "feat",
+		checkoutOpts(repo, filepath.Join(t.TempDir(), "wt"))); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runWorkspaceRemove(a, "ws")
+	if got := exitCodeOf(err); got != exitUsage {
+		t.Fatalf("exit code = %d (%v), want %d", got, err, exitUsage)
+	}
+	if !strings.Contains(err.Error(), "feat") {
+		t.Errorf("error %q does not name the worktree", err)
+	}
+}
+
+// The list says which containers run on each checkout, now that it may be
+// any number of them.
+func TestWorktreeListNamesTheContainersOnIt(t *testing.T) {
+	requireGit(t)
+	a, out := newTestApp(t)
+	seedWorkspace(t, a)
+	repo := initRepo(t)
+	path := filepath.Join(t.TempDir(), "wt")
+	if err := runWorktreeCreate(t.Context(), a, "", "feat", checkoutOpts(repo, path)); err != nil {
+		t.Fatal(err)
+	}
+	containerOn(t, a, "agent-one", path, createOpts{})
+	out.Reset()
+
+	if err := runWorktreeList(t.Context(), a, "", false); err != nil {
+		t.Fatalf("worktree list: %v", err)
+	}
+	if !strings.Contains(out.String(), "agent-one") {
+		t.Errorf("list does not name the container on the checkout:\n%s", out)
+	}
+}
+
+// checkoutOpts is a worktree create that keeps herdr out of a unit test: a
+// host that has herdr installed should not have its daemon probed or its
+// sidebar written to just because a test made a checkout.
+func checkoutOpts(repo, path string) worktreeOpts {
+	return worktreeOpts{repo: repo, branch: "feat", path: path, noHerdr: true}
+}
+
+// containerOn creates a container on a folder, generated so the test needs no
+// project configuration, and not started so it needs no engine. opts adds to
+// those defaults.
+func containerOn(t *testing.T, a *app, name, path string, opts createOpts) model.Container {
+	t.Helper()
+	opts.noStart = true
+	if opts.from == "" && !opts.generate && len(opts.tools) == 0 {
+		opts.generate, opts.tools = true, []string{"yq"}
+	}
+	if err := runContainerCreate(t.Context(), a, "", name, path, opts); err != nil {
+		t.Fatalf("container create %s on %s: %v", name, path, err)
+	}
+	st, err := a.store()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := st.GetContainer("ws", name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
 }

@@ -76,26 +76,27 @@ dev container shell api
 ### Work a branch in its own checkout
 
 A worktree gives a branch its own directory, so an agent can work on it without
-disturbing what you have open. `dev worktree` makes the checkout and the
-container together, and removes them together.
+disturbing what you have open. `dev worktree` makes the checkout; a container
+on it is an ordinary `dev container create`, run from inside it.
 
 ```
-❯ dev worktree create fix-header --branch fix-header --path ~/wt/fix-header --generate
+❯ dev worktree create fix-header --branch fix-header --path ~/wt/fix-header
 worktree fix-header on branch fix-header at ~/wt/fix-header
-container fix-header is running
-```
-
-Run it from inside the repository, or name one with `--repo`. `--path` has no
-default: nothing appears on your disk in a place you did not choose.
-
-git works inside the container. A worktree's `.git` is a file pointing at an
-absolute path in the repository, so `dev` bind-mounts the repository at that
-same path — commits you make inside are commits the repository can see, sharing
-one object store.
-
-```
+run a container on it: cd ~/wt/fix-header && dev container create fix-header
+❯ cd ~/wt/fix-header
+❯ dev container create fix-header --generate
 ❯ dev container start-agent fix-header
 ```
+
+Run `worktree create` from inside the repository, or name one with `--repo`.
+`--path` has no default: nothing appears on your disk in a place you did not
+choose.
+
+git works inside the container. A worktree's `.git` is a file pointing at an
+absolute path in the repository, so `container create` asks git where that
+repository is and bind-mounts it at the same path — commits you make inside are
+commits the repository can see, sharing one object store. It does this for any
+worktree, including one made with plain `git worktree add`.
 
 A fresh checkout holds only what git tracks, so the `.env` files and
 dependency trees your project ignores are missing. List the ones worth carrying
@@ -112,10 +113,10 @@ node_modules/
 new one:
 
 ```
-❯ dev worktree create fix-header --branch fix-header --path ~/wt/fix-header --generate
+❯ dev worktree create fix-header --branch fix-header --path ~/wt/fix-header
 worktree fix-header on branch fix-header at ~/wt/fix-header
 copied 3 ignored paths from ~/src/app (.env, .env.local, node_modules/)
-container fix-header is running
+run a container on it: cd ~/wt/fix-header && dev container create fix-header
 ```
 
 On APFS and on btrfs or xfs the copy is a clone, costing neither time nor disk
@@ -125,28 +126,30 @@ built for the host rather than the container. A copied Python `.venv` still
 names the original checkout's path, so recreate it (`uv sync`,
 `python -m venv --clear`) rather than reuse it.
 
-When the branch is done:
+When the branch is done, remove the container, then the checkout:
 
 ```
+❯ dev container remove fix-header
 ❯ dev worktree remove fix-header
 worktree fix-header removed; branch fix-header kept
 ```
 
-The branch stays. git refuses to remove a checkout with uncommitted work in it,
-and so does this — pass `--force` when you mean it.
+`worktree remove` refuses while a container is still on the checkout. The
+branch stays. git refuses to remove a checkout with uncommitted work in it, and
+so does this — pass `--force` when you mean it.
 
 ```
 ❯ dev worktree list
-WORKSPACE  NAME        BRANCH      CHECKOUT  PATH
-default    fix-header  fix-header  ok        ~/wt/fix-header
+WORKSPACE  NAME        BRANCH      CHECKOUT  PATH             CONTAINERS
+default    fix-header  fix-header  ok        ~/wt/fix-header  fix-header
 ```
 
 `CHECKOUT` is read from git every time. `gone` means the checkout was removed
-outside `dev`; `dev worktree remove` still cleans up the container and the
-record.
+outside `dev`; `dev worktree remove` still drops the record. `CONTAINERS` names
+the containers whose folder is the checkout.
 
-Local providers only. A pod has no host bind mounts, so the paths a worktree
-depends on cannot resolve there.
+A container on a worktree needs a local provider. A pod has no host bind
+mounts, so the paths a worktree depends on cannot resolve there.
 
 ### A scratch sandbox with no project
 
@@ -252,7 +255,7 @@ workspace, so you do not retype its tools:
 ```sh
 dev container create scratch --from api --no-folder
 dev container create other   --from api --folder ~/src/other
-dev worktree  create fix     --from api --branch fix --path ~/src/api-fix
+dev container create fix     --from api --folder ~/wt/api-fix   # a worktree checkout
 ```
 
 It copies three things from the source: its tool list, whether it keeps agent
@@ -1182,15 +1185,13 @@ path it came from on stderr.
 
 ```
 dev worktree create NAME --branch B --path P [--repo R] [--base REF]
-                         [--include-file PATH] [--generate] [--tools LIST] [--from SOURCE]
-                         [--no-persist-state] [--agent-config PATH | --no-agent-config]
-                         [--no-start] [--no-herdr] [--allow-privileged] [--workspace W]
+                         [--include-file PATH] [--no-herdr] [--workspace W]
 dev worktree list [--all] [--workspace W]
 dev worktree remove NAME [--force] [--workspace W]
 ```
 
-`NAME` names both the checkout's record and the container: one name, so there
-is nothing extra to remember when the two are removed together.
+`worktree` makes and removes git worktree checkouts. A container on one is made
+with `dev container create` from inside the checkout, or with `--folder`.
 
 **`create`**
 
@@ -1202,29 +1203,12 @@ is nothing extra to remember when the two are removed together.
 | `--base` | start point for a new branch |
 | `--include-file` | more patterns of ignored files to copy in, on top of the source's `.worktreeinclude` |
 | `--no-herdr` | do not register the checkout with Herdr |
-| `--no-start` | record the container without starting it |
-| `--generate` | generate a base Ubuntu configuration when the checkout ships none |
-| `--tools` | comma-separated tools to install in a generated container (see: dev container tools) |
-| `--no-persist-state` | do not give the container a volume for its agents' configuration |
-| `--agent-config` | apply this agents.yaml instead of the checkout's `.devcontainer/agents.yaml` |
-| `--no-agent-config` | apply no agents.yaml, even if the checkout has one |
-| `--from` | start from another generated container's tools and settings in this workspace |
 
 `--branch` and `--path` are required; `--path` has no default, so nothing
 appears on disk somewhere you did not choose. `--base` only has an effect when
 the branch does not already exist — passing it for one that does is a usage
-error, not a silent no-op.
-
-`--from` behaves as it does on `container create`. The source is checked before
-git runs, so a missing or project-owned source leaves no checkout and no new
-branch behind. The check for a configuration in the checkout itself can only run
-after the checkout exists; if the branch ships one, the checkout is removed
-again. The source may itself be a worktree container, but its bind mounts are
-never copied.
-
-Local providers only: a workspace on the k8s provider is refused, since a pod
-has no host bind mounts and the two absolute paths a worktree depends on
-cannot resolve there.
+error, not a silent no-op. A name already taken in the workspace is refused
+before git runs.
 
 Ignored files are copied in from the *source* checkout: the one holding the
 working directory — from inside a linked worktree, that worktree — or the one
@@ -1247,31 +1231,32 @@ A missing or unreadable `--include-file` is a usage error before anything is
 created; so is passing one from a bare repository, which has no checkout to
 copy from. A copy that fails removes the checkout again. Nothing about the copy
 is recorded, and `remove` needs no `--force` on its account, since git removes
-ignored files with the checkout.
+ignored files with the checkout. A project that ignores its `.devcontainer/` and
+lists it gets that configuration copied too, so a container made there uses it.
 
-The copy happens before the devcontainer configuration is looked for, so a
-project that ignores its `.devcontainer/` and lists it gets that configuration
-used.
-
-A checkout of a repository that ships its own `.devcontainer` keeps it
-untouched — `dev` never writes into a project's folder — and its bind mounts
-are merged into the document at invocation time instead, the same way the
-agent-state mount is for any other project-owned container.
+**A container on a worktree.** `dev container create` on a worktree checkout
+asks git for the repository and bind-mounts it at its own host path, alongside
+the checkout at its own. A checkout of a repository that ships its own
+`.devcontainer` keeps it untouched — `dev` never writes into a project's folder
+— and those mounts are merged into the document at invocation time instead, the
+same way the agent-state mount is for any other project-owned container. It
+needs a local provider.
 
 **`list`** reads the checkouts git still knows about, live, every time. The
 CHECKOUT column reads `ok` or `gone`; `gone` means the checkout was removed
-outside `dev`, and `dev worktree remove` still cleans up the container and the
-record either way.
+outside `dev`, and `dev worktree remove` still drops the record. CONTAINERS
+names the containers whose folder is the checkout, or `-`.
 
-**`remove`** takes the container from the engine first, then asks git to
-remove the checkout, then drops the record. git refuses a checkout holding
-modified or untracked files; that refusal leaves the record intact so the
-command is retryable, and `--force` passes through to git. The branch is never
-deleted — the checkout is scaffolding, the branch is the work.
+**`remove`** refuses while a container is on the checkout, naming it: remove it
+first with `dev container remove`. Then it asks git to remove the checkout, then
+drops the record. git refuses a checkout holding modified or untracked files;
+that refusal leaves the record intact so the command is retryable, and `--force`
+passes through to git. The branch is never deleted — the checkout is
+scaffolding, the branch is the work.
 
-`dev container remove` on a worktree-backed container still works: it removes
-the container and warns that the checkout at its path was left behind, naming
-`dev worktree remove` as what would have taken both.
+`dev container remove` on a container on a worktree removes the container and
+leaves the checkout and its record. `dev workspace remove` refuses while the
+workspace holds worktrees, as it does for containers.
 
 ### audit
 

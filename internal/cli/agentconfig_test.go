@@ -336,18 +336,13 @@ func TestCreateAgentConfigFlagErrors(t *testing.T) {
 	}
 }
 
-func TestWorktreeCreateRecordsTheAgentConfigChoice(t *testing.T) {
+func TestContainerOnAWorktreeRecordsTheAgentConfigChoice(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
 	repo := initRepo(t)
-	path := filepath.Join(t.TempDir(), "wt")
-
-	opts := baseOpts(repo, path)
-	opts.create.noAgentConfig = true
-	if err := runWorktreeCreate(t.Context(), a, "", "feat", opts); err != nil {
-		t.Fatalf("worktree create: %v", err)
-	}
+	worktreeWithContainer(t, a, "feat", repo, filepath.Join(t.TempDir(), "wt"),
+		createOpts{noAgentConfig: true})
 	if c := containerRow(t, a, "feat"); c.AgentConfig != agentConfigNone {
 		t.Errorf("AgentConfig = %q, want %q", c.AgentConfig, agentConfigNone)
 	}

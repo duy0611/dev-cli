@@ -274,15 +274,12 @@ func rewriteGeneratedTools(ctx context.Context, a *app, workspace, name string, 
 		// A folder container renders the zero Mount unless it is
 		// worktree-backed, which is the CLI's own bind mount either way.
 		//
-		// Not re-derived from the checkout on disk: one the operator has
-		// already deleted by hand would answer nothing, and the rebuild would
-		// then quietly produce a container whose git does not work.
-		st0, err := a.store()
-		if err != nil {
-			return err
-		}
-		if w, err := st0.GetWorktree(t.workspace.Name, name); err == nil {
-			mount = worktreeMount(w.Repo, w.Path)
+		// From the stored column, not re-derived from the checkout on disk:
+		// one the operator has already deleted by hand would answer nothing,
+		// and the rebuild would then quietly produce a container whose git
+		// does not work.
+		if t.container.WorktreeRepo != "" {
+			mount = worktreeMount(t.container.WorktreeRepo, t.container.Source)
 		}
 	}
 	// Derived from the stored column for the same reason, and load-bearing: this
