@@ -84,12 +84,21 @@ func TestSmokeWorktree(t *testing.T) {
 		t.Fatalf("resolving the checkout path: %v", err)
 	}
 
-	// The claim: git works inside. A commit made in the container is a commit
-	// the host repository can see, because the object store is one bind mount.
-	dev("container", "exec", name, "--workspace", ws, "--",
-		"sh", "-c", "cd "+resolved+" && echo inside > made-inside && "+
-			"git add made-inside && "+
-			"git -c user.email=c@example.com -c user.name=container commit -qm 'from the container'")
+	// The claim: git works inside, read-only. The container is guarded by
+	// default, so it reads the repository through the worktree's .git file and
+	// the repository mounted at its own path — and a commit fails, because the
+	// worktree's index lives under the read-only common directory.
+	if out := dev("container", "exec", name, "--workspace", ws, "--",
+		"sh", "-c", "cd "+resolved+" && git log --oneline -1"); strings.TrimSpace(out) == "" {
+		t.Error("git log inside the worktree container printed nothing")
+	}
+	if out, err := exec.Command(bin, "container", "exec", name, "--workspace", ws, "--",
+		"sh", "-c", "cd "+resolved+" && echo inside > made-inside && git add made-inside").CombinedOutput(); err == nil {
+		t.Errorf("git add succeeded inside a guarded worktree container:\n%s", out)
+	} else if !strings.Contains(string(out), "Read-only file system") {
+		t.Errorf("git add failed for a reason other than the read-only repository:\n%s", out)
+	}
+	_ = os.Remove(filepath.Join(path, "made-inside"))
 
 	env := dev("container", "exec", name, "--workspace", ws, "--",
 		"cat", filepath.Join(resolved, ".env"))
@@ -97,9 +106,20 @@ func TestSmokeWorktree(t *testing.T) {
 		t.Errorf("the carried .env is not readable inside the container: %q", env)
 	}
 
-	out := gitOut(t, repo, "log", "--all", "--format=%s")
-	if !strings.Contains(out, "from the container") {
-		t.Errorf("the host repository cannot see the container's commit:\n%s", out)
+	// A commit made on the host is one the container reads at once, through
+	// the same read-only mount.
+	gitIn := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.email=h@example.com", "-c", "user.name=host"}, args...)...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	gitIn(path, "commit", "-q", "--allow-empty", "-m", "from the host")
+	if out := dev("container", "exec", name, "--workspace", ws, "--",
+		"sh", "-c", "cd "+resolved+" && git log --format=%s -1"); !strings.Contains(out, "from the host") {
+		t.Errorf("the container does not see the host's commit: %q", out)
 	}
 
 	// And the registration survived. `git gc --auto` runs `worktree prune`,
