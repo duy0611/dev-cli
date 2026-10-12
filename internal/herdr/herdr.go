@@ -9,8 +9,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
+	"sync"
+	"time"
 )
 
 const herdrBin = "herdr"
@@ -55,6 +58,50 @@ func Close(ctx context.Context, workspaceID string) error {
 		return fmt.Errorf("herdr worktree remove: %s", strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+var retryEvery = 500 * time.Millisecond
+
+const nameTimeout = time.Minute
+
+// AgentName turns a container name into a Herdr agent name, which must match
+// [a-z][a-z0-9_-]{0,31}. It returns "" for a name that cannot fit.
+func AgentName(container string) string {
+	name := strings.ReplaceAll(strings.ToLower(container), ".", "-")
+	if len(name) > 32 {
+		name = name[:32]
+	}
+	if name == "" || name[0] < 'a' || name[0] > 'z' {
+		return ""
+	}
+	return name
+}
+
+// NameAgent names the agent about to run in the calling Herdr pane after its
+// container, in the background, and returns a func that stops trying. Outside
+// a Herdr pane it does nothing.
+func NameAgent(ctx context.Context, container string) (stop func()) {
+	pane, name := os.Getenv("HERDR_PANE_ID"), AgentName(container)
+	if pane == "" || name == "" {
+		return func() {}
+	}
+	ctx, cancel := context.WithTimeout(ctx, nameTimeout)
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		// Herdr only renames an agent it has detected, which happens some time
+		// after the agent takes the pane's foreground.
+		for exec.CommandContext(ctx, herdrBin, "agent", "rename", pane, name).Run() != nil {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(retryEvery):
+			}
+		}
+	})
+	return func() {
+		cancel()
+		wg.Wait()
+	}
 }
 
 // firstJSONLine returns the first line that looks like a JSON object, skipping

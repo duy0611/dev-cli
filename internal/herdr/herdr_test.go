@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeHerdr writes a stub herdr onto a PATH that replaces the host's, so no
@@ -96,4 +97,78 @@ func readLog(t *testing.T, path string) string {
 		t.Fatalf("herdr was never called: %v", err)
 	}
 	return string(b)
+}
+
+func TestAgentName(t *testing.T) {
+	for in, want := range map[string]string{
+		"api":                                "api",
+		"Fix-Header":                         "fix-header",
+		"web.v2_beta":                        "web-v2_beta",
+		"2fa":                                "",
+		"_tmp":                               "",
+		"a-very-long-container-name-past-32": "a-very-long-container-name-past-",
+	} {
+		if got := AgentName(in); got != want {
+			t.Errorf("AgentName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// Herdr refuses the rename until it has detected the agent in the pane.
+func TestNameAgentRetriesUntilDetected(t *testing.T) {
+	t.Setenv("HERDR_PANE_ID", "w1:p2")
+	retryEvery = time.Millisecond
+	t.Cleanup(func() { retryEvery = 500 * time.Millisecond })
+	dir := t.TempDir()
+	// Builtins only: the stub's PATH holds nothing else.
+	log := fakeHerdr(t, "echo x >> '"+dir+"/n'\n"+
+		"[ -e '"+dir+"/2' ] && { : > '"+dir+"/ok'; exit 0; }\n"+
+		"[ -e '"+dir+"/1' ] && : > '"+dir+"/2'\n"+
+		": > '"+dir+"/1'\nexit 1\n")
+
+	stop := NameAgent(t.Context(), "api")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "ok")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the rename never succeeded")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	stop()
+
+	n, _ := os.ReadFile(filepath.Join(dir, "n"))
+	if c := strings.Count(string(n), "x"); c != 3 {
+		t.Errorf("herdr called %d times, want 3: it should stop once the rename succeeds", c)
+	}
+	argv := readLog(t, log)
+	for _, want := range []string{"agent", "rename", "w1:p2", "api"} {
+		if !strings.Contains(argv, want) {
+			t.Errorf("argv %q is missing %q", argv, want)
+		}
+	}
+}
+
+func TestNameAgentOutsideAPaneDoesNothing(t *testing.T) {
+	t.Setenv("HERDR_PANE_ID", "")
+	log := fakeHerdr(t, "exit 0\n")
+
+	NameAgent(t.Context(), "api")()
+
+	if _, err := os.Stat(log); err == nil {
+		t.Error("herdr was called outside a Herdr pane")
+	}
+}
+
+func TestNameAgentWithoutAFittingNameDoesNothing(t *testing.T) {
+	t.Setenv("HERDR_PANE_ID", "w1:p2")
+	log := fakeHerdr(t, "exit 0\n")
+
+	NameAgent(t.Context(), "2fa")()
+
+	if _, err := os.Stat(log); err == nil {
+		t.Error("herdr was called with a name it would refuse")
+	}
 }

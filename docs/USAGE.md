@@ -1190,7 +1190,10 @@ never compared. The local provider only.
 not to `dev`.
 
 **`start-agent`** defaults to `--agent claude`. The agent must already be
-installed in the image.
+installed in the image. Run inside a Herdr pane, it names the agent after the
+container (`herdr agent rename`), lowercased with `.` turned into `-` and cut
+to 32 characters; a container name that does not start with a letter leaves
+the agent unnamed.
 
 **`--kube-token`**, on `shell`, `exec` and `start-agent`, asks for a context,
 namespace, ServiceAccount and duration, mints a token for that account on the
