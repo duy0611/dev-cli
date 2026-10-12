@@ -818,9 +818,9 @@ which is how you clean up after an engine that no longer exists.
 **`no active workspace; run: dev workspace use NAME`** — every container command
 acts on one workspace. Set the active one, or pass `--workspace NAME`.
 
-**`give --folder PATH, or --no-folder for a container with no host folder`** —
-`create` will not guess. A forgotten `--folder` would otherwise build an empty
-sandbox, which you notice only when the agent cannot find your code.
+**`… would mount everything under it`** — `create` was run from your home
+directory or `/`, or given one as `--folder`. With no `--folder`, `create` uses
+the current directory, so `cd` into the project first, or pass `--folder PATH`.
 
 **`no devcontainer config in …`** — the folder ships none. Add `--generate`, or
 run it at a terminal and accept the offer.
@@ -1013,12 +1013,12 @@ Removing the active workspace leaves none active rather than a dangling pointer.
 ### container
 
 ```
-dev container create NAME --folder PATH [--generate] [--tools LIST] [--no-persist-state]
+dev container create NAME [--folder PATH] [--generate] [--tools LIST] [--no-persist-state]
                          [--agent-config PATH | --no-agent-config] [--no-start]
                          [--allow-privileged]
 dev container create NAME --no-folder [--tools LIST] [--no-persist-state]
                          [--agent-config PATH | --no-agent-config] [--no-start]
-dev container create NAME --from SOURCE (--folder PATH | --no-folder) [--tools +ID,-ID]
+dev container create NAME --from SOURCE [--folder PATH | --no-folder] [--tools +ID,-ID]
                          [--no-persist-state] [--agent-config PATH | --no-agent-config] [--no-start]
 dev container list [--all] [--timeout DURATION]
 dev container start NAME
@@ -1034,12 +1034,14 @@ dev container tools
 dev container config show NAME
 ```
 
-**`create`** takes `--folder PATH` or `--no-folder`, never both and never
-neither.
+**`create`** takes `--folder PATH` or `--no-folder`, never both. With neither,
+the folder is the current directory, and `create` prints which one it used.
+The host's root and your home directory are refused as a folder: either would
+mount everything under it.
 
 | Flag | Meaning |
 |---|---|
-| `--folder` | host folder holding the project; bind-mounted on local, copied in on k8s |
+| `--folder` | host folder holding the project; bind-mounted on local, copied in on k8s. Default: the current directory |
 | `--no-folder` | no host directory at all; work lives in a volume `dev` owns |
 | `--generate` | render a base Ubuntu configuration when the folder ships none |
 | `--tools` | comma-separated catalog tools for a generated container |

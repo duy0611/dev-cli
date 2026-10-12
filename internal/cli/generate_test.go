@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"github.com/duy0611/dev-cli/internal/xpath"
 	"os"
 	"path/filepath"
 	"slices"
@@ -430,23 +431,61 @@ func TestRebuildToolsRefusesAProjectOwnedContainer(t *testing.T) {
 	}
 }
 
-// Omitting both is the likeliest typo, and guessing either way is expensive:
-// an empty sandbox is only noticed when the agent cannot find the code.
-func TestCreateWithNeitherFolderNorNoFolderIsRejected(t *testing.T) {
+// Neither flag means the current directory, said out loud before anything is
+// created so a wrong guess is seen.
+func TestCreateWithNeitherFlagUsesTheWorkingDirectory(t *testing.T) {
+	a, out := newTestApp(t)
+	seedWorkspace(t, a)
+	project := projectWithConfig(t)
+	t.Chdir(project)
+
+	if err := runContainerCreate(t.Context(), a, "", "api", "", createOpts{noStart: true}); err != nil {
+		t.Fatalf("create with no --folder: %v", err)
+	}
+	st, err := a.store()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := st.GetContainer("ws", "api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := xpath.Resolve(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Source != want {
+		t.Errorf("source = %q, want the working directory %q", c.Source, want)
+	}
+	if !strings.Contains(out.String(), "(the current directory)") {
+		t.Errorf("output %q does not say which folder it used", out)
+	}
+}
+
+// A forgotten cd would otherwise mount everything under it.
+func TestCreateRefusesTheHomeDirectoryAndRoot(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
+	// A home with a devcontainer config of its own, so the only thing left to
+	// refuse it for is being the home directory.
+	home := projectWithConfig(t)
+	t.Setenv("HOME", home)
 
-	err := runContainerCreate(t.Context(), a, "", "scratch", "", createOpts{noStart: true})
-	if err == nil {
-		t.Fatal("create succeeded with neither --folder nor --no-folder")
-	}
-	if got := exitCodeOf(err); got != exitUsage {
-		t.Errorf("exit code = %d, want %d", got, exitUsage)
-	}
-	for _, want := range []string{"--folder", "--no-folder"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q does not name %s", err, want)
-		}
+	for _, c := range []struct{ label, cwd, folder string }{
+		{"home as the working directory", home, ""},
+		{"home as --folder", t.TempDir(), home},
+		{"/ as --folder", t.TempDir(), "/"},
+	} {
+		t.Run(c.label, func(t *testing.T) {
+			t.Chdir(c.cwd)
+			err := runContainerCreate(t.Context(), a, "", "api", c.folder, createOpts{noStart: true})
+			if got := exitCodeOf(err); got != exitUsage {
+				t.Fatalf("exit code = %d (%v), want %d", got, err, exitUsage)
+			}
+			if !strings.Contains(err.Error(), "everything under it") {
+				t.Errorf("error %q does not say why the folder is refused", err)
+			}
+		})
 	}
 }
 

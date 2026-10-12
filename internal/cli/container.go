@@ -83,8 +83,10 @@ func newContainerCreateCmd(a *app) *cobra.Command {
 		Use:   "create NAME",
 		Short: "Create a container and start it",
 		Long: "Create a container and start it.\n\n" +
-			"With --folder, a project that ships its own .devcontainer configuration\n" +
-			"is used as it is; dev never edits it. For a folder with none, --generate\n" +
+			"The folder is --folder, or the current directory when neither --folder\n" +
+			"nor --no-folder is given; the host's root and your home are refused. A\n" +
+			"project that ships its own .devcontainer configuration is used as it\n" +
+			"is; dev never edits it. For a folder with none, --generate\n" +
 			"builds a base Ubuntu configuration from the tools --tools names.\n\n" +
 			"With --no-folder there is no host directory at all: the container's work\n" +
 			"lives in a volume dev creates and removes with it. That configuration is\n" +
@@ -111,7 +113,7 @@ func newContainerCreateCmd(a *app) *cobra.Command {
 		},
 	}
 	addWorkspaceFlag(cmd, &workspace)
-	cmd.Flags().StringVar(&folder, "folder", "", "host folder holding the project")
+	cmd.Flags().StringVar(&folder, "folder", "", "host folder holding the project (default: the current directory)")
 	cmd.Flags().BoolVar(&opts.noStart, "no-start", false, "record the container without starting it")
 	cmd.Flags().BoolVar(&opts.noFolder, "no-folder", false,
 		"create a container with no host folder; its work lives in a volume dev owns")
@@ -136,14 +138,24 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 	if err := xpath.ValidateName(name); err != nil {
 		return usageError(err)
 	}
-	switch {
-	case folder == "" && !opts.noFolder:
-		// Guessing either way is expensive: a forgotten --folder would build an
-		// empty sandbox, which is only noticed when the agent cannot find the
-		// project.
-		return usageErrorf("give --folder PATH, or --no-folder for a container with no host folder")
-	case folder != "" && opts.noFolder:
+	if folder != "" && opts.noFolder {
 		return usageErrorf("--folder and --no-folder contradict each other")
+	}
+	// Neither flag means the folder the command runs in, which is almost
+	// always the project. Said out loud below, once it is known to be usable,
+	// so a wrong guess is seen before the container is.
+	defaulted := false
+	if folder == "" && !opts.noFolder {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		folder, defaulted = cwd, true
+	}
+	if !opts.noFolder {
+		if err := refuseBroadFolder(folder); err != nil {
+			return err
+		}
 	}
 	if len(opts.tools) > 0 && !opts.generate && !opts.noFolder && opts.from == "" {
 		return usageErrorf("--tools only applies with --generate or --from")
@@ -203,6 +215,9 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 		source, configPath, generated, err = folderSource(wsName, name, folder, opts, a)
 		if err != nil {
 			return err
+		}
+		if defaulted {
+			a.printf("using %s (the current directory)\n", xpath.Shorten(source))
 		}
 	}
 
@@ -279,6 +294,29 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 // folderSource works out what a --folder container is built from: the resolved
 // path, the project's own config if it has one, and a generated document if it
 // does not.
+// refuseBroadFolder refuses the host's root or the operator's home as a
+// container's folder. Either mounts everything under it — every project, every
+// key in ~/.ssh — and the likeliest way to ask for one is a forgotten cd now
+// that the folder defaults to the working directory. The escape guard already
+// refuses a project configuration that mounts either; this is the same rule for
+// dev's own mount.
+func refuseBroadFolder(folder string) error {
+	resolved, err := xpath.Resolve(folder)
+	if err != nil {
+		// Reported by folderSource, which resolves it again and says why.
+		return nil
+	}
+	home, err := operatorHome()
+	if err != nil {
+		return err
+	}
+	if resolved == "/" || resolved == home {
+		return usageErrorf("%s would mount everything under it; "+
+			"run from the project's folder, or pass --folder PATH", xpath.Shorten(resolved))
+	}
+	return nil
+}
+
 func folderSource(wsName, name, folder string, opts createOpts, a *app) (source, configPath, generated string, err error) {
 	// Physical path, before anything stores or mounts it: the engine resolves
 	// the string inside its VM on macOS, where /tmp is a real directory rather
