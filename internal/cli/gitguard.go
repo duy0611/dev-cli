@@ -128,7 +128,10 @@ func (a *app) planGitGuard(ctx context.Context, c model.Container, worktreeRepo 
 // planGitDir is planGitGuard's half for .git itself, and the scope its working
 // tree half searches; a nil scope when there is nothing to guard.
 func (a *app) planGitDir(c model.Container, worktreeRepo string, seed bool) (gitGuardPlan, *treeScope, error) {
-	if !c.GitGuard || c.SourceKind != model.SourceFolder {
+	// Isolated is checked as well as GitGuard, so a row written wrongly still
+	// cannot get the host's .git bound into a container that should share
+	// nothing with the host.
+	if !c.GitGuard || c.SourceKind != model.SourceFolder || c.Mode == model.ModeIsolated {
 		return gitGuardPlan{}, nil, nil
 	}
 	if c.Mode == model.ModeGuarded {

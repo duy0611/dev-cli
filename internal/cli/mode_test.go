@@ -449,3 +449,36 @@ func TestLegacyGuardedContainerIsWarned(t *testing.T) {
 		t.Errorf("no legacy warning: %q", warnings)
 	}
 }
+
+// An isolated container shares nothing with the host: no git guard, and none
+// of its mounts — the folder is copied in, never mounted, so a bind of the
+// host's .git into it would hand the agent the very repository isolated mode
+// exists to keep out of reach.
+func TestIsolatedGetsNoGitGuardMounts(t *testing.T) {
+	isolateGit(t)
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	calls, captured := stubCapturingDevcontainer(t)
+	stubEngineWithMounts(t, "")
+	requireGit(t)
+	root, _ := filepath.EvalSymlinks(initRepo(t))
+	writeFile(t, filepath.Join(root, ".githooks", "commit-msg"), "#!/bin/sh\n")
+	gitIn(t, root, "config", "core.hooksPath", ".githooks")
+
+	if err := runContainerCreate(t.Context(), a, "", "api", root,
+		createOpts{generate: true, tools: []string{"yq"}, mode: model.ModeIsolated}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if containerRow(t, a, "api").GitGuard {
+		t.Error("an isolated container was marked git-guarded")
+	}
+	for _, m := range mountsUsedForUp(t, calls, captured) {
+		if strings.Contains(m, root) || strings.Contains(m, ".git") {
+			t.Errorf("an isolated container mounts the host's folder: %s", m)
+		}
+	}
+	hooks, _ := hooksCopyDir("ws", "api")
+	if entries, _ := os.ReadDir(hooks); len(entries) > 0 {
+		t.Errorf("an isolated container got a hooks copy at %s", hooks)
+	}
+}

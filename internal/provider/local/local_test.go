@@ -674,18 +674,18 @@ func TestUpSeedsAnIsolatedContainerBeforeItsLifecycleHooks(t *testing.T) {
 	for _, argv := range calls {
 		verbs = append(verbs, argv[0])
 	}
-	want := []string{"up", "exec", "exec", "run-user-commands"}
+	want := []string{"up", "exec", "exec", "exec", "run-user-commands"}
 	if strings.Join(verbs, " ") != strings.Join(want, " ") {
 		t.Fatalf("devcontainer calls = %v, want %v", verbs, want)
 	}
 	if !contains(calls[0], []string{"--skip-post-create"}) {
 		t.Errorf("up did not skip the lifecycle hooks: %v", calls[0])
 	}
-	if !contains(calls[1], []string{"tar", "-x", "-p"}) {
-		t.Errorf("the second call does not unpack the folder: %v", calls[1])
+	if !contains(calls[2], []string{"tar", "-x", "-p"}) {
+		t.Errorf("the third call does not unpack the folder: %v", calls[2])
 	}
-	if !contains(calls[2], []string{"sh", "-c"}) {
-		t.Errorf("the third call does not run the seed script: %v", calls[2])
+	if !contains(calls[3], []string{"sh", "-c"}) {
+		t.Errorf("the fourth call does not run the seed script: %v", calls[3])
 	}
 	for _, argv := range calls {
 		for _, label := range [][]string{{"--id-label", "dev.workspace=ws"}, {"--id-label", "dev.container=demo"}} {
@@ -724,5 +724,32 @@ func TestRemoveDeletesTheVolumeOfAnIsolatedContainer(t *testing.T) {
 	}
 	if !f.calledWith(t, dockerBin, []string{"volume", "rm", "--force", "dev-ws-demo"}) {
 		t.Errorf("Remove did not delete the volume; docker calls were %v", f.argvAll(t, dockerBin))
+	}
+}
+
+// The workspace volume is created root-owned, and the generated config's own
+// chown is a postCreateCommand — which the seeding up holds back. So the folder
+// is claimed for the remote user before anything is unpacked into it.
+func TestSeedClaimsTheWorkspaceBeforeUnpacking(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, devcontainerBin, "", 0)
+	f.install(t, dockerBin, "", 0)
+
+	if err := (&Provider{}).Up(context.Background(), isolatedContainer(t), nil); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	calls := f.argvAll(t, devcontainerBin)
+	claim, unpack := -1, -1
+	for i, argv := range calls {
+		joined := strings.Join(argv, " ")
+		if claim < 0 && strings.Contains(joined, "chown") && strings.Contains(joined, "/workspaces/demo") {
+			claim = i
+		}
+		if unpack < 0 && contains(argv, []string{"tar", "-x", "-p"}) {
+			unpack = i
+		}
+	}
+	if claim < 0 || unpack < 0 || claim > unpack {
+		t.Errorf("the workspace was not claimed before the unpack (claim at %d, unpack at %d): %v", claim, unpack, calls)
 	}
 }

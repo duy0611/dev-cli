@@ -288,7 +288,11 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 		// A folder that is a git repository today, a worktree's included.
 		// Fixed at create, like the other guards; a folderless container has
 		// no host .git at all.
-		GitGuard: !opts.noFolder && (isGitCheckout(source) || worktreeRepo != ""),
+		// Never for an isolated container: its folder is copied in and never
+		// mounted, so host git reads nothing it writes and there is nothing to
+		// guard — and the guard's mounts would bind the host's .git into it.
+		GitGuard: !opts.noFolder && mode != model.ModeIsolated &&
+			(isGitCheckout(source) || worktreeRepo != ""),
 		// Kept on the row, like the workspace mount it accompanies, so every
 		// later command mounts the same repository without asking git again.
 		WorktreeRepo: worktreeRepo,

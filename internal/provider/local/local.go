@@ -139,6 +139,21 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 // reason: it unpacks over the workspace.
 func (p *Provider) seedWorkspace(ctx context.Context, c model.Container) error {
 	folder := WorkspaceFolder(c.Name)
+
+	// The volume is created root-owned and gets no UID remapping, and the
+	// chown that fixes that for a folderless container is a postCreateCommand
+	// — which the seeding up has held back. So the folder is handed to the
+	// remote user here, before anything is unpacked as that user. Guarded by a
+	// writability test, as claimStateDir is, and run through sh so the ids
+	// are the container's.
+	var claimErr bytes.Buffer
+	if err := p.Exec(ctx, c,
+		[]string{"sh", "-c", `[ -w "$1" ] || sudo chown -R "$(id -u):$(id -g)" "$1"`, "claim", folder},
+		provider.ExecOpts{Stdout: io.Discard, Stderr: &claimErr}); err != nil {
+		return fmt.Errorf("claiming %s in container %s: %w: %s",
+			folder, c.Name, err, strings.TrimSpace(claimErr.String()))
+	}
+
 	pr, pw := io.Pipe()
 	var plan seed.Plan
 	go func() {
