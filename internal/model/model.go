@@ -55,6 +55,25 @@ const (
 	SourceNone SourceKind = "none"
 )
 
+// Mode is how much of the operator's checkout a container can reach. Fixed at
+// create and kept by rebuild: what a container is mounted on must not change
+// under it.
+type Mode string
+
+const (
+	// ModeGuarded mounts the folder live with its .git read-only, so the agent
+	// can read history but not change what host git runs.
+	ModeGuarded Mode = "guarded"
+	// ModeIsolated copies the folder into a volume dev owns and never mounts
+	// it, so nothing the agent does reaches host git.
+	ModeIsolated Mode = "isolated"
+	// ModeLegacy is a container created before modes, under the single-file
+	// git guard. It keeps behaving as it did.
+	ModeLegacy Mode = "legacy"
+	// ModeNone is a folderless container: no checkout for a mode to describe.
+	ModeNone Mode = "none"
+)
+
 // Container is a devcontainer this tool knows about. It records what the
 // container was made from, never whether it is currently running: live status
 // is read from the engine, because a stored copy goes stale the moment anything
@@ -91,10 +110,12 @@ type Container struct {
 	// `create --no-start` hand the job to the first start, and a failed apply
 	// be retried by the next. Work dev owes, not live container status.
 	AgentConfigPending bool
+	// Mode is how much of the checkout this container reaches. Fixed at create.
+	Mode Mode
 	// GitGuard says host git is shielded from what this container writes under
 	// .git: its config is mounted read-only and its hooks are a container-only
-	// copy. Fixed at create, for PersistState's reason; set for a folder that
-	// is a git repository, never for a folderless container.
+	// copy. Fixed at create, for PersistState's reason. Meaningful for legacy
+	// containers only; a container with a mode says it all with Mode.
 	GitGuard bool
 	// AllowPrivileged says the operator let this container ask its engine for
 	// access to the host — privileged mode, the engine socket, host namespaces,
@@ -119,13 +140,12 @@ type Container struct {
 	// stood at create. That is invariant 4's reasoning applied to a file on the
 	// other side of the fence. Set by materialise, read by the local provider.
 	OverrideConfigPath string
-	// WorktreeRepo is git's common directory for a worktree-backed container,
-	// empty otherwise. Not persisted: it is looked up from the worktrees table
-	// and set on this value per invocation, by whatever resolves the container,
-	// so that materialise can merge the two bind mounts invariant 11 requires
-	// into a project's own devcontainer.json the same way it merges the state
-	// mount. A generated document needs no such field — its two mounts are
-	// baked in at render time from the stored row instead.
+	// WorktreeRepo is git's common directory when the container's folder is a
+	// git worktree, empty otherwise. Read from git at create, so a worktree
+	// made outside dev is mounted correctly too, and fixed then like the
+	// workspace mount. materialise merges the two bind mounts invariant 11
+	// requires into a project's own devcontainer.json from it; a generated
+	// document has them baked in at render time.
 	WorktreeRepo string
 	// GitGuardMounts are the mounts entries that keep host git from running
 	// what this container writes under .git, for the length of one invocation.
@@ -147,14 +167,15 @@ const (
 	StatusAbsent Status = "absent"
 )
 
-// Worktree is a git worktree checkout that a container was created on.
+// Worktree is a git worktree checkout `dev worktree create` made.
 //
-// One per container at most, and it is deleted with the container: the pair is
-// created together by `dev worktree create` and the whole point of recording
-// the link is that neither can be left behind without the other.
+// It belongs to a workspace, not to a container: any number of containers may
+// run on it, made separately with `dev container create`, and none of them
+// takes it away. Recording it is what lets `dev worktree remove` find the
+// checkout again, so it is removed only by that command.
 type Worktree struct {
 	WorkspaceName string
-	ContainerName string
+	Name          string
 	// Repo is git's common directory — the directory holding the object store
 	// and the worktree administration. Not the repository root: the two differ
 	// for a bare repository, and this is the path the checkout's .git file

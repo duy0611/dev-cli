@@ -89,14 +89,9 @@ func (a *app) resolve(ctx context.Context, workspace, name string) (*target, err
 		return nil, err
 	}
 
-	// Set before materialise, which is the one place a project-owned worktree
-	// container's two bind mounts get merged in. A lookup miss means the
-	// container is not worktree-backed, which is true of most containers.
-	c.WorktreeRepo = a.worktreeRepo(wsName, name)
-
-	// Before materialise too, for the same reason: the git guard's mounts are
-	// merged in there. Not seeded — the hooks copy is reset at create and
-	// rebuild only, so an exec does not throw away what the container did.
+	// Before materialise, which merges the git guard's mounts in. Not seeded —
+	// the hooks copy is reset at create and rebuild only, so an exec does not
+	// throw away what the container did.
 	// Deferred like an overlay failure: stop, remove and logs never need it.
 	plan, planErr := a.planGitGuard(ctx, c, c.WorktreeRepo, false, overridesConfig(p))
 	if planErr == nil && overridesConfig(p) {
@@ -334,21 +329,4 @@ func (a *app) requireRunning(ctx context.Context, t *target) error {
 			t.container.Name, t.container.Name)
 	}
 	return nil
-}
-
-// worktreeRepo returns the git common directory a container's checkout was
-// created against, or "" when it is not worktree-backed.
-//
-// A lookup miss is not an error: most containers are not worktree-backed, and
-// "" is materialise's signal to skip the worktree merge entirely.
-func (a *app) worktreeRepo(workspace, container string) string {
-	st, err := a.store()
-	if err != nil {
-		return ""
-	}
-	w, err := st.GetWorktree(workspace, container)
-	if err != nil {
-		return ""
-	}
-	return w.Repo
 }

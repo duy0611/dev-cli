@@ -304,7 +304,8 @@ func (a *app) createWorktreeRows(ctx context.Context, wsName, name, repo, path, 
 		AgentConfig:     agentConfig,
 		AllowPrivileged: opts.create.allowPrivileged,
 		// Always a repository: a worktree is a checkout of one.
-		GitGuard: true,
+		GitGuard:     true,
+		WorktreeRepo: repo,
 	}
 	// A failure here is returned before the row exists, and the caller rolls
 	// the checkout back, the same as for a bad devcontainer config.
@@ -327,7 +328,7 @@ func (a *app) createWorktreeRows(ctx context.Context, wsName, name, repo, path, 
 	}
 	if err := st.CreateWorktree(model.Worktree{
 		WorkspaceName:  wsName,
-		ContainerName:  name,
+		Name:           name,
 		Repo:           repo,
 		Branch:         opts.branch,
 		Path:           path,
@@ -453,7 +454,7 @@ func runWorktreeList(ctx context.Context, a *app, workspace string, all bool) er
 	return a.table(func(out io.Writer) {
 		header(out, "WORKSPACE", "NAME", "BRANCH", "CHECKOUT", "PATH")
 		for _, wt := range rows {
-			row(out, wt.WorkspaceName, wt.ContainerName, wt.Branch,
+			row(out, wt.WorkspaceName, wt.Name, wt.Branch,
 				live(wt), xpath.Shorten(wt.Path))
 		}
 	})
@@ -529,8 +530,12 @@ func runWorktreeRemove(ctx context.Context, a *app, workspace, name string, forc
 		return usageError(err)
 	}
 
-	// The row last. DeleteContainer cascades the worktree row away with it.
+	// The rows last. The worktree's no longer goes with the container by
+	// cascade, so it is deleted by name.
 	if err := st.DeleteContainer(wsName, name); err != nil {
+		return err
+	}
+	if err := st.DeleteWorktree(wsName, name); err != nil {
 		return err
 	}
 	a.record("remove", wsName, name, map[string]any{"worktree": true})
@@ -541,9 +546,6 @@ func runWorktreeRemove(ctx context.Context, a *app, workspace, name string, forc
 		warnf(a, "%v (the checkout is gone; its Herdr workspace may linger)", err)
 	}
 
-	// The row is already gone — DeleteContainer cascaded it away — so there is
-	// nothing left to delete here. Said out loud because its absence looks
-	// like an omission.
 	a.printf("worktree %s removed; branch %s kept\n", name, w.Branch)
 	return nil
 }

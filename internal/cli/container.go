@@ -548,13 +548,11 @@ func (a *app) start(ctx context.Context, workspace string, c model.Container) er
 	}
 
 	// The create path builds its own container value and never goes through
-	// resolve, so it needs the same lookup resolve does before a worktree
-	// container's mounts can be merged in, and a generated configuration has
-	// to become a file here too — the merged one has to be built here too.
-	// Fatal rather than deferred: this function exists to start the
-	// container, and starting it without the merged document would leave the
-	// state volume silently unmounted.
-	c.WorktreeRepo = a.worktreeRepo(workspace, c.Name)
+	// resolve, so a generated configuration has to become a file here too —
+	// the merged one has to be built here too. Fatal rather than deferred:
+	// this function exists to start the container, and starting it without
+	// the merged document would leave the state volume silently unmounted.
+	//
 	// Seeded here: start is where a container that does not exist yet is
 	// created — after create, after `create --no-start`, or after a remove
 	// outside dev — and that is when the hooks copy should match the project.
@@ -687,14 +685,12 @@ func runContainerRemove(ctx context.Context, a *app, workspace, name string, for
 		return err
 	}
 
-	// Before the delete, because the cascade takes the worktree row with it and
-	// there would be nothing left to read afterwards.
-	//
 	// A warning rather than a refusal: `container remove` can perfectly well
 	// remove this container, and an operator who wants the container gone and
 	// the checkout kept has no other way to say so. What they must not have is
 	// a checkout on disk that nothing records.
-	if w, err := st.GetWorktree(t.workspace.Name, name); err == nil {
+	w, wtErr := st.GetWorktree(t.workspace.Name, name)
+	if wtErr == nil {
 		warnf(a, "%s was a worktree; the checkout at %s stays on disk "+
 			"(dev worktree remove %s would have taken both)",
 			name, xpath.Shorten(w.Path), name)
@@ -702,6 +698,14 @@ func runContainerRemove(ctx context.Context, a *app, workspace, name string, for
 
 	if err := st.DeleteContainer(t.workspace.Name, name); err != nil {
 		return err
+	}
+	// The worktree row no longer goes with the container by cascade, and
+	// while `worktree create` still makes the two together, a row naming a
+	// container that is gone would mislead `worktree list`.
+	if wtErr == nil {
+		if err := st.DeleteWorktree(t.workspace.Name, name); err != nil {
+			return err
+		}
 	}
 	removeHooksCopy(t.workspace.Name, name)
 	a.record("remove", t.workspace.Name, name, nil)

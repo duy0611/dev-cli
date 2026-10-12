@@ -612,3 +612,44 @@ func TestHardeningDefaultsSpeakForExistingRows(t *testing.T) {
 			got.GitGuard, got.AllowPrivileged, got.ConfigDigest)
 	}
 }
+
+// Mode and the worktree's common directory are what every later command reads
+// back to decide the container's mounts; a column that does not round-trip
+// would mount a guarded container as legacy, or a worktree without its
+// repository.
+func TestContainerRoundTripsModeAndWorktreeRepo(t *testing.T) {
+	s := openTest(t)
+	seed(t, s)
+	if err := s.CreateContainer(model.Container{
+		Name: "wt", WorkspaceName: "ws", SourceKind: model.SourceFolder, Source: "/wt/feat",
+		Mode: model.ModeIsolated, WorktreeRepo: "/src/app/.git",
+	}); err != nil {
+		t.Fatalf("CreateContainer: %v", err)
+	}
+	got, err := s.GetContainer("ws", "wt")
+	if err != nil {
+		t.Fatalf("GetContainer: %v", err)
+	}
+	if got.Mode != model.ModeIsolated || got.WorktreeRepo != "/src/app/.git" {
+		t.Errorf("got mode=%q worktree_repo=%q, want isolated and the repo", got.Mode, got.WorktreeRepo)
+	}
+}
+
+// A container value built without a mode is written as legacy, which is what
+// it is: everything that built one predates modes.
+func TestContainerWithoutAModeIsLegacy(t *testing.T) {
+	s := openTest(t)
+	seed(t, s)
+	if err := s.CreateContainer(model.Container{
+		Name: "old", WorkspaceName: "ws", SourceKind: model.SourceFolder, Source: "/src/old",
+	}); err != nil {
+		t.Fatalf("CreateContainer: %v", err)
+	}
+	got, err := s.GetContainer("ws", "old")
+	if err != nil {
+		t.Fatalf("GetContainer: %v", err)
+	}
+	if got.Mode != model.ModeLegacy {
+		t.Errorf("mode = %q, want legacy", got.Mode)
+	}
+}
