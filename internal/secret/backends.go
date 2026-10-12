@@ -17,9 +17,8 @@ const (
 
 // --- literal ------------------------------------------------------------------
 
-// literalBackend passes the reference through unchanged. For values that are
-// not secrets — a base URL, a feature flag — where a keychain entry would be
-// ceremony for nothing.
+// literalBackend passes the reference through unchanged, for values that are
+// not secrets.
 type literalBackend struct{}
 
 func (literalBackend) Scheme() string                 { return schemeLiteral }
@@ -40,12 +39,8 @@ func (keychainBackend) Available(context.Context) bool {
 	return err == nil
 }
 
-// Get reads the generic password stored for the current user under the service
-// name ref.
-//
-// Account defaults to $USER, which is what `security add-generic-password -a
-// "$USER" -s NAME -w` writes, so a key added the documented way is found
-// without any further configuration.
+// Get reads the generic password stored under service name ref, for the account
+// `security add-generic-password -a "$USER"` writes.
 func (keychainBackend) Get(ctx context.Context, ref string) (string, error) {
 	account := os.Getenv("USER")
 	if account == "" {
@@ -57,8 +52,7 @@ func (keychainBackend) Get(ctx context.Context, ref string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("keychain lookup of %q failed: %w", ref, err)
 	}
-	// -w prints the password followed by a newline. Trim only the line ending:
-	// a token with leading or trailing spaces is unusual but not ours to fix.
+	// -w appends a newline; trim only that, never the value's own spaces.
 	return strings.Trim(out, "\r\n"), nil
 }
 
@@ -74,8 +68,7 @@ func (onePasswordBackend) Available(context.Context) bool {
 	return err == nil
 }
 
-// Get resolves a full op:// URI. `op read` handles the vault, item and field
-// lookup, and prompts for unlock on its own when the session has expired.
+// Get resolves a full op:// URI; `op read` also handles any unlock prompt.
 func (onePasswordBackend) Get(ctx context.Context, ref string) (string, error) {
 	out, err := run(ctx, "op", "read", "--no-newline", ref)
 	if err != nil {
@@ -86,12 +79,8 @@ func (onePasswordBackend) Get(ctx context.Context, ref string) (string, error) {
 
 // --- shared ----------------------------------------------------------------------
 
-// run executes a lookup and returns its stdout.
-//
-// Stderr is captured and quoted on failure but never on success: it is where
-// both tools explain a miss ("could not be found in the keychain"), and
-// dropping it would leave the operator with a bare exit status. The value
-// itself is only ever on stdout, so it cannot leak this way.
+// run returns a lookup's stdout. Stderr is surfaced only on failure, where both
+// tools explain a miss; the value is only ever on stdout.
 func run(ctx context.Context, name string, args ...string) (string, error) {
 	var stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, name, args...)

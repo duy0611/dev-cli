@@ -15,8 +15,7 @@ import (
 	"github.com/duy0611/dev-cli/internal/store"
 )
 
-// parseToolList splits a --tools value. Empty entries are dropped rather than
-// rejected, so a trailing comma is not a usage error.
+// parseToolList splits a --tools value, dropping empty entries.
 func parseToolList(s string) []string {
 	var out []string
 	for _, part := range strings.Split(s, ",") {
@@ -27,11 +26,8 @@ func parseToolList(s string) []string {
 	return out
 }
 
-// folderlessMount describes where a folderless container keeps its work.
-//
-// The container name is the in-container path as well as half the volume name,
-// so that two containers in one workspace never share a workspace directory
-// and `docker volume ls` reads as the container list.
+// folderlessMount describes where a folderless container keeps its work. The
+// name is the in-container path and half the volume name.
 func folderlessMount(workspace, container string) dcgen.Mount {
 	return dcgen.Mount{
 		Volume: local.VolumeName(workspace, container),
@@ -39,20 +35,14 @@ func folderlessMount(workspace, container string) dcgen.Mount {
 	}
 }
 
-// worktreeMount describes how a worktree container is mounted.
-//
-// Two bind mounts, each at the identical host path. The checkout's .git file
-// holds `gitdir: <repo>/worktrees/<name>` and the repository holds a backlink
-// to the checkout — both absolute host paths, and `git gc --auto` prunes the
-// registration when the backlink does not resolve.
+// worktreeMount describes a worktree container's two bind mounts, each at its
+// host path (invariant 11).
 func worktreeMount(repo, path string) dcgen.Mount {
 	return dcgen.Mount{Host: path, Bind: repo}
 }
 
-// stateFor describes where a container keeps its agents' configuration.
-//
-// The zero value when the container does not persist state, which renders a
-// document with no mounts and no containerEnv.
+// stateFor describes where a container keeps its agents' configuration. Zero
+// when it persists none.
 func stateFor(persist bool, workspace, container string) dcgen.State {
 	if !persist {
 		return dcgen.State{}
@@ -60,12 +50,9 @@ func stateFor(persist bool, workspace, container string) dcgen.State {
 	return dcgen.State{Volume: local.StateVolumeName(workspace, container)}
 }
 
-// generatedConfigFor decides whether to generate a configuration and renders it.
-//
-// Three paths, matching `provider configure`: told to, so do it; not told but
-// at a terminal, so ask; neither, so return nothing and let the caller report
-// the missing configuration. The scripted run must never block on a question
-// nobody will see.
+// generatedConfigFor generates a configuration when told to, asks at a
+// terminal, and otherwise returns nothing. A scripted run must not block on a
+// question.
 func generatedConfigFor(name string, generate bool, tools []string, mount dcgen.Mount, state dcgen.State, in *os.File, out io.Writer) (string, error) {
 	if !generate {
 		if !isTerminal(in) {
@@ -77,7 +64,7 @@ func generatedConfigFor(name string, generate bool, tools []string, mount dcgen.
 		picked, err := pickTools(catalogItems(dcgen.Catalog()))
 		if err != nil {
 			if errors.Is(err, errPickCancelled) {
-				// Nothing is written: a cancelled question is not an answer.
+				// A cancelled question is not an answer, so nothing is written.
 				return "", errors.New("cancelled")
 			}
 			return "", err
@@ -89,9 +76,8 @@ func generatedConfigFor(name string, generate bool, tools []string, mount dcgen.
 	if err != nil {
 		return "", usageError(err)
 	}
-	// Say what was added on the operator's behalf. Silently installing a tool
-	// they did not ask for is the kind of surprise that gets noticed months
-	// later, in an image nobody can explain.
+	// Say what was added: silently installing an unrequested tool is a
+	// surprise.
 	for _, id := range resolved {
 		if !slices.Contains(tools, id) {
 			fmt.Fprintf(out, "adding %s, which the selection requires\n", id)
@@ -105,11 +91,8 @@ func generatedConfigFor(name string, generate bool, tools []string, mount dcgen.
 	return config, nil
 }
 
-// applyToolDiff works out the new tool set.
-//
-// Every entry prefixed + or - adjusts the current set; entries with no prefix
-// replace it wholesale. Mixing the two forms is refused rather than guessed at:
-// "node,+yq" reads as one intent and means another.
+// applyToolDiff applies a +/- diff to the current set, or replaces it when no
+// entry is prefixed.
 func applyToolDiff(current, spec []string) ([]string, error) {
 	var diffs, plain int
 	for _, s := range spec {
@@ -157,24 +140,14 @@ func applyToolDiff(current, spec []string) ([]string, error) {
 	return resolved, nil
 }
 
-// applyFrom rewrites opts so that the create following it renders from another
-// container's tools and inherits its persisted choices, as --from asks.
-//
-// The tool list is what is copied, never the document: dcgen.Render bakes the
-// container's name, its workspace volume, its state volume and any worktree
-// binds into it, so a copy would mount the source's volumes into the new
-// container. The caller renders afresh for the new name instead, the route
-// rewriteGeneratedTools takes.
-//
-// Every check here runs before the caller writes anything — for worktree
-// create, before git makes a checkout — so a mistyped source costs nothing to
-// undo. The source row is only read.
+// applyFrom points opts at another container's tools and persisted choices, as
+// --from asks. Only the tool list is copied, never the document: it bakes in
+// names and volumes.
 func applyFrom(a *app, wsName string, opts *createOpts) error {
 	if opts.from == "" {
 		return nil
 	}
-	// applyToolDiff treats a plain list as a replacement, so allowing one would
-	// silently discard everything --from exists to carry.
+	// A plain list would replace the inherited tools, so it is refused.
 	for _, s := range opts.tools {
 		if !strings.HasPrefix(s, "+") && !strings.HasPrefix(s, "-") {
 			return usageErrorf("with --from, --tools takes +/- changes to %s's tools", opts.from)
@@ -193,38 +166,35 @@ func applyFrom(a *app, wsName string, opts *createOpts) error {
 		return err
 	}
 	if src.GeneratedConfig == "" {
-		// Pointing at another project's file would leave a relative dockerfile
-		// anchored to that project; copying it would freeze a document dev does
-		// not own. Neither is worth doing silently.
+		// A project's own config cannot be copied: a relative dockerfile would
+		// stay anchored to that project.
 		return usageErrorf("container %s uses its project's own config; --from copies only generated ones",
 			opts.from)
 	}
 
 	tools, err := dcgen.ToolsOf(src.GeneratedConfig)
 	if err != nil {
-		// A corrupt row rather than a malformed request, so exit 1.
+		// A corrupt row is exit 1, not a malformed request.
 		return fmt.Errorf("container %s: %w", opts.from, err)
 	}
-	// Only when changes were given: applyToolDiff resolves an empty spec to an
-	// empty list, which would install none of the source's tools.
+	// An empty spec would install none of the source's tools.
 	if len(opts.tools) > 0 {
 		if tools, err = applyToolDiff(tools, opts.tools); err != nil {
 			return err
 		}
 	}
 	opts.tools = tools
-	// Always generate, so the picker never opens: --from has already said
-	// which tools.
+	// --from names the tools, so the picker must not open.
 	opts.generate = true
 
-	// Inherited unless a flag said otherwise. --no-persist-state can only turn
-	// persistence off, so a source without it passes that on.
+	// --no-persist-state can only turn persistence off, so a source without it
+	// passes that on.
 	if !src.PersistState {
 		opts.noPersistState = true
 	}
 	if opts.agentConfig == "" && !opts.noAgentConfig {
-		// "" stays "": it means the project's own agents.yaml, which for the
-		// new container is the new folder's file, not the source's.
+		// "" means the project's own agents.yaml, which for the new container
+		// is the new folder's.
 		switch src.AgentConfig {
 		case agentConfigNone:
 			opts.noAgentConfig = true
@@ -235,11 +205,8 @@ func applyFrom(a *app, wsName string, opts *createOpts) error {
 	return nil
 }
 
-// rewriteGeneratedTools changes which tools a generated container installs.
-//
-// Reads the current set back out of the stored document rather than from a
-// column of its own, so a configuration edited by hand is still something this
-// can reason about.
+// rewriteGeneratedTools changes a generated container's tools. It reads them
+// back from the stored document, so a hand-edited configuration still works.
 func rewriteGeneratedTools(ctx context.Context, a *app, workspace, name string, spec []string) error {
 	t, err := a.resolve(ctx, workspace, name)
 	if err != nil {
@@ -261,24 +228,15 @@ func rewriteGeneratedTools(ctx context.Context, a *app, workspace, name string, 
 		return err
 	}
 
-	// Derived from the stored rows, not from a flag: a rebuild must not be able
-	// to change what a container is mounted on. This re-renders the whole
-	// document, so any mount not rebuilt here is destroyed — the failure
-	// invariant 10 records for the state volume, and the same one for a
-	// worktree's binds.
+	// Derived from the rows, never a flag: a rebuild must not change what the
+	// container is mounted on.
 	var mount dcgen.Mount
 	switch t.container.SourceKind {
 	case model.SourceNone:
 		mount = folderlessMount(t.workspace.Name, name)
 	default:
-		// An isolated container's workspace is its volume, as a folderless
-		// one's is. A folder container renders the zero Mount unless it is
-		// worktree-backed, which is the CLI's own bind mount either way.
-		//
-		// From the stored column, not re-derived from the checkout on disk:
-		// one the operator has already deleted by hand would answer nothing,
-		// and the rebuild would then quietly produce a container whose git
-		// does not work.
+		// From the stored column, not the checkout on disk, which may have been
+		// deleted.
 		switch {
 		case t.container.Mode == model.ModeIsolated:
 			mount = folderlessMount(t.workspace.Name, name)
@@ -286,10 +244,8 @@ func rewriteGeneratedTools(ctx context.Context, a *app, workspace, name string, 
 			mount = worktreeMount(t.container.WorktreeRepo, t.container.Source)
 		}
 	}
-	// Derived from the stored column for the same reason, and load-bearing: this
-	// re-renders the whole document, so a state mount that lived only in the
-	// stored JSON would be dropped here and the next up would start a container
-	// with no volume and no warning.
+	// Derived from the stored column, since this re-renders the whole document
+	// and a state mount kept only in the JSON would be dropped.
 	state := stateFor(t.container.PersistState, t.workspace.Name, name)
 	config, err := dcgen.Render(name, next, mount, state)
 	if err != nil {

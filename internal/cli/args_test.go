@@ -6,9 +6,8 @@ import (
 	"testing"
 )
 
-// execute runs the whole command tree against argv and returns the exit code,
-// the same way Execute does — so these assert on the interface an operator and
-// a script actually see.
+// execute runs the command tree against argv and returns the exit code, as
+// Execute does.
 func execute(t *testing.T, argv ...string) (int, string) {
 	t.Helper()
 	t.Setenv("DEV_STATE", t.TempDir())
@@ -28,13 +27,8 @@ func execute(t *testing.T, argv ...string) (int, string) {
 	return exitCodeOf(root.Execute()), out.String()
 }
 
-// A mistyped subcommand is a malformed request, so it exits 2 like every other
-// one (invariant 7).
-//
-// The trap this guards: cobra inherits the root's RunE — which prints help and
-// returns nil — into any command that defines none, so a group would print its
-// help and exit 0. A script would read `dev container agnet api` as the agent
-// having run, and the container never started.
+// Cobra's inherited root RunE would print help and exit 0 for a mistyped group
+// subcommand.
 func TestUnknownSubcommandExitsTwo(t *testing.T) {
 	for _, argv := range [][]string{
 		{"container", "agnet", "api"},
@@ -52,8 +46,6 @@ func TestUnknownSubcommandExitsTwo(t *testing.T) {
 	}
 }
 
-// A group with no subcommand is a question, not a mistake: print help and
-// succeed, which is what `dev container` has always done.
 func TestGroupWithoutSubcommandPrintsHelp(t *testing.T) {
 	for _, argv := range [][]string{
 		{"container"},
@@ -73,13 +65,10 @@ func TestGroupWithoutSubcommandPrintsHelp(t *testing.T) {
 	}
 }
 
-// The rename is the whole point of the command's new spelling, and a stale
-// reference anywhere would be found by an operator rather than a test.
 func TestStartAgentIsTheCommandName(t *testing.T) {
 	if code, out := execute(t, "container", "start-agent"); code != exitUsage {
 		t.Errorf("start-agent with no NAME exited %d, want %d\n%s", code, exitUsage, out)
 	}
-	// The old spelling is gone, not aliased: one operator, no deprecations.
 	if code, _ := execute(t, "container", "agent", "api"); code != exitUsage {
 		t.Errorf("the old `container agent` spelling still resolves, exit %d", code)
 	}

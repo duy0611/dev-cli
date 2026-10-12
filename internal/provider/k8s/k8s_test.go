@@ -11,15 +11,10 @@ import (
 	"github.com/duy0611/dev-cli/internal/provider"
 )
 
-// clusterStubs installs stand-ins for every binary the provider drives.
+// clusterStubs installs stand-ins for every binary the provider drives. The CLI
+// stub's output shape is pinned against the real CLI in build_test.go.
 //
-// The devcontainer CLI is stubbed here rather than used for real: one binary
-// serves both read-configuration and build, so using the real one for the
-// former would mean not seeing the latter. The shape of the configuration this
-// stub emits is pinned against the real CLI in build_test.go.
-//
-// deployExists decides what `get deployment` reports, which is the whole
-// difference between a create and a start.
+// deployExists decides what `get deployment` reports.
 func clusterStubs(t *testing.T, deployExists bool) *stubs {
 	t.Helper()
 	s := newStubs(t)
@@ -57,8 +52,8 @@ func devcontainerCalls(t *testing.T, s *stubs) []string {
 	return s.calls(t, devcontainerBin)
 }
 
-// anyCallOf matches on the subcommand rather than anywhere in the line: a
-// temp directory called ...does_not_build... otherwise looks like a build.
+// anyCallOf matches the subcommand only, so a temp path containing "build" is
+// not a build.
 func anyCallOf(calls []string, subcommand string) bool {
 	for _, c := range calls {
 		if c == subcommand || strings.HasPrefix(c, subcommand+" ") {
@@ -110,7 +105,6 @@ func TestUpBuildsOnlyWhenTheDeploymentIsAbsent(t *testing.T) {
 		}
 	})
 
-	// A start that rebuilds would cost minutes every time.
 	t.Run("start does not build", func(t *testing.T) {
 		s := clusterStubs(t, true)
 		c := k8sContainer(t)
@@ -134,8 +128,7 @@ func TestUpAppliesAndWaits(t *testing.T) {
 	if !anyCall(calls, "apply --server-side") {
 		t.Errorf("no apply in %v", calls)
 	}
-	// Without the wait, the next command execs into a pod that is still
-	// pulling its image.
+	// Without the wait, exec lands in a pod still pulling its image.
 	if !anyCall(calls, "rollout status") {
 		t.Errorf("Up did not wait for readiness: %v", calls)
 	}
@@ -167,17 +160,16 @@ func TestStopScalesToZero(t *testing.T) {
 	if !anyCall(calls, "scale deployment/"+objectName(c)+" --replicas=0") {
 		t.Errorf("Stop did not scale to zero: %v", calls)
 	}
-	// Deleting would take the PVC's contents with it.
+	// Deleting would take the PVC's data with it.
 	if anyCall(calls, "delete") {
 		t.Errorf("Stop deleted something: %v", calls)
 	}
 }
 
-// `kubectl scale` returns as soon as the API server records the new count, so
-// without the wait `stop` reports success while the container is still running.
+// kubectl scale returns before the pod is gone, so Stop must poll for it.
 func TestStopWaitsForThePodToGo(t *testing.T) {
 	s := newStubs(t)
-	// A pod that is still terminating on the first look and gone on the second.
+	// Terminating on the first poll, gone on the second.
 	counter := filepath.Join(t.TempDir(), "n")
 	s.installKubectl(t, `case "$*" in
   *"get deployment"*"-o name"*) echo deployment.apps/dev-x ;;
@@ -237,7 +229,7 @@ func TestRemoveDeletesAllThreeObjects(t *testing.T) {
 	for _, want := range []string{
 		"delete deployment " + objectName(c),
 		"delete secret " + secretName(c),
-		// Left behind, the claim keeps billing for storage nothing references.
+		// An orphaned claim keeps billing for storage.
 		"delete persistentvolumeclaim " + objectName(c),
 	} {
 		if !anyCall(calls, want) {
@@ -308,15 +300,14 @@ func TestExecTargetsTheDeploymentAndCarriesEnv(t *testing.T) {
 	if call == "" {
 		t.Fatalf("no exec call: %v", kubectlCalls(t, s))
 	}
-	// deployment/, not a pod name: the pod's name changes on every restart.
+	// Pod names change on restart, so target the deployment.
 	if !strings.Contains(call, "deployment/"+objectName(c)) {
 		t.Errorf("exec does not target the deployment: %q", call)
 	}
 	if !strings.Contains(call, "GREETING=hello") {
 		t.Errorf("exec did not carry the environment: %q", call)
 	}
-	// The fixture sets remoteUser, so the command switches user if the pod is
-	// root — kubectl exec otherwise runs as whatever the image's USER is.
+	// kubectl exec runs as the image's USER; su -p switches to remoteUser.
 	if !strings.Contains(call, "su -p") {
 		t.Errorf("exec does not honour remoteUser: %q", call)
 	}
@@ -335,8 +326,7 @@ func TestLogsTargetsTheDeployment(t *testing.T) {
 	}
 }
 
-// The registry is what makes a provider usable, and its absence otherwise
-// surfaces after a build rather than before one.
+// Without a registry the failure only surfaces after a build.
 func TestFactoryRejectsAConfigWithoutARegistry(t *testing.T) {
 	_, err := provider.New(model.Provider{Name: "k", Kind: model.KindK8s, Config: "{}"})
 	if err == nil {
@@ -357,8 +347,7 @@ func TestFactoryBuildsAConfiguredProvider(t *testing.T) {
 	}
 }
 
-// The first create syncs the host folder in before postCreate runs. A
-// folderless container has none, and the sync would fail the create.
+// A folderless container has no host tree to sync on first create.
 func TestUpSkipsTheFirstCreateSyncWithoutAFolder(t *testing.T) {
 	s := clusterStubs(t, false)
 

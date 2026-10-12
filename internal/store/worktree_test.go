@@ -7,10 +7,8 @@ import (
 	"github.com/duy0611/dev-cli/internal/model"
 )
 
-// seedWorktreeContainer creates the workspace a worktree row belongs to, and a
-// container on the checkout — which the row no longer depends on, and which is
-// there to show it. Built on the package's own seed, which creates the
-// provider and workspace.
+// seedWorktreeContainer creates a workspace and a container on a checkout, to
+// show the worktree row does not depend on the container.
 func seedWorktreeContainer(t *testing.T, s *Store) {
 	t.Helper()
 	seed(t, s)
@@ -89,9 +87,8 @@ func TestWorktreeWithoutAContainer(t *testing.T) {
 	}
 }
 
-// Deleting the workspace still takes it: the cascade from workspaces is the
-// backstop behind `workspace remove`'s refusal. It depends on
-// PRAGMA foreign_keys = ON, which is invariant 6.
+// Deleting the workspace still removes the worktree, via the cascade; this
+// needs PRAGMA foreign_keys = ON.
 func TestDeletingTheWorkspaceTakesTheWorktree(t *testing.T) {
 	s := openTest(t)
 	seedWorktreeContainer(t, s)

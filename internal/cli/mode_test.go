@@ -11,8 +11,6 @@ import (
 	"github.com/duy0611/dev-cli/internal/provider/k8s"
 )
 
-// With no --mode, a local container is guarded: the folder live, .git
-// read-only.
 func TestCreateDefaultsToGuardedOnLocal(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -25,7 +23,6 @@ func TestCreateDefaultsToGuardedOnLocal(t *testing.T) {
 	}
 }
 
-// A folderless container has no checkout for a mode to describe.
 func TestCreateFolderlessHasNoMode(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -60,9 +57,7 @@ func TestCreateRefusesBadModes(t *testing.T) {
 	}
 }
 
-// A pod has no host bind mounts, so a live folder is impossible on k8s:
-// guarded is refused, and the default there is isolated — which is what the
-// k8s provider has always done.
+// Guarded is refused on k8s, where a pod cannot take a live folder.
 func TestK8sDefaultsToIsolatedAndRefusesGuarded(t *testing.T) {
 	a, _ := newTestApp(t)
 	if err := runProviderConfigure(a, "kp", "k8s", k8s.Config{Context: "c", Registry: "r"}); err != nil {
@@ -86,9 +81,7 @@ func TestK8sDefaultsToIsolatedAndRefusesGuarded(t *testing.T) {
 	}
 }
 
-// A guarded container gets .git as one read-only directory mount, and none of
-// the single-file mounts: a host rename detaches a file mount, and on macOS a
-// case variant goes around one, while a directory mount survives both.
+// A directory mount survives a host rename, which detaches a single-file mount.
 func TestGuardedMountsGitReadOnlyAsADirectory(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -109,14 +102,12 @@ func TestGuardedMountsGitReadOnlyAsADirectory(t *testing.T) {
 				gitdir, inside, strings.Join(mounts, "\n  "))
 		}
 	}
-	// And no hooks copy: with .git read-only there is nothing to copy for.
 	hooks, _ := hooksCopyDir("ws", "api")
 	if entries, _ := os.ReadDir(hooks); len(entries) > 0 {
 		t.Errorf("a guarded container got a hooks copy at %s", hooks)
 	}
 }
 
-// The generated route gets the same mount, added per invocation.
 func TestGuardedGeneratedConfigMountsGitReadOnly(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -134,8 +125,6 @@ func TestGuardedGeneratedConfigMountsGitReadOnly(t *testing.T) {
 	}
 }
 
-// A guarded container on a worktree: the repository's common directory is
-// read-only at its own path, and the checkout is mounted at its own.
 func TestGuardedWorktreeMountsTheRepositoryReadOnly(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
@@ -159,9 +148,6 @@ func TestGuardedWorktreeMountsTheRepositoryReadOnly(t *testing.T) {
 	}
 }
 
-// A project that names its own workspace mount puts .git where dev cannot
-// aim a mount. Guarded is a promise of prevention, so it is refused rather
-// than fingerprinted.
 func TestGuardedRefusesAProjectThatMovesTheWorkspace(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -177,14 +163,13 @@ func TestGuardedRefusesAProjectThatMovesTheWorkspace(t *testing.T) {
 	}
 }
 
-// hasMountAt reports whether any mount targets exactly target, read-only or
-// not.
+// hasMountAt reports whether any mount targets target exactly.
 func hasMountAt(mounts []string, target string) bool {
 	return hasMount(mounts, target, true) || hasMount(mounts, target, false)
 }
 
-// Refused at create even when not starting, so no row is left that every
-// later start would refuse.
+// Refused at create even with --no-start, so no row is left that every start
+// would refuse.
 func TestGuardedRefusesAMovedWorkspaceWithNoStart(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -200,8 +185,6 @@ func TestGuardedRefusesAMovedWorkspaceWithNoStart(t *testing.T) {
 	}
 }
 
-// Guarded cannot protect the .git files outside .git that point at a
-// repository, so create says so where they exist.
 func TestGuardedWarnsAboutSubmodulesAndWorktrees(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
@@ -233,7 +216,6 @@ func TestGuardedWarnsAboutSubmodulesAndWorktrees(t *testing.T) {
 	}
 }
 
-// A plain repository gets neither warning.
 func TestGuardedWarnsAboutNothingForAPlainRepository(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
@@ -249,11 +231,8 @@ func TestGuardedWarnsAboutNothingForAPlainRepository(t *testing.T) {
 	}
 }
 
-// A file held read-only in the working tree — what an include.path names — is
-// a single-file mount, and a host rename detaches it while inspect still
-// reports it read-only. So before each command the file is probed from inside
-// the container, by opening it for append and writing nothing; one that opens
-// is refused, naming a restart.
+// A held file is probed, since a rename detaches its mount without inspect
+// reporting it.
 func TestGuardedRefusesAHeldFileThatOpensForWrite(t *testing.T) {
 	isolateGit(t)
 	a, _ := newTestApp(t)
@@ -262,7 +241,6 @@ func TestGuardedRefusesAHeldFileThatOpensForWrite(t *testing.T) {
 	root := gitRepoWithConfig(t, `{"image":"ubuntu"}`)
 	writeFile(t, filepath.Join(root, "shared.gitconfig"), "[user]\n\tname = x\n")
 	gitIn(t, root, "config", "include.path", "../shared.gitconfig")
-	// No container yet, so start creates one rather than checking its mounts.
 	stubEngineWithMounts(t, "")
 	if err := runContainerCreate(t.Context(), a, "", "api", root, createOpts{}); err != nil {
 		t.Fatalf("create: %v", err)
@@ -271,8 +249,8 @@ func TestGuardedRefusesAHeldFileThatOpensForWrite(t *testing.T) {
 	stubEngineWithMounts(t, `[{"Destination":"/workspaces/`+filepath.Base(root)+`","RW":true},`+
 		`{"Destination":"`+held+`","RW":false}]`)
 
-	// The probe's exec answers "opens": the stub devcontainer exits 0 for
-	// everything, which is what a write that succeeds looks like.
+	// The stub devcontainer exits 0 for everything, which is what a successful
+	// write looks like.
 	err := runContainerExec(t.Context(), a, "", "api", []string{"true"}, false, nil)
 	if err == nil || !strings.Contains(err.Error(), held) || !strings.Contains(err.Error(), "restart") {
 		t.Fatalf("exec = %v, want a refusal naming %s and a restart", err, held)
@@ -282,7 +260,6 @@ func TestGuardedRefusesAHeldFileThatOpensForWrite(t *testing.T) {
 	}
 }
 
-// And a file that refuses the write lets the command run.
 func TestGuardedRunsWhenAHeldFileStaysReadOnly(t *testing.T) {
 	isolateGit(t)
 	a, _ := newTestApp(t)
@@ -298,8 +275,6 @@ func TestGuardedRunsWhenAHeldFileStaysReadOnly(t *testing.T) {
 	held := "/workspaces/" + filepath.Base(root) + "/shared.gitconfig"
 	stubEngineWithMounts(t, `[{"Destination":"/workspaces/`+filepath.Base(root)+`","RW":true},`+
 		`{"Destination":"`+held+`","RW":false}]`)
-	// The probe's write fails, as it does on a read-only mount; the command
-	// itself succeeds.
 	stubProbeRefused(t)
 
 	if err := runContainerExec(t.Context(), a, "", "api", []string{"true"}, false, nil); err != nil {
@@ -307,8 +282,8 @@ func TestGuardedRunsWhenAHeldFileStaysReadOnly(t *testing.T) {
 	}
 }
 
-// stubProbeRefused is a devcontainer whose exec fails for the held-file probe
-// and succeeds for anything else.
+// stubProbeRefused is a devcontainer whose exec fails only for the held-file
+// probe.
 func stubProbeRefused(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
@@ -323,8 +298,6 @@ func stubProbeRefused(t *testing.T) {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
-// An isolated container's workspace is a volume, never the folder: a generated
-// document mounts the volume and names the folder only as where to seed from.
 func TestIsolatedGeneratedConfigMountsAVolume(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -340,8 +313,6 @@ func TestIsolatedGeneratedConfigMountsAVolume(t *testing.T) {
 	}
 }
 
-// A project-owned isolated container gets the volume merged into its own
-// document, replacing whatever workspace mount the project named.
 func TestIsolatedProjectConfigGetsTheVolume(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -386,7 +357,6 @@ func documentUsedForUp(t *testing.T, calls, captured string) string {
 	return best
 }
 
-// The list says each container's mode, and legacy for one from before modes.
 func TestListShowsTheMode(t *testing.T) {
 	a, out := newTestApp(t)
 	seedWorkspace(t, a)
@@ -431,8 +401,6 @@ func TestListShowsTheMode(t *testing.T) {
 	}
 }
 
-// A legacy container that was guarded is told, once per command, that its
-// guard can lapse and how to replace it.
 func TestLegacyGuardedContainerIsWarned(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -450,10 +418,6 @@ func TestLegacyGuardedContainerIsWarned(t *testing.T) {
 	}
 }
 
-// An isolated container shares nothing with the host: no git guard, and none
-// of its mounts — the folder is copied in, never mounted, so a bind of the
-// host's .git into it would hand the agent the very repository isolated mode
-// exists to keep out of reach.
 func TestIsolatedGetsNoGitGuardMounts(t *testing.T) {
 	isolateGit(t)
 	a, _ := newTestApp(t)
@@ -483,10 +447,8 @@ func TestIsolatedGetsNoGitGuardMounts(t *testing.T) {
 	}
 }
 
-// A bind-mounted checkout can arrive owned by someone other than the container
-// user — a macOS podman machine does not remap it — and git then refuses the
-// repository as dubious ownership. After start, the container's own git config
-// trusts the paths dev mounted there: the checkout, and a worktree's repository.
+// After start, the container's git trusts the paths dev mounted; a macOS podman
+// machine passes host ownership through and git refuses them otherwise.
 func TestStartTrustsTheMountedRepository(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
@@ -508,8 +470,6 @@ func TestStartTrustsTheMountedRepository(t *testing.T) {
 			t.Errorf("start did not mark %s safe inside the container:\n%s", dir, log)
 		}
 	}
-	// --global inside the container: the file GIT_CONFIG_GLOBAL names on the
-	// state volume, never the repository's own config.
 	if !strings.Contains(log, "config --global --add safe.directory") {
 		t.Errorf("safe.directory was not written to the container's global config:\n%s", log)
 	}
@@ -518,7 +478,6 @@ func TestStartTrustsTheMountedRepository(t *testing.T) {
 	}
 }
 
-// Isolated mounts nothing of the host, so there is nothing to trust.
 func TestStartTrustsNothingForAnIsolatedContainer(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)

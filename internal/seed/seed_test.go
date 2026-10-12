@@ -54,10 +54,8 @@ func names(t *testing.T, b []byte) []string {
 	return out
 }
 
-// The working tree goes in as it is on the host — uncommitted and untracked
-// files included — and the repository as a bundle, never as .git's files: a
-// copied .git would carry the host's config and hooks, and a worktree's .git
-// file names a host path that does not exist in the container.
+// The working tree goes in as on the host, and the repository as a bundle,
+// never as .git.
 func TestArchiveHasTheTreeAndABundleButNoGitDirectory(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
@@ -108,9 +106,8 @@ func TestArchiveOfAPlainFolder(t *testing.T) {
 	}
 }
 
-// The script the container runs turns the archive back into a repository: the
-// folder's branch checked out, its origin set, the working tree as it was. Run
-// here with sh on the host, which is all the container needs.
+// The seed script, run with host sh, rebuilds the branch, origin and working
+// tree.
 func TestUnpackedArchiveIsTheSameRepository(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
@@ -148,7 +145,7 @@ func TestUnpackedArchiveIsTheSameRepository(t *testing.T) {
 		t.Errorf("origin = %q, want the folder's", got)
 	}
 	status := gitIn(t, dst, "status", "--porcelain")
-	// gitIn trims, so the first line loses the leading space of " M".
+	// gitIn trims, so the leading space of " M" is lost.
 	if !strings.Contains(status, "M f.txt") || !strings.Contains(status, "?? new.txt") {
 		t.Errorf("status = %q, want f.txt modified and new.txt untracked", status)
 	}
@@ -160,8 +157,7 @@ func TestUnpackedArchiveIsTheSameRepository(t *testing.T) {
 	}
 }
 
-// A worktree folder seeds to a standalone repository: its .git file names a
-// host path the container does not have.
+// A worktree folder seeds to a standalone repository, not a .git file.
 func TestArchiveOfAWorktree(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")

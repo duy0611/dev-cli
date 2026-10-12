@@ -48,10 +48,8 @@ func initRepo(t *testing.T) string {
 	return dir
 }
 
-// worktreeWithContainer makes a checkout with `worktree create` and a
-// container on it with `container create`, both named name — what one
-// `worktree create` used to do. opts are the container's; the defaults
-// generate a configuration and do not start, so no engine is needed.
+// worktreeWithContainer makes a checkout and a container on it, both named
+// name.
 func worktreeWithContainer(t *testing.T, a *app, name, repo, path string, opts createOpts) {
 	t.Helper()
 	wo := checkoutOpts(repo, path)
@@ -62,8 +60,8 @@ func worktreeWithContainer(t *testing.T, a *app, name, repo, path string, opts c
 	containerOn(t, a, name, path, opts)
 }
 
-// A container on a checkout `worktree create` made gets the repository mounted
-// at its own host path, or git does not work inside it.
+// The repository is mounted at its own host path, or git fails inside the
+// container.
 func TestContainerOnAWorktreeBindsTheRepository(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
@@ -87,13 +85,11 @@ func TestContainerOnAWorktreeBindsTheRepository(t *testing.T) {
 	if w.Branch != "feat" {
 		t.Errorf("branch = %q, want feat", w.Branch)
 	}
-	// The stored path is what git actually created, resolved — not what was
-	// typed. git records the resolved path in its backlink, and the mount has
-	// to match what git wrote.
+	// The stored path is git's resolved one, which the mount must match.
 	if w.Path != c.Source {
 		t.Errorf("worktree path %q and container source %q disagree", w.Path, c.Source)
 	}
-	// The repository is the common directory, which is what gets mounted.
+	// The common directory is what gets mounted, never <repo>/.git.
 	if !strings.HasSuffix(w.Repo, ".git") || c.WorktreeRepo != w.Repo {
 		t.Errorf("repo = %q, container's = %q; want git's common directory on both", w.Repo, c.WorktreeRepo)
 	}
@@ -102,10 +98,6 @@ func TestContainerOnAWorktreeBindsTheRepository(t *testing.T) {
 	}
 }
 
-// A container on a checkout of a repository that ships its own .devcontainer
-// takes the project's config untouched — dev may not write into it (invariant
-// 9) — so it gets no generated document, and its two bind mounts are merged
-// into a per-invocation override instead (dcgen.OverlayWorktree).
 func TestContainerOnAWorktreeUsesTheProjectsOwnConfig(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
@@ -133,7 +125,6 @@ func TestContainerOnAWorktreeUsesTheProjectsOwnConfig(t *testing.T) {
 	if err := runWorktreeCreate(t.Context(), a, "", "feat", checkoutOpts(repo, path)); err != nil {
 		t.Fatalf("worktree create: %v", err)
 	}
-	// The project ships one, so neither --generate nor --tools.
 	if err := runContainerCreate(t.Context(), a, "", "feat", path, createOpts{noStart: true}); err != nil {
 		t.Fatalf("container create: %v", err)
 	}
@@ -152,20 +143,17 @@ func TestContainerOnAWorktreeUsesTheProjectsOwnConfig(t *testing.T) {
 	if c.ConfigPath == "" {
 		t.Error("the project's own config was not recorded")
 	}
-	// The repository is on the row: it is what materialise reads to build the
-	// merged override.
+	// materialise reads the repository from the row.
 	if c.WorktreeRepo == "" {
 		t.Error("no repository recorded for a project-owned worktree container")
 	}
 }
 
-// The check the operator will hit most often.
 func TestWorktreeCreateOutsideARepository(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
 
-	// A directory that is not a repository, standing in for the working one.
 	opts := checkoutOpts(t.TempDir(), filepath.Join(t.TempDir(), "wt"))
 
 	err := runWorktreeCreate(t.Context(), a, "", "feat", opts)
@@ -175,14 +163,11 @@ func TestWorktreeCreateOutsideARepository(t *testing.T) {
 	if got := exitCodeOf(err); got != exitUsage {
 		t.Errorf("exit code = %d, want %d", got, exitUsage)
 	}
-	// The message has to name the way forward; git's own says ".git", which is
-	// not a directory the operator chose.
 	if !strings.Contains(err.Error(), "--repo") {
 		t.Errorf("error %q does not mention --repo", err)
 	}
 }
 
-// Nothing is written when the repository check fails.
 func TestWorktreeCreateOutsideARepositoryWritesNothing(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
@@ -200,7 +185,6 @@ func TestWorktreeCreateOutsideARepositoryWritesNothing(t *testing.T) {
 	}
 }
 
-// An existing path is git's error, and it must arrive before anything is made.
 func TestWorktreeCreateRefusesAnExistingPath(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
@@ -217,8 +201,6 @@ func TestWorktreeCreateRefusesAnExistingPath(t *testing.T) {
 	}
 }
 
-// --base with an existing branch reads as one intent and means another, so it
-// is refused rather than ignored.
 func TestWorktreeCreateRejectsBaseWithAnExistingBranch(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
@@ -243,10 +225,8 @@ func TestWorktreeCreateRejectsBaseWithAnExistingBranch(t *testing.T) {
 	}
 }
 
-// Kubernetes has no host bind mounts, so the two pointers a worktree depends on
-// cannot resolve there. Refusing a container on one is honest; seeding the
-// files would look like it worked. The checkout itself is the host's, so
-// worktree create does not care which provider the workspace names.
+// k8s has no host bind mounts, so a worktree's absolute paths cannot resolve in
+// a pod.
 func TestContainerOnAWorktreeRefusesK8s(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
@@ -272,7 +252,6 @@ func TestContainerOnAWorktreeRefusesK8s(t *testing.T) {
 	}
 }
 
-// A taken name is refused before git runs, so it leaves no checkout behind.
 func TestWorktreeCreateRefusesATakenName(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
@@ -295,11 +274,8 @@ func TestWorktreeCreateRefusesATakenName(t *testing.T) {
 	}
 }
 
-// One thing this task does not need to change: local.Provider.Remove branches
-// on SourceKind == model.SourceNone before removing the workspace volume, and
-// a worktree container is SourceFolder — so it removes the state volume and
-// never the checkout. A worktree container that deleted its own checkout on
-// `container remove` would be the worst bug this feature could have.
+// A worktree container is SourceFolder, so Remove touches only the state
+// volume, never the checkout.
 func TestWorktreeContainerIsNotRemovedAsFolderless(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
@@ -346,7 +322,6 @@ func TestWorktreeRemoveTakesTheCheckoutAndItsRecord(t *testing.T) {
 	}
 }
 
-// The branch is the work; the checkout is scaffolding.
 func TestWorktreeRemoveKeepsTheBranch(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
@@ -371,8 +346,7 @@ func TestWorktreeRemoveKeepsTheBranch(t *testing.T) {
 	}
 }
 
-// The row is removed last, so git's refusal on a dirty checkout leaves the
-// record intact and the command retryable.
+// The row is removed last, so a refused git remove stays retryable.
 func TestWorktreeRemoveKeepsTheRowWhenGitRefuses(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
@@ -416,11 +390,8 @@ func TestWorktreeRemoveUnknown(t *testing.T) {
 	}
 }
 
-// rewriteGeneratedTools re-renders the whole document from the tool list and
-// the stored row, so anything not derivable from those is destroyed by the
-// next `rebuild --tools`. That is the trap invariant 10 records for the state
-// volume, and the .git bind is a third instance of it: dropped here, the next
-// up starts a container whose git does not work, with no warning.
+// rewriteGeneratedTools re-renders the whole document, so the .git binds are
+// rebuilt from the row.
 func TestRebuildToolsKeepsTheWorktreeMount(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
@@ -450,13 +421,11 @@ func TestRebuildToolsKeepsTheWorktreeMount(t *testing.T) {
 	if !strings.Contains(c.GeneratedConfig, `"workspaceFolder": "`+w.Path+`"`) {
 		t.Errorf("rebuild --tools dropped the checkout's host path:\n%s", c.GeneratedConfig)
 	}
-	// And the tool change actually happened, or the test proves nothing.
 	if !strings.Contains(c.GeneratedConfig, "node") {
 		t.Errorf("rebuild --tools did not add node:\n%s", c.GeneratedConfig)
 	}
 }
 
-// And none is invented for a container that never had one.
 func TestRebuildToolsInventsNoWorktreeMount(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -483,7 +452,6 @@ func TestRebuildToolsInventsNoWorktreeMount(t *testing.T) {
 	}
 }
 
-// A container's name is not a worktree to remove.
 func TestWorktreeRemoveRefusesAPlainContainer(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
@@ -505,8 +473,6 @@ func TestWorktreeRemoveRefusesAPlainContainer(t *testing.T) {
 	}
 }
 
-// `container remove` on a container on a worktree takes the container and
-// leaves the checkout and its record, which belong to the worktree.
 func TestContainerRemoveLeavesTheWorktree(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
@@ -530,9 +496,7 @@ func TestContainerRemoveLeavesTheWorktree(t *testing.T) {
 	}
 }
 
-// captureStderr collects what warnf writes, which goes to os.Stderr directly
-// rather than through the app's writer — it is deliberately kept out of a
-// piped list.
+// captureStderr returns what warnf wrote to os.Stderr.
 func captureStderr(t *testing.T, fn func()) string {
 	t.Helper()
 	old := os.Stderr
@@ -564,8 +528,7 @@ func gitIn(t *testing.T, dir string, args ...string) {
 	}
 }
 
-// seededRepo is a repository whose checkout holds a .env and a node_modules,
-// both ignored, the way a project looks after its install has run once.
+// seededRepo is a repository with an ignored .env and node_modules.
 func seededRepo(t *testing.T) string {
 	t.Helper()
 	repo := initRepo(t)
@@ -582,8 +545,7 @@ func TestWorktreeCreateCopiesTheListedIgnoredFiles(t *testing.T) {
 	a, out := newTestApp(t)
 	seedWorkspace(t, a)
 	repo := seededRepo(t)
-	// Uncommitted on purpose: the manifest is read from the source checkout,
-	// so the operator can try one before committing it.
+	// Uncommitted: the manifest is read from the source checkout.
 	writeFile(t, filepath.Join(repo, ".worktreeinclude"), ".env\nnode_modules/\n")
 	path := filepath.Join(t.TempDir(), "wt")
 
@@ -602,7 +564,6 @@ func TestWorktreeCreateCopiesTheListedIgnoredFiles(t *testing.T) {
 	}
 }
 
-// With neither a manifest nor the flag, create behaves exactly as before.
 func TestWorktreeCreateCopiesNothingUnasked(t *testing.T) {
 	requireGit(t)
 	a, out := newTestApp(t)
@@ -621,7 +582,6 @@ func TestWorktreeCreateCopiesNothingUnasked(t *testing.T) {
 	}
 }
 
-// The flag's patterns add to the manifest's rather than replacing them.
 func TestWorktreeCreateIncludeFileAddsToTheManifest(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
@@ -662,7 +622,6 @@ func TestWorktreeCreateRefusesAMissingIncludeFile(t *testing.T) {
 	}
 }
 
-// A copy that fails leaves neither a checkout nor a record behind.
 func TestWorktreeCreateRollsBackAFailedCopy(t *testing.T) {
 	requireGit(t)
 	if os.Getuid() == 0 {
@@ -693,8 +652,6 @@ func TestWorktreeCreateRollsBackAFailedCopy(t *testing.T) {
 	}
 }
 
-// A project that ignores its .devcontainer and lists it gets it copied into the
-// checkout, so a container made there afterwards uses it.
 func TestWorktreeCreateCopiesAnIgnoredDevcontainer(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
@@ -728,8 +685,6 @@ func TestWorktreeCreateCopiesAnIgnoredDevcontainer(t *testing.T) {
 	}
 }
 
-// A bare repository has no checkout to copy from; asking for a copy anyway is
-// a usage error, while not asking is fine.
 func TestWorktreeCreateIncludeFileFromABareRepository(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
@@ -752,8 +707,7 @@ func TestWorktreeCreateIncludeFileFromABareRepository(t *testing.T) {
 	}
 }
 
-// Everything carried over is ignored, and git removes ignored files with the
-// checkout — so a seeded worktree needs no --force to remove.
+// Copied files are ignored, and git removes ignored files with the checkout.
 func TestWorktreeRemoveNeedsNoForceAfterACopy(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
@@ -772,9 +726,6 @@ func TestWorktreeRemoveNeedsNoForceAfterACopy(t *testing.T) {
 
 // --- container create on a worktree folder ----------------------------------
 
-// A worktree made by plain git, with no dev record of it at all, still gets
-// the two mounts invariant 11 requires: the repository is read from git at
-// create and kept on the container row.
 func TestContainerCreateOnAWorktreeFolderRecordsItsRepository(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
@@ -811,7 +762,6 @@ func TestContainerCreateOnAWorktreeFolderRecordsItsRepository(t *testing.T) {
 	}
 }
 
-// An ordinary checkout is not a worktree, and gets no repository mount.
 func TestContainerCreateOnAPlainCheckoutRecordsNoRepository(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
@@ -863,8 +813,7 @@ func TestWorktreeCreateMakesOnlyTheCheckout(t *testing.T) {
 	}
 }
 
-// A worktree outlives any container on it, so removing it while one still
-// runs there would pull the folder out from under that container.
+// Removing under a running container would pull its folder out from under it.
 func TestWorktreeRemoveRefusesWhileAContainerUsesIt(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
@@ -888,9 +837,7 @@ func TestWorktreeRemoveRefusesWhileAContainerUsesIt(t *testing.T) {
 	}
 }
 
-// Removing every workspace row by cascade would leave checkouts on disk that
-// nothing records, so a workspace with worktrees is refused like one with
-// containers.
+// A cascade delete would leave checkouts on disk with no record.
 func TestWorkspaceRemoveRefusesWhileItHasWorktrees(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
@@ -910,8 +857,6 @@ func TestWorkspaceRemoveRefusesWhileItHasWorktrees(t *testing.T) {
 	}
 }
 
-// The list says which containers run on each checkout, now that it may be
-// any number of them.
 func TestWorktreeListNamesTheContainersOnIt(t *testing.T) {
 	requireGit(t)
 	a, out := newTestApp(t)
@@ -932,16 +877,13 @@ func TestWorktreeListNamesTheContainersOnIt(t *testing.T) {
 	}
 }
 
-// checkoutOpts is a worktree create that keeps herdr out of a unit test: a
-// host that has herdr installed should not have its daemon probed or its
-// sidebar written to just because a test made a checkout.
+// checkoutOpts is worktreeOpts with herdr kept out of the test.
 func checkoutOpts(repo, path string) worktreeOpts {
 	return worktreeOpts{repo: repo, branch: "feat", path: path, noHerdr: true}
 }
 
-// containerOn creates a container on a folder, generated so the test needs no
-// project configuration, and not started so it needs no engine. opts adds to
-// those defaults.
+// containerOn creates a generated, unstarted container on path, so no project
+// config or engine is needed.
 func containerOn(t *testing.T, a *app, name, path string, opts createOpts) model.Container {
 	t.Helper()
 	opts.noStart = true

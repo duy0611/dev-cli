@@ -25,9 +25,7 @@ func touch(path string) error {
 	return f.Close()
 }
 
-// startTestAgent runs a real ssh-agent holding one key, and returns its socket.
-// Real rather than stubbed: the point of these tests is the value handed to
-// git, and only a real agent produces a real key.
+// startTestAgent runs a real ssh-agent holding one key and returns its socket.
 func startTestAgent(t *testing.T) string {
 	t.Helper()
 	for _, bin := range []string{"ssh-agent", "ssh-add", "ssh-keygen"} {
@@ -36,8 +34,7 @@ func startTestAgent(t *testing.T) string {
 		}
 	}
 
-	// Short path: a unix socket path is capped near 100 bytes by the kernel,
-	// and t.TempDir() under a long test name can exceed it.
+	// Short path: unix socket paths are capped near 100 bytes.
 	dir, err := os.MkdirTemp("", "cliag")
 	if err != nil {
 		t.Fatal(err)
@@ -75,8 +72,7 @@ func startTestAgent(t *testing.T) string {
 	return socket
 }
 
-// notForwarder is a provider that cannot carry the agent, standing in for one
-// added later that has not implemented the optional interface.
+// notForwarder is a provider without the optional AgentForwarder interface.
 type notForwarder struct{ provider.Provider }
 
 func TestForwardAgentOffIsAPassthrough(t *testing.T) {
@@ -92,8 +88,6 @@ func TestForwardAgentOffIsAPassthrough(t *testing.T) {
 	if err != nil {
 		t.Fatalf("forwardAgent: %v", err)
 	}
-	// A stop that is safe to call is what lets every caller defer it without
-	// checking whether forwarding was on.
 	stop()
 
 	if len(out) != len(in) || out[0] != in[0] {
@@ -106,9 +100,7 @@ func TestForwardAgentOffIsAPassthrough(t *testing.T) {
 	}
 }
 
-// TestForwardAgentNoHostAgent covers the host having no agent: reported by the
-// name of the variable to set, because the alternative is a permission-denied
-// from git much later that says nothing about the host.
+// The no-agent error names SSH_AUTH_SOCK, not a later permission-denied.
 func TestForwardAgentNoHostAgent(t *testing.T) {
 	a, _ := newTestApp(t)
 	t.Setenv("SSH_AUTH_SOCK", "")
@@ -127,9 +119,6 @@ func TestForwardAgentNoHostAgent(t *testing.T) {
 	}
 }
 
-// --no-ssh-agent on a workspace that forwards: no relay, no socket, and no
-// error from a provider that could not have carried one anyway — proving the
-// override is honoured before anything tries to forward.
 func TestForwardAgentOverrideOff(t *testing.T) {
 	a, _ := newTestApp(t)
 	in := []provider.EnvVar{{Key: "FOO", Value: "bar"}}
@@ -150,8 +139,6 @@ func TestForwardAgentOverrideOff(t *testing.T) {
 	}
 }
 
-// --ssh-agent on a workspace that does not forward: it tries, so a host with no
-// agent is reported exactly as it is for a workspace with forwarding on.
 func TestForwardAgentOverrideOn(t *testing.T) {
 	a, _ := newTestApp(t)
 	t.Setenv("SSH_AUTH_SOCK", "")
@@ -193,9 +180,7 @@ func TestSSHAgentFlagsOverride(t *testing.T) {
 	}
 }
 
-// Both flags is a contradictory request, so it exits 2 on every command that
-// takes them (invariant 7) — and before the container is looked up, or a
-// missing one would exit 3 and hide the real mistake.
+// Checked before the container lookup, so a missing one does not exit 3 first.
 func TestSSHAgentFlagsTogetherExitTwo(t *testing.T) {
 	for _, argv := range [][]string{
 		{"container", "shell", "api", "--ssh-agent", "--no-ssh-agent"},
@@ -211,9 +196,6 @@ func TestSSHAgentFlagsTogetherExitTwo(t *testing.T) {
 
 func ptr[T any](v T) *T { return &v }
 
-// TestWorkspaceInitStoresSSHForward covers the flag reaching the database.
-// Without the round trip a workspace would report forwarding on and every
-// command would quietly run without it.
 func TestWorkspaceInitStoresSSHForward(t *testing.T) {
 	a, out := newTestApp(t)
 	if err := runProviderConfigure(a, "p", "local", k8s.Config{}); err != nil {
@@ -241,17 +223,13 @@ func TestWorkspaceInitStoresSSHForward(t *testing.T) {
 		}
 	}
 
-	// Said out loud at creation, because it is the kind of setting an operator
-	// should not have to run a second command to discover.
 	if !strings.Contains(out.String(), "ssh agent forwarding is on") {
 		t.Errorf("init did not report forwarding; got:\n%s", out.String())
 	}
 }
 
-// TestSigningEnvPairsAreContiguous covers the trap in git's environment-based
-// configuration: GIT_CONFIG_COUNT must equal the number of pairs, numbered from
-// zero with no gaps. A gap is a fatal git error, not a skipped entry — so every
-// command in the container would fail, not just the signing.
+// GIT_CONFIG_COUNT must match the pairs exactly: a gap is fatal to git, not
+// skipped.
 func TestSigningEnvPairsAreContiguous(t *testing.T) {
 	socket := startTestAgent(t)
 	env := signingEnv(socket)
@@ -277,16 +255,12 @@ func TestSigningEnvPairsAreContiguous(t *testing.T) {
 			t.Errorf("GIT_CONFIG_VALUE_%d is missing", i)
 		}
 	}
-	// And nothing beyond the count, which git would ignore while the operator
-	// assumed it applied.
 	if _, ok := byKey[fmt.Sprintf("GIT_CONFIG_KEY_%d", n)]; ok {
 		t.Errorf("GIT_CONFIG_KEY_%d is set but the count is %d", n, n)
 	}
 }
 
-// TestSigningEnvUsesKeyPrefix covers the form git needs. Without key:: it reads
-// user.signingkey as a *filename* and fails looking for a file that is not
-// there.
+// key:: is needed: without it git reads user.signingkey as a filename.
 func TestSigningEnvUsesKeyPrefix(t *testing.T) {
 	socket := startTestAgent(t)
 
@@ -305,22 +279,15 @@ func TestSigningEnvUsesKeyPrefix(t *testing.T) {
 	}
 }
 
-// TestSigningEnvWithoutAgent covers a socket that answers nothing: signing is
-// skipped rather than configured with an empty key, which git would reject on
-// every commit.
+// An empty key would fail every commit, so signing is skipped.
 func TestSigningEnvWithoutAgent(t *testing.T) {
 	if env := signingEnv(t.TempDir() + "/absent.sock"); env != nil {
 		t.Errorf("signing was configured without an agent: %v", env)
 	}
 }
 
-// TestForwardAgentUnsupportedProvider covers a provider that does not implement
-// the optional interface. Refused rather than skipped: the workspace asked for
-// the agent, and carrying on without it would fail later and elsewhere.
 func TestForwardAgentUnsupportedProvider(t *testing.T) {
 	a, _ := newTestApp(t)
-	// A socket that exists, so the failure is about the provider rather than
-	// about the host.
 	sock := t.TempDir() + "/agent.sock"
 	if err := touch(sock); err != nil {
 		t.Fatal(err)
@@ -343,14 +310,8 @@ func TestForwardAgentUnsupportedProvider(t *testing.T) {
 	}
 }
 
-// GIT_CONFIG_GLOBAL is set by every container that persists its state, and it
-// shares the GIT_CONFIG_ prefix with the numbered keys that drive git's
-// environment-based configuration.
-//
-// Matching that prefix would read it as "the operator configures git
-// themselves" and skip signing for all of them, warning about a variable they
-// never set. The two compose: GIT_CONFIG_GLOBAL names the file, the numbered
-// keys override what is in it.
+// GIT_CONFIG_GLOBAL shares the GIT_CONFIG_ prefix; matching it would wrongly
+// skip signing.
 func TestStateGitConfigDoesNotSuppressSigning(t *testing.T) {
 	environ := []provider.EnvVar{{Key: "GIT_CONFIG_GLOBAL", Value: "/var/dev-state/gitconfig"}}
 	if hasGitConfigEnv(environ) {
@@ -358,8 +319,6 @@ func TestStateGitConfigDoesNotSuppressSigning(t *testing.T) {
 	}
 }
 
-// The keys that do mean it. Both would arrive as --remote-env and the last
-// would win, so adding ours would silently drop theirs.
 func TestOperatorGitConfigSuppressesSigning(t *testing.T) {
 	for _, key := range []string{"GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"} {
 		if !hasGitConfigEnv([]provider.EnvVar{{Key: key, Value: "x"}}) {
@@ -368,8 +327,6 @@ func TestOperatorGitConfigSuppressesSigning(t *testing.T) {
 	}
 }
 
-// TestRelayDropsFields covers the record a drop leaves. No drops must mean no
-// key at all, so a session that never dropped writes the record it always has.
 func TestRelayDropsFields(t *testing.T) {
 	if got := relayDrops(nil); got != nil {
 		t.Errorf("no drops = %v, want nil", got)
@@ -390,9 +347,7 @@ func TestRelayDropsFields(t *testing.T) {
 	}
 }
 
-// A guarded container cannot commit, so the only thing the relay could still
-// do there is push what the operator committed. --ssh-agent is refused, by
-// name of the mode, before anything tries to forward.
+// Guarded refuses --ssh-agent: a relay could still push existing commits.
 func TestForwardAgentRefusedOnAGuardedContainer(t *testing.T) {
 	a, _ := newTestApp(t)
 	on := true
@@ -411,8 +366,6 @@ func TestForwardAgentRefusedOnAGuardedContainer(t *testing.T) {
 	}
 }
 
-// A workspace that forwards does not forward into a guarded container: a
-// passthrough, with no relay attempted and no error.
 func TestWorkspaceForwardingSkipsAGuardedContainer(t *testing.T) {
 	a, _ := newTestApp(t)
 	in := []provider.EnvVar{{Key: "FOO", Value: "bar"}}

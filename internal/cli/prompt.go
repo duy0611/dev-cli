@@ -7,11 +7,8 @@ import (
 	"strings"
 )
 
-// prompter asks questions on a terminal.
-//
-// It takes its streams rather than reaching for the process's own, so the
-// question-and-answer logic is testable without a pty; whether to use it at all
-// is the caller's decision, made with isTerminal.
+// prompter asks questions on a terminal. It takes its streams so the logic is
+// testable without a pty; callers check isTerminal first.
 type prompter struct {
 	in  *bufio.Reader
 	out io.Writer
@@ -21,10 +18,7 @@ func newPrompter(in io.Reader, out io.Writer) *prompter {
 	return &prompter{in: bufio.NewReader(in), out: out}
 }
 
-// ask reads one answer, returning def when the operator just presses return.
-//
-// An empty def means the answer is optional: empty is a legitimate value, and
-// the caller decides whether that is acceptable.
+// ask reads one answer, returning def when the line is empty.
 func (p *prompter) ask(label, def string) (string, error) {
 	if def != "" {
 		fmt.Fprintf(p.out, "%s [%s]: ", label, def)
@@ -49,8 +43,7 @@ func (p *prompter) ask(label, def string) (string, error) {
 	return answer, nil
 }
 
-// askRequired repeats the question until there is an answer, since some
-// settings have no workable default.
+// askRequired repeats the question until there is an answer.
 func (p *prompter) askRequired(label, def string) (string, error) {
 	for {
 		answer, err := p.ask(label, def)

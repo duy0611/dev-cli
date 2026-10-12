@@ -6,21 +6,14 @@ import (
 	"github.com/duy0611/dev-cli/internal/agentcfg"
 )
 
-// skillSteps places each skill at <dir>/<name>, replacing whatever that one
-// directory held. Directories the file does not name are left alone, so a
-// skill the operator added by hand survives an apply.
+// skillSteps places each skill at <dir>/<name>, replacing only that directory,
+// so skills added by hand survive. Git skills from one repository at one ref
+// share a step and a clone.
 //
-// Git skills from one repository at one ref share a step and a clone, in the
-// position of the first of them: a repository holding ten skills is cloned
-// once, not ten times, however the file spreads them across entries.
-//
-// dir is an adapter's constant shell expression and sk.Name passed
-// validSkillName — letters, digits, . _ - and never "." or ".." — so both are
-// safe to splice. Everything that came from agents.yaml as free text (a URL, a
-// ref, a subdirectory) is passed as a positional argument instead.
+// dir and sk.Name are spliced into the script; both are constants or pass
+// validSkillName. Free text from agents.yaml is passed as arguments instead.
 func skillSteps(agentID, dir string, skills []agentcfg.Skill) []Step {
 	type repo struct{ git, ref string }
-	// A slot is one step: a local skill, or the repository a group is keyed by.
 	type slot struct {
 		local *agentcfg.Skill
 		repo  repo
@@ -44,8 +37,8 @@ func skillSteps(agentID, dir string, skills []agentcfg.Skill) []Step {
 		if sk := o.local; sk != nil {
 			out = append(out, Step{
 				Desc: agentID + ": skill " + sk.Name,
-				// -o: do not restore ownership from the archive, so the
-				// files belong to the user running the extraction.
+				// -o: files belong to the extracting user, not the archive's
+				// owner.
 				Cmd:   []string{"sh", "-c", `d=` + dir + "/" + sk.Name + `; rm -rf "$d" && mkdir -p "$d" && tar -xo -C "$d"`},
 				Stdin: sk.Archive,
 			})
@@ -56,35 +49,21 @@ func skillSteps(agentID, dir string, skills []agentcfg.Skill) []Step {
 	return out
 }
 
-// gitSkillStep clones one repository and installs every skill it was asked
-// for. Arguments are the URL, the ref, then a name and a subdirectory per skill.
+// gitSkillStep clones one repository and installs each skill asked for.
+// Arguments are the URL, the ref, then a name and a subdirectory per skill.
 //
-// Cloned per agent into a temporary directory the trap removes. A shallow
-// clone is cheap, and sharing one across agents would need state carried
-// between steps that are otherwise independent.
+// Staging is in a hidden directory beside the target, not $TMPDIR: under
+// SELinux a file keeps its label across mv, and /tmp carries the container's
+// own MCS categories, so a skill staged there becomes unreadable after a
+// rebuild.
 //
-// That directory is a hidden one inside the skills directory, never $TMPDIR.
-// Under SELinux a file keeps its label across a rename, and /tmp is labelled
-// with the container's own MCS categories while the state volume is not: a
-// skill staged in /tmp and moved into place is readable by that container
-// alone, so once a rebuild gives the container new categories the next apply
-// cannot even remove it. Staged beside its target, every file is created on
-// the volume and labelled as the volume is, and the final mv stays a rename
-// within one filesystem.
+// Each skill path is resolved with realpath and must land inside the clone, and
+// cp -RP copies links as links. .git is removed before the move, so nothing is
+// deleted through a symlink.
 //
-// The repository is third-party content, so each skill directory is resolved
-// with realpath and has to land inside the clone: a path that is, or passes
-// through, a symlink out of it would otherwise install a link to anywhere, and
-// the .git removal below would delete through it. cp -RP copies any links
-// inside the skill as links, never following them, and .git is removed from
-// the copy before it moves into place, so nothing is ever deleted through the
-// target.
-//
-// Every skill is checked and staged before any is installed, so one bad
-// subdirectory fails the step with none of the repository's skills replaced,
-// rather than leaving half of them at the new version and half at the old.
-// The staged names go through $ns unquoted, which is safe only because
-// validSkillName allows no whitespace or glob characters.
+// All skills are staged before any is installed, so one bad subdirectory
+// replaces none of them. The staged names go through $ns unquoted;
+// validSkillName forbids whitespace and glob characters, which keeps that safe.
 func gitSkillStep(agentID, dir, git, ref string, skills []agentcfg.Skill) Step {
 	branch := ""
 	if ref != "" {

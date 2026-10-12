@@ -8,13 +8,9 @@ import (
 	"testing"
 )
 
-// TestSigningEnvActuallySignsACommit is the test the rest of the signing code
-// exists to satisfy: hand real git exactly the environment dev would hand a
-// container, and check the commit comes out signed.
-//
-// Everything else asserts the shape of the configuration. Only this asserts it
-// works — and the shape has two traps (the key:: prefix, the contiguous count)
-// that produce a plausible-looking configuration git rejects.
+// TestSigningEnvActuallySignsACommit runs real git with the environment dev
+// hands a container. The shape of the config is not enough: its traps produce
+// configuration git rejects.
 func TestSigningEnvActuallySignsACommit(t *testing.T) {
 	for _, bin := range []string{"git", "ssh-keygen"} {
 		if _, err := exec.LookPath(bin); err != nil {
@@ -48,7 +44,6 @@ func TestSigningEnvActuallySignsACommit(t *testing.T) {
 		}
 	}
 
-	// The environment as a container would receive it.
 	var gitEnv []string
 	for _, e := range env {
 		gitEnv = append(gitEnv, e.Key+"="+e.Value)
@@ -58,9 +53,8 @@ func TestSigningEnvActuallySignsACommit(t *testing.T) {
 		t.Fatalf("committing with dev's signing configuration: %v\n%s", err, out)
 	}
 
-	// The signature is in the commit object itself, so this does not depend on
-	// an allowedSignersFile — which dev deliberately does not configure, since
-	// local verification needs a mapping only the operator can supply.
+	// The signature is in the commit object, so this needs no
+	// allowedSignersFile.
 	out, err := run(nil, "cat-file", "commit", "HEAD")
 	if err != nil {
 		t.Fatalf("reading the commit: %v\n%s", err, out)
@@ -70,9 +64,8 @@ func TestSigningEnvActuallySignsACommit(t *testing.T) {
 	}
 }
 
-// TestSigningEnvVerifiesAgainstAllowedSigners goes one step further: given the
-// allowed-signers mapping dev does not generate, git reports a good signature.
-// Proves the signature is valid and made by the agent's key, not merely present.
+// TestSigningEnvVerifiesAgainstAllowedSigners checks the signature is good and
+// made by the agent's key.
 func TestSigningEnvVerifiesAgainstAllowedSigners(t *testing.T) {
 	for _, bin := range []string{"git", "ssh-keygen"} {
 		if _, err := exec.LookPath(bin); err != nil {
@@ -86,8 +79,6 @@ func TestSigningEnvVerifiesAgainstAllowedSigners(t *testing.T) {
 		t.Fatal("no signing configuration was produced")
 	}
 
-	// The public key out of the configuration dev built, minus the key:: prefix
-	// git wants and the allowed-signers format does not.
 	var pub string
 	for i, e := range env {
 		if e.Value == "user.signingkey" && i+1 < len(env) {
@@ -133,7 +124,6 @@ func TestSigningEnvVerifiesAgainstAllowedSigners(t *testing.T) {
 		t.Fatalf("committing: %v\n%s", err, out)
 	}
 
-	// %G? is git's own verdict: G for a good signature, N for none, B for bad.
 	out, err := run(nil, "log", "--format=%G?", "-1")
 	if err != nil {
 		t.Fatalf("verifying: %v\n%s", err, out)

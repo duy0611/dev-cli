@@ -9,7 +9,8 @@ import (
 	"testing"
 )
 
-// Real git, as in internal/gitwt: the behaviour under test is git's matching.
+// requireGit skips when git is absent; the behaviour under test is git's
+// matching.
 func requireGit(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
@@ -36,8 +37,8 @@ func write(t *testing.T, path, content string) {
 	}
 }
 
-// fixture is a repository whose main checkout holds a typical spread of
-// ignored files, plus a fresh worktree of it on branch "feat".
+// fixture returns a source checkout with a spread of ignored files, and a
+// worktree of it on "feat".
 func fixture(t *testing.T) (source, dest string) {
 	t.Helper()
 	requireGit(t)
@@ -91,8 +92,7 @@ func TestSelectCopiesIgnoredMatchesOnly(t *testing.T) {
 	}
 }
 
-// A directory is one entry only when everything under it was chosen; a
-// pattern naming part of it yields the part.
+// A directory is one entry only when everything under it was chosen.
 func TestSelectCollapsesOnlyWholeDirectories(t *testing.T) {
 	source, dest := fixture(t)
 	got := selectWith(t, source, dest, manifest(t, "build/cache/\nnode_modules/\n"))
@@ -101,8 +101,7 @@ func TestSelectCollapsesOnlyWholeDirectories(t *testing.T) {
 	}
 }
 
-// The new branch commits a file the source branch ignores: copying it would
-// silently change the branch.
+// A file the new branch tracks but the source ignores must not be copied over.
 func TestSelectSkipsWhatTheNewCheckoutTracks(t *testing.T) {
 	source, dest := fixture(t)
 	write(t, filepath.Join(dest, ".env"), "COMMITTED=1")
@@ -115,8 +114,7 @@ func TestSelectSkipsWhatTheNewCheckoutTracks(t *testing.T) {
 	}
 }
 
-// A directory the new checkout tracks something in must not be copied whole:
-// cp would nest the copy inside the existing directory.
+// A directory the new checkout tracks something in is not copied whole.
 func TestSelectSplitsADirectoryTheNewCheckoutHas(t *testing.T) {
 	source, dest := fixture(t)
 	write(t, filepath.Join(dest, "node_modules", "vendored.js"), "v")
@@ -182,8 +180,8 @@ func TestPatternFilesRefusesAMissingFlagFile(t *testing.T) {
 	}
 }
 
-// A relative --include-file means relative to where the operator stood, not to
-// the source checkout git is later run from.
+// A relative --include-file is resolved against the working directory, not the
+// source.
 func TestPatternFilesMakesTheFlagAbsolute(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "inc"), "x\n")

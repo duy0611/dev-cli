@@ -10,10 +10,6 @@ import (
 )
 
 // newTestApp returns an app backed by a throwaway database.
-//
-// DEV_STATE is what store.OpenDefault honours, so a test never touches the
-// operator's own state. Stdin under `go test` is /dev/null, which isTerminal
-// rejects, so these exercise the scripted path and never block on a prompt.
 func newTestApp(t *testing.T) (*app, *bytes.Buffer) {
 	t.Helper()
 	t.Setenv("DEV_STATE", t.TempDir())
@@ -38,13 +34,10 @@ func TestConfigureRefusesAKindChange(t *testing.T) {
 	if got := exitCodeOf(err); got != exitUsage {
 		t.Errorf("exit code = %d, want %d", got, exitUsage)
 	}
-	// The way out has to be in the message: there is no --force, so an
-	// operator who is not told to remove it has nothing to try.
 	if !strings.Contains(err.Error(), "dev provider remove prod") {
 		t.Errorf("error %q does not say how to change the kind", err)
 	}
 
-	// Refused means unchanged, not half-applied.
 	st, err := a.store()
 	if err != nil {
 		t.Fatalf("store: %v", err)
@@ -71,8 +64,6 @@ func TestConfigureIsIdempotentForTheSameKind(t *testing.T) {
 func TestConfigureRejectsAnUnknownKind(t *testing.T) {
 	a, _ := newTestApp(t)
 
-	// Checked before the existing provider is consulted, or correcting a typo
-	// would be reported as a kind change rather than as a bad kind.
 	if err := runProviderConfigure(a, "prod", "local", k8s.Config{}); err != nil {
 		t.Fatalf("first configure: %v", err)
 	}
@@ -100,9 +91,6 @@ func TestConfigureKeepsUnflaggedK8sSettings(t *testing.T) {
 		t.Fatalf("first configure: %v", err)
 	}
 
-	// One setting changed from a script. Everything else was configured once
-	// and must survive: re-stating all eight to move one is how a registry
-	// gets dropped.
 	if err := runProviderConfigure(a, "prod", "k8s", k8s.Config{StorageSize: "80Gi"}); err != nil {
 		t.Fatalf("second configure: %v", err)
 	}
@@ -125,8 +113,8 @@ func TestConfigureClearsAnOptionalSettingOnADash(t *testing.T) {
 		t.Fatalf("first configure: %v", err)
 	}
 
-	// An empty flag is indistinguishable from an absent one now that absent
-	// means "keep", so without a marker a pull secret could never be removed.
+	// Without a marker a pull secret could never be cleared: an empty flag and
+	// an absent one are the same.
 	if err := runProviderConfigure(a, "prod", "k8s", k8s.Config{ImagePullSecret: "-"}); err != nil {
 		t.Fatalf("second configure: %v", err)
 	}
@@ -147,9 +135,6 @@ func TestPromptK8sDefaultsToTheStoredConfig(t *testing.T) {
 		ImagePullSecret: "ghcr",
 	}
 
-	// Return pressed at every question. Re-running configure to look at the
-	// settings must not rewrite them, and the hardcoded defaults must not win
-	// over what this provider was configured with.
 	p := newPrompter(strings.NewReader(strings.Repeat("\n", 8)), &bytes.Buffer{})
 	got, err := promptK8s(t.Context(), p, k8s.Config{}, stored)
 	if err != nil {
@@ -178,8 +163,6 @@ func TestPromptK8sPrefersAFlagOverTheStoredValue(t *testing.T) {
 	if got.Registry != "ghcr.io/other" {
 		t.Errorf("registry = %q, want the flag to win", got.Registry)
 	}
-	// A flag is an answer already; asking about it anyway makes the flags
-	// pointless.
 	if strings.Contains(out.String(), "registry") {
 		t.Errorf("prompted for a setting the flag supplied: %q", out.String())
 	}
@@ -194,7 +177,6 @@ func TestPromptK8sClearsAnOptionalSettingOnADash(t *testing.T) {
 		ImagePullSecret: "ghcr",
 	}
 
-	// Context, namespace, registry, platform, size, class, account, secret.
 	answers := "\n\n\n\n\n\n\n-\n"
 	p := newPrompter(strings.NewReader(answers), &bytes.Buffer{})
 	got, err := promptK8s(t.Context(), p, k8s.Config{}, stored)

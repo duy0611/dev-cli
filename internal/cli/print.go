@@ -9,8 +9,6 @@ import (
 )
 
 // header and row write one tab-separated line each, for a tabwriter to align.
-// Kept as functions rather than format strings so a column added to the header
-// and forgotten in the rows is visible at the call site.
 
 func header(w io.Writer, cells ...string) {
 	row(w, cells...)

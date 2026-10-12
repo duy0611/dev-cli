@@ -20,25 +20,14 @@ import (
 )
 
 // gitGuardPlan is how one invocation keeps host git from running what the
-// container writes under .git: mounts where the layout is known, a host-side
-// gitdir to fingerprint around the command where it is not. Both may be set —
-// commondir is checked on the host even for a mounted checkout, since no mount
-// can close it (see gitguard.CommondirPlanted).
+// container writes under .git. commondir is checked on the host even for a
+// mounted checkout, since no mount can close it.
 type gitGuardPlan struct {
-	mounts []string
-	// gitdir is the host .git to check before and after the command; empty
-	// when nothing needs checking.
-	gitdir string
-	// fingerprint says to compare all of gitdir rather than only commondir:
-	// the fallback for a layout the mounts cannot reach.
+	mounts      []string
+	gitdir      string
 	fingerprint bool
-	// tree are the mounts, also in mounts, that hold read-only what host git
-	// runs from the working tree; see treeScope. Kept apart so a running
-	// container can be checked for them and a digest can leave them out.
-	tree []gitguard.Bind
-	// treeWatch are host paths in the working tree that host git runs,
-	// fingerprinted with gitdir when the layout is unknown.
-	treeWatch []string
+	tree        []gitguard.Bind
+	treeWatch   []string
 }
 
 // treeTargets are the container paths of the tree mounts.
@@ -50,10 +39,8 @@ func (p gitGuardPlan) treeTargets() []string {
 	return out
 }
 
-// treeScope is where host git might be pointed into the container's reach for
-// one container: the directories it can write, and the paths in them already
-// guarded another way. watch says the container paths are unknown, so what is
-// found is fingerprinted rather than mounted.
+// treeScope is the directories under the container's reach that host git could
+// be pointed into.
 type treeScope struct {
 	checkout string
 	roots    []gitguard.Root
@@ -61,43 +48,32 @@ type treeScope struct {
 	watch    bool
 }
 
-// planGitGuard works out the plan for c, seeding the hooks copy when seed is
-// set — at create, at rebuild, and on a start that creates the container.
+// planGitGuard returns the guard plan for c. seed copies the hooks at create,
+// rebuild and a start that creates the container.
 //
-// Three cases, by what dev can know about where .git lands in the container:
+// Three layouts: a worktree's is known; a generated or unmoved project's is
+// gitguard.LayoutOf's; a project that moves its workspace is fingerprinted
+// whole, since no mount can be aimed at it.
 //
-//   - A worktree container mounts the checkout and git's common directory at
-//     their own host paths (invariant 11), so the layout is dev's own.
-//   - A generated configuration, or a project's that names no workspace mount,
-//     gets the devcontainer CLI's default layout, which gitguard.LayoutOf
-//     mirrors.
-//   - A project that names its own workspaceMount or workspaceFolder puts .git
-//     wherever it likes. No mount can be aimed at it, so the whole .git is
-//     fingerprinted before each command and compared after.
-//
-// Then the working tree, for a provider whose engine takes the document's
-// mounts: whatever host git runs from it — a core.hooksPath pointed into the
-// checkout, a file an include names there — is held read-only too, or refused
-// when it cannot be. Asked of host git on every command rather than decided at
-// create, because the setting usually arrives later: `make hooks` or a husky
-// `npm install`, run on the host after the container exists. The container
-// cannot set one itself, since .git/config is read-only inside.
+// The working tree is also held read-only where host git could be pointed into
+// it. This is checked on every command, not at create, since the setting often
+// arrives after the container exists. The container cannot set it, since
+// .git/config is read-only inside.
 func (a *app) planGitGuard(ctx context.Context, c model.Container, worktreeRepo string, seed, overrides bool) (gitGuardPlan, error) {
 	plan, scope, err := a.planGitDir(c, worktreeRepo, seed)
-	// A Kubernetes workspace is a copy host git never reads, so nothing in it
-	// is run on the host.
+	// A Kubernetes workspace is a copy host git never reads.
 	if err != nil || scope == nil || !overrides {
 		return plan, err
 	}
-	// Host git follows a planted commondir and fails, or reads the config it
-	// names. watchGitGuard refuses on it by name, which is the clearer report.
+	// watchGitGuard reports a planted commondir by name, which is clearer than
+	// letting git fail.
 	if plan.gitdir != "" && gitguard.CommondirPlanted(plan.gitdir) {
 		return plan, nil
 	}
 	found, err := gitguard.FindTree(ctx, scope.checkout, scope.roots, scope.shielded)
 	if err != nil {
-		// Deferred like an unreadable project file: stop and remove must
-		// still reach a container whose checkout host git cannot read.
+		// Deferred like an unreadable project file, so stop and remove still
+		// reach the container.
 		return gitGuardPlan{}, &overlayError{err}
 	}
 	if scope.watch {
@@ -126,12 +102,11 @@ func (a *app) planGitGuard(ctx context.Context, c model.Container, worktreeRepo 
 	return plan, nil
 }
 
-// planGitDir is planGitGuard's half for .git itself, and the scope its working
-// tree half searches; a nil scope when there is nothing to guard.
+// planGitDir plans the .git half of the guard, and the scope the working tree
+// half searches.
 func (a *app) planGitDir(c model.Container, worktreeRepo string, seed bool) (gitGuardPlan, *treeScope, error) {
-	// Isolated is checked as well as GitGuard, so a row written wrongly still
-	// cannot get the host's .git bound into a container that should share
-	// nothing with the host.
+	// Isolated is checked too, so a wrongly written row still shares nothing
+	// with the host.
 	if !c.GitGuard || c.SourceKind != model.SourceFolder || c.Mode == model.ModeIsolated {
 		return gitGuardPlan{}, nil, nil
 	}
@@ -153,9 +128,8 @@ func (a *app) planGitDir(c model.Container, worktreeRepo string, seed bool) (git
 		if err != nil {
 			return gitGuardPlan{}, nil, err
 		}
-		// Both mounted at their own host paths (invariant 11). The common
-		// directory is a root as well as the checkout: it is writable inside,
-		// and an include can name a file in it.
+		// Both mounted at their own host paths. The common directory is a root
+		// too, since an include can name a file in it.
 		return gitGuardPlan{mounts: mounts}, &treeScope{
 			checkout: c.Source,
 			roots: []gitguard.Root{
@@ -168,12 +142,11 @@ func (a *app) planGitDir(c model.Container, worktreeRepo string, seed bool) (git
 
 	layout, ok := gitguard.LayoutOf(c.Source)
 	if !ok {
-		// Not a repository today. GitGuard was set because it was one at
-		// create; a .git removed since leaves nothing to guard.
+		// GitGuard was set when it was a repository; a .git removed since
+		// leaves nothing to guard.
 		return gitGuardPlan{}, nil, nil
 	}
-	// The repository's root, mounted at the parent of the container's .git;
-	// .git lies inside it, so an include naming a file there is found too.
+	// The repository root, mounted at the parent of the container's .git.
 	root := gitguard.Root{Host: filepath.Dir(layout.GitDir), Container: path.Dir(layout.ContainerGitDir)}
 	shielded := []string{filepath.Join(layout.GitDir, "config"), filepath.Join(layout.GitDir, "hooks")}
 	if c.GeneratedConfig == "" && c.ConfigPath != "" {
@@ -186,8 +159,7 @@ func (a *app) planGitDir(c model.Container, worktreeRepo string, seed bool) (git
 			return gitGuardPlan{}, nil, &overlayError{fmt.Errorf("reading %s: %w", c.ConfigPath, err)}
 		}
 		if custom {
-			// Container paths unknown, so the root's container side is
-			// left empty and nothing found is mounted.
+			// Container paths unknown, so nothing found is mounted.
 			return gitGuardPlan{gitdir: layout.GitDir, fingerprint: true}, &treeScope{
 				checkout: c.Source,
 				roots:    []gitguard.Root{{Host: root.Host}},
@@ -205,14 +177,9 @@ func (a *app) planGitDir(c model.Container, worktreeRepo string, seed bool) (git
 		&treeScope{checkout: c.Source, roots: []gitguard.Root{root}, shielded: shielded}, nil
 }
 
-// planGuardedGitDir is planGitDir for a guarded container: .git, or a
-// worktree's common directory, mounted read-only whole. No hooks copy, no
-// commondir check, no fingerprint — with nothing under .git writable, there is
-// nothing left for any of them to catch.
-//
-// The working tree is still searched, since host git can be pointed into it
-// by a core.hooksPath or an include, and the read-only .git is listed as
-// shielded so nothing under it is mounted a second time.
+// planGuardedGitDir plans a guarded container: .git mounted read-only whole, so
+// no hooks copy, commondir check or fingerprint is needed. The working tree is
+// still searched.
 func planGuardedGitDir(c model.Container, worktreeRepo string) (gitGuardPlan, *treeScope, error) {
 	if worktreeRepo != "" {
 		return gitGuardPlan{mounts: gitguard.ReadOnlyWorktreeMounts(worktreeRepo)}, &treeScope{
@@ -223,7 +190,6 @@ func planGuardedGitDir(c model.Container, worktreeRepo string) (gitGuardPlan, *t
 	}
 	layout, ok := gitguard.LayoutOf(c.Source)
 	if !ok {
-		// Not a repository today; nothing to guard.
 		return gitGuardPlan{}, nil, nil
 	}
 	if c.GeneratedConfig == "" && c.ConfigPath != "" {
@@ -232,9 +198,8 @@ func planGuardedGitDir(c model.Container, worktreeRepo string) (gitGuardPlan, *t
 			return gitGuardPlan{}, nil, err
 		}
 		if custom {
-			// Refused at create; a project edited since is refused here, for
-			// the same reason — no mount can be aimed at a .git dev cannot
-			// locate, and guarded is a promise of prevention.
+			// Refused at create too: no mount can be aimed at a .git dev cannot
+			// locate.
 			return gitGuardPlan{}, nil, &overlayError{movedWorkspaceError(c.ConfigPath)}
 		}
 	}
@@ -243,8 +208,8 @@ func planGuardedGitDir(c model.Container, worktreeRepo string) (gitGuardPlan, *t
 		&treeScope{checkout: c.Source, roots: []gitguard.Root{root}, shielded: []string{layout.GitDir}}, nil
 }
 
-// namesWorkspaceMount reports whether the project's devcontainer.json at path
-// says where its workspace goes, which puts .git where dev cannot see.
+// namesWorkspaceMount reports whether the project's devcontainer.json moves its
+// workspace.
 func namesWorkspaceMount(path string) (bool, error) {
 	project, err := os.ReadFile(path)
 	if err != nil {
@@ -276,9 +241,9 @@ func (e *treeRefusal) Error() string {
 		e.container, strings.Join(e.findings, "\n  "))
 }
 
-// recordRefusal records err in the audit log when it is a tree refusal, and
-// returns it either way. Recorded where a command is refused, not where the
-// plan is made, since stop and remove make one too and are never refused.
+// recordRefusal records a tree refusal in the audit log and returns err. It
+// records where a command is refused, since stop and remove plan too and are
+// never refused.
 func (a *app) recordRefusal(c model.Container, err error) error {
 	var tr *treeRefusal
 	if errors.As(err, &tr) {
@@ -290,14 +255,8 @@ func (a *app) recordRefusal(c model.Container, err error) error {
 	return err
 }
 
-// checkTreeMounts refuses to run anything in a container that exists without
-// the tree mounts this invocation needs. Mounts are fixed when a container is
-// created, so one created before `make hooks` ran on the host has none, and
-// starting or exec'ing into it would leave host git running files the agent
-// can edit. Only a rebuild can add them.
-//
-// A provider that cannot report mounts is not asked, and a container that
-// does not exist yet passes: start is about to create it with them.
+// checkTreeMounts refuses a container that lacks the tree mounts this
+// invocation needs. Mounts are fixed at create, so only a rebuild can add them.
 func (a *app) checkTreeMounts(ctx context.Context, p provider.Provider, c model.Container, plan gitGuardPlan) error {
 	if len(plan.tree) == 0 {
 		return nil
@@ -332,18 +291,8 @@ func (a *app) checkTreeMounts(ctx context.Context, p provider.Provider, c model.
 		c.Name, strings.Join(missing, "\n  "), c.Name)
 }
 
-// probeHeldFiles refuses to run anything in a guarded container where a file
-// held read-only in the working tree has stopped being read-only.
-//
-// Files only. A read-only mount on a single file is detached when the host
-// renames over it — an editor's safe save, git's lock-and-rename — and inspect
-// goes on reporting the mount as configured, so checkTreeMounts cannot see it.
-// A directory mount is never renamed over and is not probed.
-//
-// From inside the container, by opening the file for append and writing
-// nothing: open(2) fails with EROFS on a read-only mount and changes neither
-// content nor mtime otherwise. Not `test -w`, which busybox decides from mode
-// bits and, as root, answers yes for a read-only mount.
+// probeHeldFiles refuses to run in a guarded container where a held file has
+// become writable.
 func (a *app) probeHeldFiles(ctx context.Context, t *target) error {
 	if t.container.Mode != model.ModeGuarded {
 		return nil
@@ -376,10 +325,8 @@ func (a *app) probeHeldFiles(ctx context.Context, t *target) error {
 		t.container.Name, strings.Join(opened, "\n  "), t.container.Name)
 }
 
-// hooksCopyDir is the host directory holding a container's copy of the hooks,
-// beside the database: hooks/<workspace>/<container>. Created 0700 and
-// resolved, since the engine resolves the mount's source path inside its VM
-// (invariant 2).
+// hooksCopyDir is a container's hooks copy directory, beside the database.
+// Resolved, since the engine resolves mount sources inside its VM.
 func hooksCopyDir(workspace, container string) (string, error) {
 	dbPath, err := store.DefaultPath()
 	if err != nil {
@@ -392,8 +339,7 @@ func hooksCopyDir(workspace, container string) (string, error) {
 	return xpath.Resolve(dir)
 }
 
-// removeHooksCopy deletes a container's hooks copy. Best-effort: a leftover
-// directory under the state directory harms nothing.
+// removeHooksCopy deletes a container's hooks copy. Best effort.
 func removeHooksCopy(workspace, container string) {
 	dbPath, err := store.DefaultPath()
 	if err != nil {
@@ -402,11 +348,8 @@ func removeHooksCopy(workspace, container string) {
 	_ = os.RemoveAll(filepath.Join(filepath.Dir(dbPath), "hooks", workspace, container))
 }
 
-// guardedRun runs a command in t's container between the two git checks:
-// refused before it starts when .git has already been tampered with, and
-// reported after it ends when the command tampered with it. The command's own
-// error wins when both fail — it is the one the operator was waiting for — and
-// the git finding is still recorded in the audit log either way.
+// guardedRun runs a command between the two git checks. The command's error
+// wins over a git failure; the git finding is still audited.
 func (a *app) guardedRun(ctx context.Context, t *target, run func() error) error {
 	warnLegacy(a, t.container)
 	if err := a.checkTreeMounts(ctx, t.provider, t.container, t.gitGuard); err != nil {
@@ -430,14 +373,14 @@ func (a *app) guardedRun(ctx context.Context, t *target, run func() error) error
 	return runErr
 }
 
-// gitGuardWatch is a check taken before a command, to compare after it.
+// gitGuardWatch is the state taken before a command, compared after it.
 type gitGuardWatch struct {
 	plan   gitGuardPlan
 	before gitguard.Fingerprint
 }
 
-// watchGitGuard refuses to run a command when .git has already been tampered
-// with, and returns a watch to call once it finishes.
+// watchGitGuard refuses when .git is already tampered with, and returns the
+// watch to call after.
 func (a *app) watchGitGuard(c model.Container, plan gitGuardPlan) (*gitGuardWatch, error) {
 	if plan.gitdir == "" {
 		return nil, nil
@@ -456,10 +399,8 @@ func (a *app) watchGitGuard(c model.Container, plan gitGuardPlan) (*gitGuardWatc
 	return w, nil
 }
 
-// after compares .git with what it was before the command, and reports what
-// the container changed that host git would run. An error rather than a
-// warning, so a script sees a non-zero exit — the command itself has already
-// finished.
+// after compares .git with its state before the command. An error, not a
+// warning, so a script sees a non-zero exit.
 func (w *gitGuardWatch) after(a *app, c model.Container) error {
 	if w == nil {
 		return nil
@@ -481,8 +422,7 @@ func (w *gitGuardWatch) after(a *app, c model.Container) error {
 	return a.refuseGitGuard(c, w.plan.gitdir, dedupe(changed))
 }
 
-// snapshotPlan fingerprints gitdir and the working tree paths host git runs.
-// One map for both: gitdir's keys are relative to it, the tree's absolute.
+// snapshotPlan fingerprints gitdir and the working-tree paths host git runs.
 func snapshotPlan(plan gitGuardPlan) (gitguard.Fingerprint, error) {
 	s, err := gitguard.Snapshot(plan.gitdir)
 	if err != nil {
@@ -525,23 +465,18 @@ func dedupe(s []string) []string {
 	return out
 }
 
-// isGitCheckout reports whether folder is in a git repository the guard can
-// cover: its own .git, or a parent's (the devcontainer CLI's git-root rule).
+// isGitCheckout reports whether folder is inside a git repository.
 func isGitCheckout(folder string) bool {
 	_, ok := gitguard.LayoutOf(folder)
 	return ok
 }
 
-// trustMountedRepository adds the repository paths dev bind-mounts into a
-// container to git's safe.directory there. A macOS podman machine passes the
-// host's ownership through instead of remapping it to the container user, and
-// git then refuses the repository as dubious ownership.
+// trustMountedRepository adds the mounted repositories to safe.directory in the
+// container. A podman machine on macOS passes host ownership through, and git
+// then refuses the repository.
 //
-// Written to the file GIT_CONFIG_GLOBAL names when the container persists
-// state, which is the state volume: never the project's .git/config, and
-// nothing a rebuild discards. A container without that volume uses the
-// remote user's ~/.gitconfig. Each path is added only when missing, so a
-// restart does not pile up duplicates.
+// Written to GIT_CONFIG_GLOBAL, the state volume, never the project's
+// .git/config. Each path is added only when missing.
 func trustMountedRepository(ctx context.Context, p provider.Provider, c model.Container) error {
 	if c.SourceKind != model.SourceFolder || c.Mode == model.ModeIsolated {
 		return nil
@@ -570,10 +505,7 @@ git config --global --get-all safe.directory | grep -qxF "$1" || git config --gl
 	return nil
 }
 
-// modeOf is what container list shows under MODE: the container's mode, and
-// "-" for a folderless one, which has no checkout for a mode to describe.
-// legacy is a container from before modes; the warning beside it is
-// warnLegacy's.
+// modeOf is the MODE column: the container's mode, or "-" for a folderless one.
 func modeOf(c model.Container) string {
 	if c.Mode == model.ModeNone || c.SourceKind == model.SourceNone {
 		return "-"
@@ -581,9 +513,8 @@ func modeOf(c model.Container) string {
 	return string(c.Mode)
 }
 
-// warnLegacy tells the operator, once per command, that a container from
-// before modes runs the single-file guard, whose gaps the modes exist to close.
-// Only one that was guarded: one that never was has no guard to lapse.
+// warnLegacy warns once per command that a container from before modes runs the
+// single-file guard.
 func warnLegacy(a *app, c model.Container) {
 	if c.Mode != model.ModeLegacy || !c.GitGuard {
 		return

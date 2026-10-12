@@ -7,11 +7,8 @@ import (
 	"testing"
 )
 
-// fakeHerdr writes a stub `herdr` onto a PATH that *replaces* the host's.
-//
-// Replaced rather than prepended, as the k8s harness does and for the same
-// reason: a host with a real herdr installed would otherwise have its daemon
-// probed, and its sidebar written to, from a unit test.
+// fakeHerdr writes a stub herdr onto a PATH that replaces the host's, so no
+// real daemon is touched.
 func fakeHerdr(t *testing.T, script string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -32,9 +29,7 @@ func TestAvailableWhenTheDaemonAnswers(t *testing.T) {
 	}
 }
 
-// Installed but not running is the case that matters: without the status probe
-// every worktree create would hang or fail on a machine where herdr is present
-// and the daemon is not.
+// Installed but not running: the status probe prevents a hang.
 func TestUnavailableWhenTheDaemonIsDown(t *testing.T) {
 	fakeHerdr(t, "exit 1\n")
 	if Available(t.Context()) {
@@ -67,8 +62,7 @@ func TestOpenReturnsTheWorkspaceID(t *testing.T) {
 	}
 }
 
-// Output herdr does not promise is not an error: the ID is a convenience for
-// the removal path, and a checkout that opened is worth keeping either way.
+// Unparsable output is not an error.
 func TestOpenToleratesUnparsableOutput(t *testing.T) {
 	fakeHerdr(t, "printf 'opened\\n'\nexit 0\n")
 

@@ -14,23 +14,21 @@ import (
 
 // markerFile records that the create-time lifecycle commands have run.
 //
-// A file on the volume rather than an annotation on the Deployment, because the
-// Deployment is re-applied on every start and a server-side apply drops fields
-// it no longer sets — the marker would clear itself and postCreate would run
-// again on each start. The volume is also the honest place for it: what the
-// question really asks is whether these commands have run against this data.
+// A file on the volume, not an annotation: a server-side apply drops fields the
+// Deployment no longer sets, so an annotation would clear itself and postCreate
+// would rerun.
 const markerFile = "/.dev-lifecycle-done"
 
 // parseCommand decodes one lifecycle entry into the commands it names.
 //
-// The spec allows three shapes and all three occur:
+// Three shapes occur:
 //
 //	"npm install"                       a shell command line
 //	["npm", "install"]                  an argv, run without a shell
 //	{"deps": "npm i", "build": "make"}  named commands, run in parallel
 //
-// The named form is run sequentially here. Slower than the spec allows, never
-// wrong, and it keeps the output of a failing command next to its name.
+// Named commands run sequentially, not in parallel as the spec allows, so a
+// failure's output stays with its name.
 func parseCommand(raw json.RawMessage) ([][]string, error) {
 	var asString string
 	if err := json.Unmarshal(raw, &asString); err == nil {
@@ -54,8 +52,7 @@ func parseCommand(raw json.RawMessage) ([][]string, error) {
 		for name := range asObject {
 			names = append(names, name)
 		}
-		// Sorted, so a failure is reproducible rather than depending on map
-		// iteration order.
+		// Sorted so a failure reproduces; map order is random.
 		sort.Strings(names)
 
 		var out [][]string
@@ -72,8 +69,8 @@ func parseCommand(raw json.RawMessage) ([][]string, error) {
 	return nil, fmt.Errorf("unrecognised lifecycle command: %s", string(raw))
 }
 
-// parseAll flattens a merged phase — an array of entries, one per contributor,
-// since Features add commands of their own.
+// parseAll flattens a merged phase: one entry per contributor, Features
+// included.
 func parseAll(entries []json.RawMessage) ([][]string, error) {
 	var out [][]string
 	for _, e := range entries {
@@ -86,12 +83,9 @@ func parseAll(entries []json.RawMessage) ([][]string, error) {
 	return out, nil
 }
 
-// runPhase runs every command of one lifecycle phase, in order, stopping at the
-// first failure.
-//
-// Stopping matters: postCreate is usually "install the dependencies", and
-// carrying on into a container that is missing them produces a confusing
-// failure much later.
+// runPhase runs one phase's commands in order, stopping at the first failure.
+// Carrying on would fail later, confusingly, in a container missing what
+// postCreate installs.
 func (p *Provider) runPhase(ctx context.Context, c model.Container, dev DevConfig,
 	env []provider.EnvVar, phase string, entries []json.RawMessage) error {
 
@@ -103,8 +97,8 @@ func (p *Provider) runPhase(ctx context.Context, c model.Container, dev DevConfi
 		fmt.Fprintf(os.Stderr, "dev: %s: %s\n", phase, shellJoin(cmd))
 		err := p.Exec(ctx, c, cmd, provider.ExecOpts{
 			Env: env,
-			// Straight through: a failing setup command explains itself in its
-			// own output, and hiding that leaves only an exit status.
+			// Not captured: hiding a failing command's output leaves only an
+			// exit status.
 			Stdout: os.Stderr,
 			Stderr: os.Stderr,
 		})
@@ -128,8 +122,8 @@ func (p *Provider) markLifecycleDone(ctx context.Context, c model.Container, dev
 		provider.ExecOpts{Stdout: io.Discard, Stderr: io.Discard})
 }
 
-// clearLifecycleMarker makes the create-time commands run again, which is what
-// a rebuild means: a new image, so whatever they installed is gone.
+// clearLifecycleMarker makes the create-time commands run again on a rebuild,
+// since a new image drops what they installed.
 func (p *Provider) clearLifecycleMarker(ctx context.Context, c model.Container, dev DevConfig) error {
 	return p.Exec(ctx, c, []string{"rm", "-f", dev.HomeDir() + markerFile},
 		provider.ExecOpts{Stdout: io.Discard, Stderr: io.Discard})
@@ -137,9 +131,7 @@ func (p *Provider) clearLifecycleMarker(ctx context.Context, c model.Container, 
 
 // runLifecycle runs the phases appropriate to what just happened.
 //
-// onCreate, updateContent and postCreate run once per image; postStart runs
-// every time the container comes up, which is what the spec says and what a
-// stop and start has to honour. postAttach is not run: nothing here attaches.
+// postAttach is not run: nothing here attaches.
 func (p *Provider) runLifecycle(ctx context.Context, c model.Container, dev DevConfig,
 	lc Lifecycle, env []provider.EnvVar, rebuilt bool) error {
 
@@ -162,8 +154,8 @@ func (p *Provider) runLifecycle(ctx context.Context, c model.Container, dev DevC
 				return err
 			}
 		}
-		// Only after all three succeed. A marker written over a failed install
-		// would make the next start skip the fix.
+		// Only after all three succeed; a marker over a failed install would
+		// skip the fix.
 		if err := p.markLifecycleDone(ctx, c, dev); err != nil {
 			return err
 		}

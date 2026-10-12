@@ -17,8 +17,8 @@ import (
 	"github.com/duy0611/dev-cli/internal/xpath"
 )
 
-// agentConfigNone is what a container created with --no-agent-config stores,
-// so that a later rebuild does not pick up a project file it opted out of.
+// agentConfigNone is stored by --no-agent-config, so a rebuild does not pick up
+// the project's file.
 const agentConfigNone = "none"
 
 // agentConfigChoice turns create's two flags into what the row stores.
@@ -31,8 +31,7 @@ func agentConfigChoice(path string, none bool) (string, error) {
 	case path == "":
 		return "", nil
 	}
-	// Resolved now, so a rebuild run from another directory reads the same
-	// file.
+	// Resolved now, so a rebuild from another directory reads the same file.
 	resolved, err := xpath.ResolveFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return "", notFoundErrorf("agent config %s does not exist", path)
@@ -49,8 +48,8 @@ func agentConfigFile(c model.Container) (string, error) {
 	case agentConfigNone:
 		return "", nil
 	case "":
-		// Re-derived every time rather than stored: the project can gain or
-		// lose the file, and the next rebuild should see which.
+		// Re-derived each time, not stored: the project may gain or lose the
+		// file.
 		if c.SourceKind != model.SourceFolder {
 			return "", nil
 		}
@@ -60,9 +59,8 @@ func agentConfigFile(c model.Container) (string, error) {
 		}
 		return "", nil
 	}
-	// A file the operator named explicitly going missing is not "no file":
-	// quietly applying nothing would leave a rebuilt container without what it
-	// was created with.
+	// A missing named file is an error, not "no file", or a rebuild would
+	// silently drop what the container was created with.
 	if _, err := os.Stat(c.AgentConfig); errors.Is(err, fs.ErrNotExist) {
 		return "", notFoundErrorf("agent config %s no longer exists; restore it, or remove the container and create it again",
 			c.AgentConfig)
@@ -85,9 +83,8 @@ func loadAgentConfig(c model.Container) (*agentcfg.Spec, error) {
 	return spec, nil
 }
 
-// markAgentConfig validates the file c.AgentConfig leads to and records
-// whether applying it is owed. Called before the row is written, so a typo in
-// agents.yaml is exit 2 with nothing created.
+// markAgentConfig validates c's agents.yaml and records whether an apply is
+// owed. Runs before the row is written, so a typo fails with nothing created.
 func markAgentConfig(c *model.Container) error {
 	spec, err := loadAgentConfig(*c)
 	if err != nil {
@@ -97,11 +94,9 @@ func markAgentConfig(c *model.Container) error {
 	return nil
 }
 
-// applyAgentConfig applies spec inside the running container. A nil spec only
-// clears a pending flag that no longer has anything behind it.
-//
-// The flag is set before the first step and cleared after the last, so an
-// apply that fails or is interrupted is retried by the next start.
+// applyAgentConfig applies spec inside the running container; a nil spec only
+// clears a stale pending flag. The flag stays set until the last step, so an
+// interrupted apply is retried by the next start.
 func (a *app) applyAgentConfig(ctx context.Context, p provider.Provider, c model.Container,
 	environ []provider.EnvVar, spec *agentcfg.Spec) error {
 	st, err := a.store()
@@ -115,8 +110,7 @@ func (a *app) applyAgentConfig(ctx context.Context, p provider.Provider, c model
 		return nil
 	}
 
-	// A warning, not an error: the operator may set it after create, and the
-	// agent resolves the reference each time it starts.
+	// Warn, not fail: the variable may be set after create.
 	defined := make(map[string]bool, len(environ))
 	for _, e := range environ {
 		defined[e.Key] = true
@@ -131,8 +125,8 @@ func (a *app) applyAgentConfig(ctx context.Context, p provider.Provider, c model
 	if err := st.SetAgentConfigPending(c.WorkspaceName, c.Name, true); err != nil {
 		return err
 	}
-	// The same environment every other exec gets, so the steps see
-	// CLAUDE_CONFIG_DIR and its siblings and write onto the state volume.
+	// The same environment as every other exec, so the steps write to the state
+	// volume.
 	run := func(cmd []string, stdin []byte) ([]byte, error) {
 		var stdout, stderr bytes.Buffer
 		opts := provider.ExecOpts{Env: environ, Stdout: &stdout, Stderr: &stderr}

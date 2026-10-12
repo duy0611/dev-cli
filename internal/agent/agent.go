@@ -1,5 +1,5 @@
-// Package agent knows which coding agents can be run in a container and how to
-// invoke each one.
+// Package agent knows which coding agents a container can run and how to invoke
+// them.
 package agent
 
 import (
@@ -18,9 +18,8 @@ type Agent struct {
 	Binary string
 	// Args are prepended to whatever the operator passes after --.
 	Args []string
-	// Configure turns this agent's view of an agents.yaml into the steps
-	// that apply it inside a container. Nil for an agent the file has no
-	// section for, which is what keeps it out of Configurable.
+	// Configure returns the steps that apply this agent's section of an
+	// agents.yaml. Nil when the agent cannot be configured.
 	Configure func(v agentcfg.View) ([]Step, error)
 }
 
@@ -32,8 +31,7 @@ func (a Agent) Command(extra []string) []string {
 	return append(cmd, extra...)
 }
 
-// registry is the set of agents this tool can start. Adding one is a line here;
-// nothing else in the codebase names an agent.
+// registry is the set of agents this tool can start.
 var registry = map[string]Agent{
 	"claude":   {ID: "claude", Binary: "claude", Configure: configureClaude},
 	"opencode": {ID: "opencode", Binary: "opencode", Configure: configureOpencode},
@@ -60,8 +58,7 @@ func IDs() []string {
 	return out
 }
 
-// Configurable lists the agents an agents.yaml can configure, sorted, so an
-// apply runs in the same order every time and its output reads the same.
+// Configurable lists the agents an agents.yaml can configure, in sorted order.
 func Configurable() []Agent {
 	var out []Agent
 	for _, id := range IDs() {

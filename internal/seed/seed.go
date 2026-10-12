@@ -1,16 +1,7 @@
-// Package seed turns a host folder into what an isolated container starts
-// with: a tar stream to unpack into its workspace, and a script to run there
-// afterwards that makes the result a repository of its own.
-//
-// The repository travels as a git bundle inside the stream, never as .git's
-// files. Copying .git would carry the host's config and hooks into a
-// repository the agent then owns, and a worktree's .git is a file naming a
-// host path that does not exist in the container. A bundle holds commits and
-// branch names and nothing that runs.
-//
-// The working tree travels as it is on the host: uncommitted changes, untracked
-// files, and ignored ones — .env, node_modules — which are why a copy is
-// useful at all.
+// Package seed turns a host folder into a tar stream for an isolated container,
+// plus a script that makes the unpacked result a repository of its own. The
+// repository travels as a git bundle, since a copied .git would carry host
+// config and hooks, and a worktree's .git names a host path.
 package seed
 
 import (
@@ -31,8 +22,8 @@ const BundleName = ".dev-seed.bundle"
 
 // Plan is what the script needs to know about the folder that was archived.
 type Plan struct {
-	// Repository says the folder is in a git repository, so the archive holds
-	// a bundle and the script builds a repository from it.
+	// Repository says the folder is in a git repository, so the archive holds a
+	// bundle.
 	Repository bool
 	// Branch is the branch the folder has checked out, empty when detached.
 	Branch string
@@ -51,14 +42,12 @@ func (p Plan) ScriptArgs(dir string) []string {
 	return []string{"seed", dir, repo, BundleName, p.Branch, p.Commit, p.Origin}
 }
 
-// Script runs inside the container, in sh, after the archive is unpacked into
-// the workspace. Arguments: $1 the workspace, $2 "1" for a repository, $3 the
-// bundle's name, $4 the branch, $5 the commit, $6 the origin URL.
+// Script runs in sh inside the container after unpacking. Arguments: $1 the
+// workspace, $2 "1" for a repository, $3 the bundle's name, $4 the branch, $5
+// the commit, $6 the origin URL.
 //
-// The branches are fetched straight into refs/heads, HEAD is pointed at the
-// folder's branch, and the index is rebuilt from it without touching the
-// files — so the working tree, already unpacked, reads as exactly the changes
-// it had on the host.
+// The index is rebuilt without touching files, so the unpacked tree reads as
+// exactly the host's changes.
 const Script = `set -e
 cd "$1"
 [ "$2" = 1 ] || exit 0
@@ -75,8 +64,8 @@ git reset -q
 rm -f "$3"
 `
 
-// Archive writes folder as a tar stream to w, with a bundle of its branches at
-// BundleName when it is in a repository, and returns what the script needs.
+// Archive writes folder as a tar stream to w, with a bundle of its branches
+// when it is a repository, and returns the arguments the script needs.
 func Archive(ctx context.Context, folder string, w io.Writer) (Plan, error) {
 	plan, bundle, err := bundleOf(ctx, folder)
 	if err != nil {
@@ -110,8 +99,7 @@ func bundleOf(ctx context.Context, folder string) (Plan, []byte, error) {
 	} else {
 		commit, err := git(ctx, folder, "rev-parse", "HEAD")
 		if err != nil {
-			// A repository with no commits has nothing to bundle; the files
-			// go in, and the agent starts the history.
+			// No commits means nothing to bundle; the files still go in.
 			return Plan{}, nil, nil
 		}
 		plan.Commit = commit
@@ -135,9 +123,8 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
-// walk writes folder's contents to tw, leaving out .git at the root: the
-// repository goes in as the bundle. A .git deeper down — a submodule's, a
-// vendored repository's — is ordinary content and goes in with the rest.
+// walk writes folder's contents to tw, leaving out only the root .git; a nested
+// .git (a submodule's) is ordinary content.
 func walk(folder string, tw *tar.Writer) error {
 	err := filepath.Walk(folder, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -156,8 +143,7 @@ func walk(folder string, tw *tar.Writer) error {
 			}
 			return nil
 		}
-		// Sockets, devices and named pipes cannot be carried in a tar and are
-		// never part of a source tree worth copying.
+		// Sockets and devices cannot be carried in a tar.
 		if info.Mode()&(os.ModeSocket|os.ModeDevice|os.ModeNamedPipe|os.ModeCharDevice) != 0 {
 			return nil
 		}
@@ -171,8 +157,8 @@ func walk(folder string, tw *tar.Writer) error {
 		if err != nil {
 			return err
 		}
-		// Relative, and always with forward slashes: the archive is read on
-		// Linux whatever the host is.
+		// Always forward slashes: the archive is read on Linux whatever the
+		// host.
 		header.Name = filepath.ToSlash(rel)
 		if info.IsDir() {
 			header.Name += "/"
@@ -192,8 +178,7 @@ func walk(folder string, tw *tar.Writer) error {
 		return err
 	})
 	if err != nil {
-		// Finishing the archive anyway would hand the container a truncated
-		// tree that unpacks without complaint.
+		// A partial archive would unpack silently into a truncated tree.
 		return fmt.Errorf("reading %s: %w", strings.TrimSuffix(folder, "/"), err)
 	}
 	return nil

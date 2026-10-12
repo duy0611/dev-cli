@@ -399,7 +399,8 @@ func TestSessionFlappingRelayGivesUp(t *testing.T) {
 }
 
 // TestSessionCloseDuringBackoff: the operator's command ends while a respawn is
-// waiting. Close must not sit out the backoff, or quitting the agent would hang.
+// waiting. Close must not sit out the backoff, or quitting the agent would
+// hang.
 func TestSessionCloseDuringBackoff(t *testing.T) {
 	f := newFakeContainer(t)
 	captureStderr(t)

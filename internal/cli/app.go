@@ -14,11 +14,8 @@ import (
 	"github.com/duy0611/dev-cli/internal/store"
 )
 
-// app is what every command needs: the database and somewhere to print.
-//
-// The store is opened lazily, on the first command that wants it, so that
-// `dev --help` and `dev --version` do not create a database as a side effect of
-// asking a question.
+// app is what every command needs: the database and somewhere to print. The
+// store opens lazily, so `dev --help` creates no database.
 type app struct {
 	out io.Writer
 
@@ -28,16 +25,13 @@ type app struct {
 
 	// version is dev's own, stamped into every audit record.
 	version string
-	// auditLog is built on first use, like the store, so that `dev --help`
-	// writes nothing. Tests leave it nil, which records nothing.
+	// Built on first use. Tests leave it nil, where it records nothing.
 	auditLog *audit.Log
 	auditOff bool
 }
 
-// audit returns the log every command records to, beside the database.
-//
-// A nil Log records nothing, so a state directory that cannot be located only
-// costs the record, never the command — see internal/audit.
+// audit returns the log beside the database. A nil Log records nothing, so an
+// unlocatable state directory costs the record, not the command.
 func (a *app) audit() *audit.Log {
 	if a.auditLog == nil && !a.auditOff {
 		path, err := store.DefaultPath()
@@ -57,9 +51,7 @@ func (a *app) record(event, workspace, container string, fields map[string]any) 
 	a.audit().Record(event, workspace, container, fields)
 }
 
-// recordCreate appends the record for a container row just written. The guard
-// columns join it as they land, so the log says what each container was
-// allowed from the moment it existed.
+// recordCreate appends the record for a container row just written.
 func (a *app) recordCreate(workspace string, c model.Container) {
 	a.record("create", workspace, c.Name, map[string]any{
 		"source_kind":      string(c.SourceKind),
@@ -70,10 +62,8 @@ func (a *app) recordCreate(workspace string, c model.Container) {
 	})
 }
 
-// recordRun appends one record for a command that ran in a container, once it
-// has finished: start, end and how it ended in a single line. One record at the
-// end rather than one at each side, so a session killed with the host leaves
-// nothing — accepted, against doubling the file for the rare case.
+// recordRun appends one record when a container command finishes. A session
+// killed mid-run leaves none; that is accepted.
 func (a *app) recordRun(event string, t *target, started time.Time, fields map[string]any, err error) {
 	if fields == nil {
 		fields = map[string]any{}
@@ -139,8 +129,7 @@ func (a *app) workspaceName(override string) (string, error) {
 	return active, nil
 }
 
-// table writes aligned columns. Every list command prints through this so the
-// output lines up whatever the widths are.
+// table writes aligned columns through a tabwriter.
 func (a *app) table(write func(w io.Writer)) error {
 	tw := tabwriter.NewWriter(a.out, 0, 0, 2, ' ', 0)
 	write(tw)

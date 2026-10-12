@@ -12,21 +12,10 @@ import (
 	"github.com/duy0611/dev-cli/internal/model"
 )
 
-// MergedConfig asks the devcontainer CLI for the configuration it would run.
-//
-// read-configuration with --include-merged-configuration, which combines the
-// project's document with every feature's metadata — a feature's privileged
-// and mounts arrive only through this, since no file in the project mentions
-// them. The override dev builds is passed too, because it is part of what runs.
-//
-// No --id-label and no container: the CLI otherwise looks for an existing
-// container and reads the merged form off its image metadata, which for a
-// rebuild is the configuration being replaced rather than the one about to
-// run. Without a container it resolves the features afresh, from the document.
-//
-// The CLI shells out to docker even to read a file, and resolving features may
-// pull their metadata from a registry; both are why this is a provider method
-// and why a unit test stubs the binary rather than calling it.
+// MergedConfig asks the devcontainer CLI for the configuration it would run,
+// with features merged in. It passes no --id-label: the CLI would then read the
+// merged form off the existing container's image, which for a rebuild is the
+// configuration being replaced.
 func (p *Provider) MergedConfig(ctx context.Context, c model.Container) ([]byte, []string, error) {
 	if err := requireBinary(devcontainerBin); err != nil {
 		return nil, nil, err
@@ -46,8 +35,6 @@ func (p *Provider) MergedConfig(ctx context.Context, c model.Container) ([]byte,
 	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, devcontainerBin, args...)
 	cmd.Stdout = &stdout
-	// Progress and errors go to stderr; only a failure makes them worth
-	// showing, and then only the last line says why.
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return nil, nil, fmt.Errorf("reading the configuration of container %s: %w: %s",
@@ -70,8 +57,8 @@ func (p *Provider) MergedConfig(ctx context.Context, c model.Container) ([]byte,
 	return out.Merged, compose, nil
 }
 
-// composeFiles resolves dockerComposeFile — a string or a list, each relative
-// to the configuration's own directory, which is how the CLI resolves them.
+// composeFiles resolves dockerComposeFile, a string or a list, relative to the
+// configuration's directory.
 func composeFiles(merged json.RawMessage, configPath string) ([]string, error) {
 	var doc struct {
 		DockerComposeFile json.RawMessage `json:"dockerComposeFile"`
@@ -98,9 +85,8 @@ func composeFiles(merged json.RawMessage, configPath string) ([]string, error) {
 	return files, nil
 }
 
-// lastJSONLine is the result line. The CLI's stdout should hold only the JSON
-// result, but a stray line ahead of it from a feature or a wrapper must not
-// turn into a parse error that reads as a broken configuration.
+// lastJSONLine returns the result line. A stray line ahead of it, from a
+// feature or wrapper, must not become a parse error.
 func lastJSONLine(b []byte) []byte {
 	lines := bytes.Split(bytes.TrimSpace(b), []byte("\n"))
 	for i := len(lines) - 1; i >= 0; i-- {

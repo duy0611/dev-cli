@@ -1,27 +1,13 @@
-// Package gitguard keeps host git from running what a container wrote.
+// Package gitguard keeps host git from running what a container wrote. The
+// workspace is a writable mount, and host git (including the IDE's git status)
+// executes programs named under .git: core.fsmonitor, hooks, and commondir or
+// gitdir redirects.
 //
-// A container's workspace is a writable bind mount, and host git — including
-// the IDE's `git status`, every few seconds — executes programs named in files
-// under .git: core.fsmonitor and friends in config, scripts in hooks, and a
-// commondir or a worktree's gitdir that redirect git to read some other
-// directory's config. One `git config core.fsmonitor` inside the container is
-// code on the operator's host.
-//
-// Two mechanisms. Where the layout is known, the paths are mounted so the
-// container cannot change what the host reads: config read-only (git writes it
-// by lock-and-rename, and a rename onto a bind-mounted file fails, so a
-// writable copy would behave the same), hooks as a container-only copy, and
-// .git bound onto itself so it cannot be renamed away. Where it is not known —
-// a project that names its own workspace mount — a fingerprint taken before
-// a command is compared after it.
-//
-// The working tree is the third place host git runs from, when its config
-// points there: a core.hooksPath into the checkout, an include naming a file in
-// it. FindTree asks host git for those — read-only queries, with fsmonitor
-// forced off — and TreeBinds holds them read-only the same way.
-//
-// This package reads, copies and asks git; it never changes a repository and
-// never writes into a project's folder. The CLI decides when.
+// Where the layout is known, the paths are mounted or copied so the container
+// cannot change what the host reads. Where it is not, a fingerprint is compared
+// before and after a command. FindTree covers the working tree, the third place
+// host git runs from. The package reads and copies only; the CLI decides when
+// to act.
 package gitguard
 
 import (
@@ -37,8 +23,7 @@ import (
 	"slices"
 )
 
-// Layout is where a folder's .git is on the host and where the devcontainer
-// CLI will put it inside the container.
+// Layout is where a folder's .git is on the host and inside the container.
 type Layout struct {
 	// GitDir is the repository's .git directory on the host.
 	GitDir string
@@ -47,26 +32,19 @@ type Layout struct {
 }
 
 // LayoutOf returns the layout the devcontainer CLI gives folder by default, or
-// false when there is nothing to guard.
-//
-// The CLI's rule, mirrored: it mounts the repository's root rather than the
-// folder when the folder is inside one (mount-workspace-git-root, default on),
-// finding the root by walking up to the first directory holding .git/config,
-// and mounts it at /workspaces/<basename of the root>. A project that names its
-// own workspaceMount or workspaceFolder replaces that rule, and the caller must
-// not use this layout for it.
-//
-// A worktree checkout, whose .git is a file, has no .git/config to find and is
-// declined: dev's worktree containers mount the checkout at its host path, and
-// WorktreeMounts covers them.
+// false when there is nothing to guard. It mirrors the CLI's
+// mount-workspace-git-root rule: the root is the first ancestor holding
+// .git/config, mounted at /workspaces/<basename>. Not for a project that names
+// its own workspace mount. A worktree checkout is declined; WorktreeMounts
+// covers it.
 func LayoutOf(folder string) (Layout, bool) {
 	for dir := folder; ; {
 		gitdir := filepath.Join(dir, ".git")
 		if info, err := os.Stat(filepath.Join(gitdir, "config")); err == nil && info.Mode().IsRegular() {
 			return Layout{
 				GitDir: gitdir,
-				// posix, not filepath: this is a path inside a Linux container
-				// whatever the host is.
+				// posix: the path is inside a Linux container whatever the host
+				// is.
 				ContainerGitDir: path.Join("/workspaces", filepath.Base(dir), ".git"),
 			}, true
 		}
@@ -82,10 +60,9 @@ func LayoutOf(folder string) (Layout, bool) {
 // devcontainer.json's string form. hooks is the host directory holding the
 // container's copy of the hooks.
 //
-// .git is bound onto itself first, so the two below land on a mount point the
-// container cannot rename or remove — without it, `mv .git .git.old` and a
-// fresh .git would leave both guards standing over nothing. Order matters: a
-// mount inside another must come after it.
+// .git is bound onto itself first, so the container cannot rename it away from
+// under the mounts below. Order matters: a mount inside another must come after
+// it.
 func Mounts(l Layout, hooks string) []string {
 	return []string{
 		bind(l.GitDir, l.ContainerGitDir, false),
@@ -97,47 +74,29 @@ func Mounts(l Layout, hooks string) []string {
 // ReadOnlyMounts returns the mounts entry that guards an ordinary checkout in
 // guarded mode: all of .git, read-only, as one directory mount.
 //
-// One directory and nothing inside it, which is what makes it hold where
-// Mounts does not. Host git replaces files *inside* .git by writing a lock
-// and renaming it over the original, and since Linux 3.18 renaming over a
-// file that is a mount point in another namespace detaches the mount — so a
-// read-only mount on .git/config opens the moment the host writes its config.
-// git never replaces .git itself, so a mount on the directory survives. And on
-// a case-insensitive host, .git/CONFIG misses a mount on .git/config but
-// resolves through the directory mount, so it is refused too.
-//
-// The cost is that nothing under .git is writable: the agent can read history
-// but cannot commit, branch or fetch. That is guarded mode's trade.
+// One directory, not a mount per file: host git replaces files inside .git by
+// writing a lock and renaming it over the original, and renaming over a mount
+// point detaches the mount. git never replaces .git itself, so a mount on the
+// directory survives. On a case-insensitive host, .git/CONFIG misses a mount on
+// .git/config but resolves through the directory mount.
 func ReadOnlyMounts(l Layout) []string {
 	return []string{bind(l.GitDir, l.ContainerGitDir, true)}
 }
 
 // ReadOnlyWorktreeMounts returns the mounts entry that guards a worktree
-// container in guarded mode: the repository's common directory, read-only at
-// its own host path, so the checkout's gitdir line resolves (invariant 11) and
-// nothing under it can be written.
-//
-// The checkout's own .git file is left alone. It sits in the writable tree
-// and host git follows it, so a container can repoint it — but a single-file
-// mount on it would be detached by a host rewrite and, on macOS, gone around
-// by .GIT, exactly as the mounts this replaces were. A documented gap is
-// better than a mount that only looks like a guard.
+// container in guarded mode: the common directory, read-only at its own host
+// path, so the checkout's gitdir line resolves (invariant 11). The checkout's
+// .git file is not mounted: a host rewrite detaches a single-file mount, and on
+// macOS a .GIT path evades it.
 func ReadOnlyWorktreeMounts(common string) []string {
 	return []string{bind(common, common, true)}
 }
 
 // WorktreeMounts returns the mounts entries that guard a worktree container,
-// whose checkout and common directory are each mounted at their own host path
-// (invariant 11). common is git's common directory, checkout the worktree.
-//
-// Beyond config and hooks, a worktree has redirects of its own: the checkout's
-// .git file names the administration directory, and that directory's commondir
-// and gitdir name the rest. Rewriting any of them points host git at a config
-// the container wrote, so all three are read-only. config.worktree only exists
-// when the repository uses extensions.worktreeConfig — which the container
-// cannot turn on, since that is a write to the read-only main config.
-//
-// HEAD, index and refs stay writable, or commits stop working.
+// with the checkout and common directory each at its own host path (invariant
+// 11). common is git's common directory, checkout the worktree. commondir,
+// gitdir and config.worktree are read-only because host git follows them; HEAD,
+// index and refs stay writable, or commits stop working.
 func WorktreeMounts(common, checkout, hooks string) ([]string, error) {
 	admin, err := adminDir(checkout)
 	if err != nil {
@@ -157,8 +116,8 @@ func WorktreeMounts(common, checkout, hooks string) ([]string, error) {
 	return out, nil
 }
 
-// adminDir reads a worktree checkout's .git file for the administration
-// directory it names.
+// adminDir returns the administration directory a worktree checkout's .git file
+// names.
 func adminDir(checkout string) (string, error) {
 	b, err := os.ReadFile(filepath.Join(checkout, ".git"))
 	if err != nil {
@@ -182,14 +141,12 @@ func bind(source, target string, readonly bool) string {
 	return s
 }
 
-// SeedHooks makes dst a copy of the hooks in src: emptied first, so what a
-// container installed is discarded, then filled from the project's own. Host to
-// container only; nothing is ever copied back.
+// SeedHooks makes dst a copy of src's hooks, emptied first. Host to container
+// only.
 //
-// dst's contents are written by the container, so nothing here follows a
-// symlink: os.RemoveAll removes a link rather than what it names, and a hook
-// that is a symlink is copied as one, never read through. A src that does not
-// exist — a repository whose hooks directory was deleted — leaves dst empty.
+// dst is written by the container, so nothing here follows a symlink: RemoveAll
+// removes a link itself, and a symlinked hook is copied as a link, never read
+// through. A missing src leaves dst empty.
 func SeedHooks(src, dst string) error {
 	entries, err := os.ReadDir(dst)
 	if err != nil {
@@ -224,8 +181,7 @@ func SeedHooks(src, dst string) error {
 				return err
 			}
 		}
-		// Directories and anything else are skipped: git runs only files in
-		// hooks/, and recursing would be one more thing to get wrong.
+		// Only files: git runs only files in hooks/.
 	}
 	return nil
 }
@@ -252,12 +208,12 @@ func copyFile(from, to string) error {
 }
 
 // Fingerprint is a hash of everything under a .git directory that host git
-// would execute or follow: config, every hook, and a commondir.
+// would execute or follow.
 type Fingerprint map[string]string
 
-// Snapshot fingerprints gitdir. Nothing git writes in ordinary use — refs,
-// objects, the index, logs — is in it, so a commit inside the container is not
-// a change.
+// Snapshot fingerprints gitdir's config, commondir and hooks. Ordinary writes
+// such as refs, objects and the index are excluded, so a commit is not a
+// change.
 func Snapshot(gitdir string) (Fingerprint, error) {
 	s := Fingerprint{}
 	for _, name := range []string{"config", "commondir", "config.worktree"} {
@@ -308,10 +264,9 @@ func Changed(before, after Fingerprint) []string {
 }
 
 // CommondirPlanted reports whether gitdir holds a commondir. An ordinary
-// checkout never has one; a container that writes one points host git at
-// another directory's config. No mount can close this — a mount needs an
-// existing target, and an empty commondir breaks host git outright — so it is
-// checked instead, before and after every command.
+// checkout never has one. No mount can close this: a mount needs an existing
+// target, and an empty commondir breaks host git, so it is checked before and
+// after each command.
 func CommondirPlanted(gitdir string) bool {
 	_, err := os.Lstat(filepath.Join(gitdir, "commondir"))
 	return err == nil

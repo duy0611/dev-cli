@@ -17,9 +17,7 @@ import (
 // sshAuthSockKey is the variable ssh and git read to find an agent.
 const sshAuthSockKey = "SSH_AUTH_SOCK"
 
-// sshAgentFlags is --ssh-agent and --no-ssh-agent on a command that launches a
-// process in a container, overriding the workspace's setting for that one
-// command.
+// sshAgentFlags holds --ssh-agent and --no-ssh-agent for one command.
 type sshAgentFlags struct {
 	on, off bool
 }
@@ -32,13 +30,9 @@ func addSSHAgentFlags(cmd *cobra.Command, f *sshAgentFlags) {
 		"do not forward the host's ssh agent for this command, whatever the workspace says")
 }
 
-// override reports the choice the flags make: nil when neither was given, so
-// the workspace's setting stands.
-//
-// Both at once is refused rather than resolved by order: the operator asked for
-// two opposite things, and whichever one won would be a guess. Checked here and
-// not with cobra's MarkFlagsMutuallyExclusive, whose error exits 1 instead of
-// the 2 a malformed request owes (invariant 7).
+// override reports the flags' choice: nil when neither was given. Both at once
+// is refused, not resolved by order. Checked here, not by cobra's
+// MarkFlagsMutuallyExclusive, which exits 1, not 2.
 func (f sshAgentFlags) override() (*bool, error) {
 	switch {
 	case f.on && f.off:
@@ -53,21 +47,7 @@ func (f sshAgentFlags) override() (*bool, error) {
 	return nil, nil
 }
 
-// forwardAgent starts an agent relay for one command, when the workspace asks
-// for it or override does, and returns the environment with SSH_AUTH_SOCK
-// pointing at it. A non-nil override wins over the workspace in both
-// directions.
-//
-// The returned stop must be called before the command returns. The agent is
-// reachable from inside the container until it is, which is the whole feature
-// and also the reason the window is one command rather than the container's
-// lifetime.
-//
-// Returns environ unchanged, and a stop that does nothing, when forwarding is
-// off — so every caller can invoke this the same way.
-// agentForwarded reports whether a command on t forwards the ssh agent: the
-// workspace's setting, unless the command's flag overrode it. The same rule
-// forwardAgent applies, for the audit record.
+// agentForwarded reports whether a command on t forwards the ssh agent.
 func agentForwarded(t *target, override *bool) bool {
 	if t.container.Mode == model.ModeGuarded {
 		return false
@@ -78,14 +58,16 @@ func agentForwarded(t *target, override *bool) bool {
 	return t.workspace.SSHForward
 }
 
+// forwardAgent starts an agent relay for one command when the workspace or
+// override asks for one, and returns environ with SSH_AUTH_SOCK pointing at it.
+// The returned stop must run before the command returns: the relay is reachable
+// from inside the container until then.
 func (a *app) forwardAgent(ctx context.Context, t *target, override *bool,
 	environ []provider.EnvVar) ([]provider.EnvVar, func(), error) {
 	noop := func() {}
-	// A guarded container cannot commit, branch or fetch, since each writes to
-	// its read-only .git. What the relay could still do there is push commits
-	// that already exist — the operator's, made on the host — which is the one
-	// thing nobody asked it to. So none: refused when asked for by flag, and
-	// skipped, said once, when the workspace forwards by default.
+	// A guarded container cannot commit or fetch, so the relay is refused
+	// there: it could still push the operator's existing commits, which nobody
+	// asked it to do.
 	if t.container.Mode == model.ModeGuarded {
 		if override != nil && *override {
 			return nil, noop, usageErrorf("container %s is guarded and cannot commit, so it has no use for "+
@@ -105,16 +87,15 @@ func (a *app) forwardAgent(ctx context.Context, t *target, override *bool,
 		return environ, noop, nil
 	}
 
-	// Refused rather than skipped: the operator asked for the agent, so
-	// carrying on without it would produce a "Permission denied (publickey)"
-	// later that says nothing about the real cause.
+	// Refused rather than skipped: the operator asked for the agent, and
+	// skipping it would yield a misleading publickey error later.
 	agentSocket, err := relay.AgentSocket()
 	if err != nil {
 		return nil, noop, err
 	}
 
-	// Discovered by type assertion, as Syncer is. Both providers implement it,
-	// but a provider added later is not obliged to before it can run anything.
+	// Discovered by type assertion, as Syncer is, since a provider need not
+	// implement it.
 	fwd, ok := t.provider.(provider.AgentForwarder)
 	if !ok {
 		return nil, noop, fmt.Errorf(
@@ -130,13 +111,11 @@ func (a *app) forwardAgent(ctx context.Context, t *target, override *bool,
 
 	stop := func() {
 		if err := session.Close(); err != nil {
-			// Worth saying, not worth failing the command over: whatever the
-			// operator ran has already finished, and the channel dies with the
-			// exec regardless.
+			// Worth reporting, not failing: the command has already finished.
 			fmt.Fprintf(os.Stderr, "dev: stopping the ssh agent relay: %v\n", err)
 		}
-		// After Close, so End can tell a relay that died mid-session — whose
-		// commits stopped signing — from one that was shut down.
+		// After Close, so End can tell a relay that died mid-session from one
+		// shut down.
 		fields := map[string]any{
 			"started": started.UTC().Format(time.RFC3339Nano),
 			"ended":   time.Now().UTC().Format(time.RFC3339Nano),
@@ -148,20 +127,16 @@ func (a *app) forwardAgent(ctx context.Context, t *target, override *bool,
 		a.record("relay", t.workspace.Name, t.container.Name, fields)
 	}
 
-	// Appended last, so this wins over a workspace setting of the same name.
-	// The opposite precedence to the git identity in env.Assemble, and
-	// deliberately: the identity is a default the operator may improve on,
-	// whereas this is the socket that actually exists. A hand-set SSH_AUTH_SOCK
-	// would name a path in the container that nothing is listening on.
+	// Appended last, so it beats a workspace setting of the same name. A
+	// hand-set SSH_AUTH_SOCK would name a socket nothing listens on.
 	environ = append(environ, provider.EnvVar{
 		Key:   sshAuthSockKey,
 		Value: session.Socket(),
 	})
 
-	// Signing is skipped when the operator configures git through the same
-	// variables themselves. Both would arrive as --remote-env and the last would
-	// win, so adding ours would silently drop theirs — and a half-applied
-	// GIT_CONFIG_COUNT is a fatal git error rather than a lost setting.
+	// Skipped when the operator configures git's environment variables: a
+	// second set would silently override theirs, and a partial GIT_CONFIG_COUNT
+	// is fatal to git.
 	if hasGitConfigEnv(environ) {
 		warnf(a, "GIT_CONFIG_COUNT is set for this workspace; not configuring commit signing")
 		return environ, stop, nil
@@ -169,14 +144,9 @@ func (a *app) forwardAgent(ctx context.Context, t *target, override *bool,
 	return append(environ, signingEnv(agentSocket)...), stop, nil
 }
 
-// hasGitConfigEnv reports whether the environment already drives git's
-// environment-based configuration.
-//
-// The three numbered keys specifically, not the GIT_CONFIG_ prefix:
-// GIT_CONFIG_GLOBAL shares that prefix and is set by every container that
-// persists its state, so matching the prefix would turn commit signing off for
-// all of them and blame a variable the operator never set. The two compose —
-// GIT_CONFIG_GLOBAL names the file, the numbered keys override what is in it.
+// hasGitConfigEnv reports whether the environment already sets git's numbered
+// GIT_CONFIG_* pairs. Not the GIT_CONFIG_ prefix: GIT_CONFIG_GLOBAL shares it
+// and every stateful container sets it.
 func hasGitConfigEnv(environ []provider.EnvVar) bool {
 	for _, e := range environ {
 		if e.Key == "GIT_CONFIG_COUNT" ||
@@ -188,30 +158,19 @@ func hasGitConfigEnv(environ []provider.EnvVar) bool {
 	return false
 }
 
-// signingEnv configures git to sign commits with the forwarded agent.
-//
-// Since git 2.34 an SSH key can sign a commit, so the agent that authenticates
-// the push signs the commit too and no GPG agent is needed. The key never
-// enters the container either way — the container asks the relay to sign, and
-// the signing happens on the host.
-//
-// Best effort: an agent holding no keys can still authenticate a push using a
-// key added later in the session, and refusing to run the operator's command
-// over a signing key would be out of proportion. Git says so itself if a commit
-// is then attempted.
+// signingEnv has git sign commits with the forwarded agent (git 2.34+ signs
+// with SSH keys). The key stays on the host. Best effort: a push can still
+// authenticate with a key added later, and git reports a failed signature
+// itself.
 func signingEnv(agentSocket string) []provider.EnvVar {
 	key, err := relay.SigningKey(agentSocket)
 	if err != nil {
 		return nil
 	}
 
-	// Set through GIT_CONFIG_* rather than by writing a file: git reads these
-	// from the environment (since 2.31), so nothing is written into the
-	// container and nothing into the project's own .git/config.
-	//
-	// The count must match the number of pairs exactly, numbered from zero with
-	// no gaps — a missing index is a fatal git error, not a skipped entry. So
-	// the list is built in one place and counted from itself.
+	// GIT_CONFIG_* rather than a file, so nothing is written into the container
+	// or the project. The count must match the pairs exactly, with no gaps: a
+	// bad index is fatal to git.
 	pairs := [][2]string{
 		{"gpg.format", "ssh"},
 		{"user.signingkey", key},
@@ -231,9 +190,8 @@ func signingEnv(agentSocket string) []provider.EnvVar {
 	return out
 }
 
-// relayDrops is a session's drops as audit fields, oldest first. Nil when there
-// were none, so a relay that never dropped writes the record it always has.
-// The error text is the relay's own I/O error and carries no setting value.
+// relayDrops returns a session's drops as audit fields, oldest first; nil when
+// there were none.
 func relayDrops(drops []provider.AgentDrop) []map[string]any {
 	if len(drops) == 0 {
 		return nil

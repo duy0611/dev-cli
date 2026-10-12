@@ -8,18 +8,15 @@ import (
 
 // KubeconfigDefaults reports the current context and its namespace.
 //
-// Defaults for the interactive configure, so the common case is three presses
-// of return. Best effort on purpose: no kubeconfig, no kubectl, or no current
-// context are all ordinary states on a machine that has not been pointed at a
-// cluster yet, and none of them should stop a provider being configured by
-// hand.
+// Best effort: a missing kubeconfig, kubectl or current context is an ordinary
+// state.
 func KubeconfigDefaults(ctx context.Context) (kubeContext, namespace string) {
 	kubeContext = kubeconfigValue(ctx, "config", "current-context")
 	if kubeContext == "" {
 		return "", ""
 	}
-	// --minify restricts the view to the current context, so this is that
-	// context's namespace rather than the first one in the file.
+	// --minify keeps this to the current context; without it the first
+	// namespace in the file wins.
 	namespace = kubeconfigValue(ctx, "config", "view", "--minify",
 		"-o", "jsonpath={..namespace}")
 	return kubeContext, namespace

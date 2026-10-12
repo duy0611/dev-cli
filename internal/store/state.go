@@ -12,9 +12,7 @@ import (
 const activeWorkspaceKey = "active_workspace"
 
 // ActiveWorkspace returns the active workspace name, or "" when none is set.
-//
-// Deliberately not an error: "no active workspace" is a normal state on a fresh
-// install, and the caller has a better message for it than this layer does.
+// Unset is not an error.
 func (s *Store) ActiveWorkspace() (string, error) {
 	var v string
 	err := s.db.QueryRow(`SELECT value FROM app_state WHERE key = ?`, activeWorkspaceKey).Scan(&v)
@@ -28,7 +26,7 @@ func (s *Store) ActiveWorkspace() (string, error) {
 }
 
 // SetActiveWorkspace records which workspace is active. The workspace must
-// exist: pointing at a deleted one would fail later, further from the cause.
+// exist.
 func (s *Store) SetActiveWorkspace(name string) error {
 	if _, err := s.GetWorkspace(name); err != nil {
 		return err
@@ -43,9 +41,8 @@ func (s *Store) SetActiveWorkspace(name string) error {
 	return nil
 }
 
-// ClearActiveWorkspace forgets the active workspace. Called when the active one
-// is deleted, so that the next command says "no active workspace" rather than
-// "no such workspace" about a name the operator never typed.
+// ClearActiveWorkspace forgets the active workspace. Called when it is deleted,
+// so the next command does not report a name the operator never typed.
 func (s *Store) ClearActiveWorkspace() error {
 	if _, err := s.db.Exec(`DELETE FROM app_state WHERE key = ?`, activeWorkspaceKey); err != nil {
 		return fmt.Errorf("clearing the active workspace: %w", err)
@@ -63,7 +60,6 @@ func boolToInt(b bool) int {
 }
 
 // requireOneRow turns "the DELETE matched nothing" into a not-found error.
-// Without it a delete of a missing row reports success.
 func requireOneRow(res sql.Result, missing error) error {
 	n, err := res.RowsAffected()
 	if err != nil {
@@ -75,10 +71,8 @@ func requireOneRow(res sql.Result, missing error) error {
 	return nil
 }
 
-// isUniqueViolation reports whether err is a primary-key or unique-constraint
-// failure. Matched on the message because the pure-Go driver's error type is
-// not part of its stable surface, and the same check has to keep working when
-// the driver underneath becomes Postgres.
+// isUniqueViolation reports whether err is a unique-constraint failure. It
+// matches the message because the driver's error type is not a stable API.
 func isUniqueViolation(err error) bool {
 	if err == nil {
 		return false

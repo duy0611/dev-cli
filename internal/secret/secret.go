@@ -1,8 +1,5 @@
-// Package secret turns a workspace setting's spec into a value.
-//
-// A spec says where a value comes from; it is never the value. That is what
-// keeps tokens out of the database, out of `workspace show`, and out of any
-// backup of either.
+// Package secret turns a workspace setting's spec into a value. A spec names
+// where the value comes from; it is never the value itself.
 package secret
 
 import (
@@ -15,12 +12,9 @@ import (
 type Backend interface {
 	// Scheme is the spec prefix this backend answers to, without the colon.
 	Scheme() string
-	// Get resolves the reference part of a spec — everything after the
-	// scheme — to a value.
+	// Get resolves the reference part of a spec to a value.
 	Get(ctx context.Context, ref string) (string, error)
-	// Available reports whether this backend can be used on this host right
-	// now, so a missing tool is reported as a missing tool rather than as a
-	// failed lookup.
+	// Available reports whether the backend's tool is present on this host.
 	Available(ctx context.Context) bool
 }
 
@@ -38,10 +32,8 @@ func NewResolver() *Resolver {
 	return r
 }
 
-// Resolve turns one spec into a value.
-//
-// The op:// form is the 1Password CLI's own URI, kept verbatim so a spec can be
-// pasted straight out of the 1Password app. Everything else is scheme:ref.
+// Resolve turns one spec into a value. Specs are scheme:ref, except op://,
+// which is 1Password's own URI and passed through whole.
 func (r *Resolver) Resolve(ctx context.Context, spec string) (string, error) {
 	scheme, ref, err := splitSpec(spec)
 	if err != nil {
@@ -61,10 +53,8 @@ func (r *Resolver) Resolve(ctx context.Context, spec string) (string, error) {
 		return "", err
 	}
 	if v == "" {
-		// An empty value is almost always a wrong reference rather than an
-		// intentionally empty secret, and it fails far away from here: the tool
-		// inside the container sends an empty Bearer token and reports a
-		// confusing authentication error.
+		// An empty value is a wrong reference, and would otherwise surface far
+		// away as an empty bearer token in the container.
 		return "", fmt.Errorf("%q resolved to an empty value", spec)
 	}
 	return v, nil
@@ -76,7 +66,7 @@ func splitSpec(spec string) (scheme, ref string, err error) {
 	if spec == "" {
 		return "", "", fmt.Errorf("empty spec")
 	}
-	// op:// is a URI, so the whole thing is the reference.
+	// op:// is a URI, so the whole spec is the reference.
 	if strings.HasPrefix(spec, schemeOnePassword+"://") {
 		return schemeOnePassword, spec, nil
 	}

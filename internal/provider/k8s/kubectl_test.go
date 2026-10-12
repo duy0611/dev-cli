@@ -14,13 +14,8 @@ import (
 // one argument per line, and its stdin.
 type stubs struct{ dir string }
 
-// newStubs replaces PATH with a directory of the test's own.
-//
-// Replaces, not precedes: a stub PATH that still ends in the host's leaves
-// every binary the test did not install resolving to the operator's own. The
-// builder probes docker and podman, so a machine with podman installed ran the
-// real one — pushing to a real registry from a unit test, and making "no docker
-// on PATH" untrue. A test that wants a host binary asks for it by name.
+// newStubs replaces PATH with a directory of the test's own. It replaces rather
+// than precedes, so a host podman cannot answer the builder probe.
 func newStubs(t *testing.T) *stubs {
 	t.Helper()
 	dir := t.TempDir()
@@ -34,12 +29,8 @@ func (s *stubs) install(t *testing.T, name, stdout string, code int) {
 	s.write(t, name, stdout, code, false)
 }
 
-// installReadingStdin also captures stdin.
-//
-// Separate because reading stdin is not free: a stub that always cats will hang
-// forever when the caller leaves the pipe open, which is exactly what the
-// devcontainer CLI does to the docker it spawns. Only the tests that write and
-// close stdin themselves may use this.
+// installReadingStdin also captures stdin. A stub that always reads hangs when
+// the caller leaves the pipe open, as the devcontainer CLI does to docker.
 func (s *stubs) installReadingStdin(t *testing.T, name, stdout string, code int) {
 	t.Helper()
 	s.write(t, name, stdout, code, true)
@@ -54,7 +45,7 @@ func (s *stubs) write(t *testing.T, name, stdout string, code int, readStdin boo
 		": > '" + argv + "'\n" +
 		"for a in \"$@\"; do printf '%s\\n' \"$a\" >> '" + argv + "'; done\n"
 	if readStdin {
-		// Absolute: PATH holds nothing but this directory, by design.
+		// Absolute: PATH holds only this directory.
 		script += "/bin/cat > '" + stdin + "'\n"
 	}
 	if stdout != "" {
@@ -67,9 +58,7 @@ func (s *stubs) write(t *testing.T, name, stdout string, code int, readStdin boo
 	}
 }
 
-// installScript writes a stub whose body decides what to print, and which
-// appends every invocation to a log so a test can see all of them. The
-// single-call argv helper truncates, which loses everything but the last.
+// installScript logs every invocation, where argv keeps only the last.
 func (s *stubs) installScript(t *testing.T, name, body string) {
 	t.Helper()
 	log := filepath.Join(s.dir, name+".log")
@@ -82,17 +71,9 @@ func (s *stubs) installScript(t *testing.T, name, body string) {
 	}
 }
 
-// installKubectl writes a logging kubectl stub that drains stdin first, into a
-// file named after the subcommand that received it.
-//
-// Draining matters because seedWorkspace streams a tar into `kubectl exec`: a
-// stub that exits without reading took none of the archive, which pipeInto
-// reports rather than ignores. Harmless for the calls that send nothing —
-// os/exec gives those /dev/null, which cat reaches the end of at once.
-//
-// Per subcommand, because one command runs several kubectl calls and a single
-// file would hold whichever spoke last. The leading flags are skipped in pairs:
-// args() only ever emits --context and --namespace, and both carry a value.
+// installKubectl logs each subcommand's stdin after draining it: pipeInto
+// reports an archive the stub never read. Leading flags are skipped in pairs,
+// since args() emits only --context and --namespace.
 func (s *stubs) installKubectl(t *testing.T, body string) {
 	t.Helper()
 	capture := "sub=stdin\n" +
@@ -188,8 +169,7 @@ func TestNewKubectlTakesContextAndNamespaceFromConfig(t *testing.T) {
 	}
 }
 
-// The invariant of this file: a call that reaches the wrong cluster does not
-// fail, it succeeds somewhere else. Every entry point must carry both.
+// A call missing --context or --namespace succeeds in the wrong cluster.
 func TestEveryCallCarriesContextAndNamespace(t *testing.T) {
 	k := testKubectl()
 
@@ -223,8 +203,7 @@ func TestEveryCallCarriesContextAndNamespace(t *testing.T) {
 	}
 }
 
-// An empty context means "whatever kubeconfig selected". Passing --context ""
-// would instead select a context named "", which does not exist.
+// An empty context is omitted: --context "" would select a context named "".
 func TestEmptyContextIsOmitted(t *testing.T) {
 	s := newStubs(t)
 	s.install(t, kubectlBin, "", 0)
@@ -253,8 +232,7 @@ func TestApplySendsTheManifestOnStdin(t *testing.T) {
 	if !hasPair(argv, "-f", "-") {
 		t.Errorf("argv %v does not read the manifest from stdin", argv)
 	}
-	// Server-side, so a field this tool does not set is left alone on update
-	// rather than stripped.
+	// Server-side apply keeps fields this tool does not set.
 	if !contains(argv, "--server-side") {
 		t.Errorf("argv %v is not a server-side apply", argv)
 	}
@@ -291,8 +269,8 @@ func TestPipeIntoStreamsTheProducer(t *testing.T) {
 	}
 }
 
-// A failed producer leaves kubectl complaining about a truncated archive, which
-// says nothing about the real cause.
+// A failed producer makes kubectl report a truncated archive; surface the
+// producer's error.
 func TestPipeIntoPrefersTheProducersError(t *testing.T) {
 	s := newStubs(t)
 	s.install(t, kubectlBin, "", 1)
@@ -308,8 +286,7 @@ func TestPipeIntoPrefersTheProducersError(t *testing.T) {
 	}
 }
 
-// kubectl explains a refusal on stderr; without it the operator gets "exit
-// status 1" and nothing else.
+// Keep kubectl's stderr; otherwise the error is only "exit status 1".
 func TestErrorsQuoteKubectlsStderr(t *testing.T) {
 	s := newStubs(t)
 	if err := os.WriteFile(filepath.Join(s.dir, kubectlBin),
@@ -348,12 +325,8 @@ func contains(haystack []string, needle string) bool {
 	return false
 }
 
-// A binary the test never installed must not resolve to the host's own.
-//
-// The stubs used to precede PATH rather than replace it, so a machine with
-// podman installed answered selectBuilder's probe with the real thing: the
-// "docker without buildx" tests pushed to the operator's registry, and "no
-// docker on PATH" was never true.
+// A binary the test did not install must not resolve to the host's own;
+// the stubs replace PATH rather than prepend to it.
 func TestStubsHideBinariesTheTestDidNotInstall(t *testing.T) {
 	host := t.TempDir()
 	script := filepath.Join(host, podmanBin)
@@ -369,19 +342,15 @@ func TestStubsHideBinariesTheTestDidNotInstall(t *testing.T) {
 	}
 }
 
-// pipeInto must not wait forever on a command that exits without reading.
-//
-// cmd.Stdin used to be an io.Pipe, which os/exec drains from a goroutine of its
-// own. When the command exits early that goroutine gives up, and the producer
-// then blocks on a pipe with no reader — a hang, in a path whose whole job is
-// streaming a tar into a pod that may have died.
+// pipeInto must not hang on a command that exits unread: an io.Pipe on
+// cmd.Stdin does, while a real pipe gets EPIPE.
 func TestPipeIntoFailsWhenTheCommandStopsReading(t *testing.T) {
 	s := newStubs(t)
 	s.installScript(t, kubectlBin, "") // exits at once, stdin untouched
 
 	err := testKubectl().pipeInto(context.Background(), func(w io.Writer) error {
-		// Bigger than any pipe buffer, so the write cannot quietly land in the
-		// kernel and hide the fact that nothing read it.
+		// Larger than a pipe buffer, so the write cannot land in the kernel
+		// unnoticed.
 		_, err := w.Write(make([]byte, 1<<20))
 		return err
 	}, "exec", "-i", "deployment/x", "--", "tar", "-x")

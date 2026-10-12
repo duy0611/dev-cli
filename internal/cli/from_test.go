@@ -11,9 +11,6 @@ import (
 )
 
 // createSource makes a generated, folderless container to clone from.
-//
-// generate is set explicitly: a scripted --no-folder create without it renders
-// no tools at all, which would leave every comparison below equal and empty.
 func createSource(t *testing.T, a *app, name string, opts createOpts) model.Container {
 	t.Helper()
 	opts.noFolder, opts.noStart, opts.generate = true, true, true
@@ -63,8 +60,6 @@ func TestCreateFromCopiesTheSourceTools(t *testing.T) {
 	if got := toolsOf(t, c); !slices.Equal(got, want) {
 		t.Errorf("tools = %v, want the source's %v", got, want)
 	}
-	// The document is rendered for the new container, never copied: a copy
-	// would mount the source's workspace and state volumes into this one.
 	for _, want := range []string{"dev-ws-scratch", "dev-ws-scratch-state"} {
 		if !strings.Contains(c.GeneratedConfig, want) {
 			t.Errorf("document does not name %s:\n%s", want, c.GeneratedConfig)
@@ -108,8 +103,6 @@ func TestCreateFromAppliesAToolDiff(t *testing.T) {
 	}
 }
 
-// applyToolDiff treats a plain list as a replacement, which would silently
-// discard everything --from exists to carry.
 func TestCreateFromRejectsAPlainToolList(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -241,8 +234,6 @@ func TestContainerOnAWorktreeFromCopiesTools(t *testing.T) {
 	}
 }
 
-// A source container on one worktree passes its tools, never its binds: a
-// container on another checkout binds its own.
 func TestContainerFromAWorktreeSourceDropsItsBinds(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)

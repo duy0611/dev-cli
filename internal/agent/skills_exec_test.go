@@ -12,8 +12,7 @@ import (
 	"github.com/duy0611/dev-cli/internal/agentcfg"
 )
 
-// runLocally runs a step's command with the host's own sh, which is what a
-// container's sh does with the same argv.
+// runLocally runs a step's command with the host's sh.
 func runLocally(t *testing.T, s Step) error {
 	t.Helper()
 	cmd := exec.Command(s.Cmd[0], s.Cmd[1:]...)
@@ -38,10 +37,8 @@ func gitRepo(t *testing.T, dir string) {
 	}
 }
 
-// A skill repository is third-party content. A symlink in it must not let the
-// skill land outside the skills directory, and must never become a path the
-// step deletes through: `rm -rf "$d/.git"` on a skill that is a link to a
-// checkout deletes that checkout's history.
+// A symlink in a skill repository must not let a skill land outside the skills
+// directory, or become a path the step deletes through.
 func TestAGitSkillThatIsASymlinkIsRefused(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
@@ -99,8 +96,7 @@ func TestAGitSkillIsCopiedWithoutItsHistory(t *testing.T) {
 	}
 }
 
-// Several skills from one clone all land, and one bad path installs none of
-// them: a half-applied repository is harder to notice than a failed step.
+// Several skills from one clone all land, and one bad path installs none.
 func TestGitSkillsFromOneRepository(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
@@ -147,11 +143,8 @@ func TestGitSkillsFromOneRepository(t *testing.T) {
 	}
 }
 
-// Staging happens beside the skills, never in $TMPDIR. Under SELinux a file
-// keeps its label across a move, and /tmp carries the container's own MCS
-// categories: a skill staged there and moved onto the state volume is readable
-// only by that container, so after a rebuild the next apply cannot remove it.
-// An unusable TMPDIR stands in for the label, which a test cannot set.
+// Staging happens beside the skills, not in $TMPDIR. An unusable TMPDIR stands
+// in for the SELinux label, which a test cannot set.
 func TestAGitSkillIsNotStagedInTMPDIR(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
@@ -204,9 +197,8 @@ func TestAGitSkillBehindASymlinkedDirectoryIsRefused(t *testing.T) {
 	}
 }
 
-// A write that is cut off must leave the old file whole. The next apply reads
-// that file back and merges into it, so a truncated one would silently drop
-// every setting the operator had there.
+// A cut-off write must leave the old file whole, since the next apply merges
+// into it.
 func TestAnInterruptedWriteLeavesTheFileWhole(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "opencode.json")
@@ -235,8 +227,8 @@ func TestAnInterruptedWriteLeavesTheFileWhole(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	// The exec dying mid-stream, as a dropped kubectl exec or a Ctrl-C would.
-	// The whole process group, so cat goes with the shell.
+	// Kill the whole group, as a dropped exec would; cat must die with the
+	// shell.
 	_ = syscall.Kill(-w.Process.Pid, syscall.SIGKILL)
 	_ = w.Wait()
 
@@ -248,7 +240,7 @@ func TestAnInterruptedWriteLeavesTheFileWhole(t *testing.T) {
 		t.Errorf("file = %q after an interrupted write", got)
 	}
 
-	// And a completed write still lands.
+	// A completed write still lands.
 	done := exec.Command(cmd[0], cmd[1:]...)
 	done.Stdin = strings.NewReader(`{"theme":"light"}`)
 	if out, err := done.CombinedOutput(); err != nil {
@@ -259,9 +251,8 @@ func TestAnInterruptedWriteLeavesTheFileWhole(t *testing.T) {
 	}
 }
 
-// partialWritten reports whether some file in dir already holds the four bytes
-// the interrupted write sent: the target itself when the write truncates in
-// place, a temporary beside it when the write goes through a rename.
+// partialWritten reports whether a file in dir holds the bytes the interrupted
+// write sent.
 func partialWritten(dir string) bool {
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {

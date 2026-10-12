@@ -1,9 +1,7 @@
 // Package gitwt drives git's worktree commands.
 //
-// Shelling out rather than go-git, for the reason the rest of this tool shells
-// out: git's own behaviour is the behaviour wanted, including its error
-// messages, and a reimplementation would be a second opinion about a format
-// git owns.
+// Shells out to git rather than using go-git, so git's own behaviour and error
+// messages are what the operator sees.
 package gitwt
 
 import (
@@ -30,37 +28,26 @@ type Entry struct {
 	Branch string // short name, empty for a detached HEAD
 }
 
-// CommonDir returns the absolute path of the repository's common directory —
-// the directory holding the object store and the worktree administration.
+// CommonDir returns the absolute path of the repository's common directory,
+// which holds the object store and worktree administration. It also reports
+// whether dir is in a repository at all.
 //
-// This answers two questions with one call, deliberately. It says whether dir
-// is in a repository at all, and it is the directory that must be bind-mounted
-// into a container: a worktree's .git file holds `gitdir: <common>/worktrees/
-// <name>`, an absolute host path. A separate IsRepo could disagree with it.
-//
-// --git-common-dir rather than --show-toplevel: from inside a worktree the
-// latter answers the worktree, so creating a worktree from inside another one
-// would register it against the wrong place. It is also correct for a bare
-// repository, which has no working tree to be the top level of.
+// --git-common-dir rather than --show-toplevel: from inside a linked worktree
+// the latter names the worktree, not the repository.
 func CommonDir(ctx context.Context, dir string) (string, error) {
 	cmd := exec.CommandContext(ctx, gitBin,
 		"rev-parse", "--path-format=absolute", "--git-common-dir")
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
-		// Git's message names ".git" rather than the directory the operator
-		// was standing in, so it is dropped and the caller writes its own.
+		// Git's message names ".git", not dir, so it is replaced.
 		return "", fmt.Errorf("%w: %s", ErrNotRepo, dir)
 	}
 	return strings.TrimSpace(string(out)), nil
 }
 
-// Add creates a checkout at path.
-//
-// branch is checked out when it already exists and created otherwise, because
-// `git worktree add -b` fails outright on a branch that exists. base names the
-// start point for a new branch and is ignored for an existing one — the caller
-// rejects that combination before getting here.
+// Add creates a checkout at path. An existing branch is checked out, since
+// `git worktree add -b` fails on one that exists.
 func Add(ctx context.Context, repo, path, branch, base string) error {
 	args := []string{"worktree", "add", "--quiet"}
 	if BranchExists(ctx, repo, branch) {
@@ -74,11 +61,8 @@ func Add(ctx context.Context, repo, path, branch, base string) error {
 	return runGit(ctx, repo, args...)
 }
 
-// Remove deletes the checkout and its administrative directory.
-//
-// The branch is never touched; that is git's behaviour and the command's
-// promise. force passes through to git, which refuses a checkout holding
-// modified or untracked files without it.
+// Remove deletes the checkout and its administrative directory. The branch is
+// kept.
 func Remove(ctx context.Context, repo, path string, force bool) error {
 	args := []string{"worktree", "remove"}
 	if force {
@@ -102,9 +86,8 @@ func List(ctx context.Context, repo string) ([]Entry, error) {
 		return nil, fmt.Errorf("listing worktrees: %s", msg)
 	}
 
-	// The porcelain format is one blank-line-separated record per checkout,
-	// each a sequence of "key value" lines. Parsed rather than the plain
-	// format because that one pads with spaces and cannot be split safely.
+	// Porcelain rather than plain output, which pads with spaces and cannot be
+	// split safely.
 	var (
 		entries []Entry
 		cur     Entry
@@ -122,7 +105,7 @@ func List(ctx context.Context, repo string) ([]Entry, error) {
 		case strings.HasPrefix(line, "worktree "):
 			cur.Path = strings.TrimPrefix(line, "worktree ")
 		case strings.HasPrefix(line, "branch "):
-			// Reported as a full ref; the short name is what a human reads.
+			// Reported as a full ref.
 			cur.Branch = strings.TrimPrefix(
 				strings.TrimPrefix(line, "branch "), "refs/heads/")
 		}
@@ -133,8 +116,7 @@ func List(ctx context.Context, repo string) ([]Entry, error) {
 
 // BranchExists reports whether the repository already has this local branch.
 //
-// --verify on the full ref, not `git branch --list`: the latter prints nothing
-// and exits 0 for a branch that does not exist, so its exit code says nothing.
+// --verify on the full ref: `git branch --list` exits 0 for a missing branch.
 func BranchExists(ctx context.Context, repo, branch string) bool {
 	cmd := exec.CommandContext(ctx, gitBin,
 		"rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
@@ -142,14 +124,9 @@ func BranchExists(ctx context.Context, repo, branch string) bool {
 	return cmd.Run() == nil
 }
 
-// WorktreeRepo returns the repository's common directory when dir is in a
-// linked worktree, and false for anything else — the main checkout, a folder
-// outside any repository.
-//
-// A linked worktree is told apart by its git directory differing from the
-// common one: the main checkout's are the same directory, while a worktree's
-// is <common>/worktrees/<name>. Asked of git rather than by reading the .git
-// file, so a worktree git knows about is recognised however it was made.
+// WorktreeRepo returns the common directory when dir is in a linked worktree,
+// and false otherwise. A linked worktree's git directory differs from the
+// common one; the main checkout's is the same.
 func WorktreeRepo(ctx context.Context, dir string) (string, bool) {
 	cmd := exec.CommandContext(ctx, gitBin,
 		"rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir")
@@ -167,9 +144,8 @@ func WorktreeRepo(ctx context.Context, dir string) (string, bool) {
 
 // Toplevel returns the root of the checkout holding dir.
 //
-// Unlike CommonDir, this answers the worktree dir is in, not the repository —
-// from inside a linked worktree it names that worktree, which is the checkout
-// whose files are wanted.
+// Toplevel returns the checkout dir is in, which for a linked worktree is the
+// worktree itself rather than the repository.
 func Toplevel(ctx context.Context, dir string) (string, error) {
 	cmd := exec.CommandContext(ctx, gitBin, "rev-parse", "--show-toplevel")
 	cmd.Dir = dir
@@ -183,10 +159,8 @@ func Toplevel(ctx context.Context, dir string) (string, error) {
 // IgnoredFiles lists the untracked files in a checkout that its own ignore
 // rules exclude, relative to its root.
 //
-// One entry per file, never --directory: that flag collapses a directory only
-// when everything under it is ignored and so groups the same tree differently
-// from one listing to the next, which leaves nothing that can be intersected.
-// Collapsing back into directories for the copy is the caller's job.
+// One entry per file, never --directory, which groups the same tree differently
+// from one listing to the next.
 func IgnoredFiles(ctx context.Context, dir string) ([]string, error) {
 	return lsFiles(ctx, dir, "--others", "--ignored", "--exclude-standard")
 }
@@ -194,8 +168,7 @@ func IgnoredFiles(ctx context.Context, dir string) ([]string, error) {
 // MatchingFiles lists the untracked files in a checkout that the pattern files
 // match, in gitignore syntax, ignoring the checkout's own ignore rules.
 //
-// git reads the files in the order given, so a later one's negation overrides
-// an earlier one's match.
+// Later pattern files override earlier ones.
 func MatchingFiles(ctx context.Context, dir string, patternFiles []string) ([]string, error) {
 	args := []string{"--others", "--ignored"}
 	for _, f := range patternFiles {
@@ -217,8 +190,8 @@ func AllFiles(ctx context.Context, dir string) ([]string, error) {
 
 // lsFiles runs `git ls-files` and returns its paths sorted and deduplicated.
 //
-// -z, because a path may contain a newline and git would otherwise quote it.
-// Deduplicated because --cached lists a file once per conflicted stage.
+// -z: a path may contain a newline, which git would otherwise quote. Duplicates
+// come from --cached listing a conflicted file once per stage.
 func lsFiles(ctx context.Context, dir string, args ...string) ([]string, error) {
 	cmd := exec.CommandContext(ctx, gitBin, append([]string{"ls-files", "-z"}, args...)...)
 	cmd.Dir = dir

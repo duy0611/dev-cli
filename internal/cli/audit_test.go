@@ -12,16 +12,15 @@ import (
 	"github.com/duy0611/dev-cli/internal/store"
 )
 
-// stubEngine puts a devcontainer and a docker on PATH that succeed, with
-// docker reporting one running container for any lookup — enough for start,
-// exec, stop and remove to run end to end without an engine.
+// stubEngine makes docker report one running container, enough for start, exec,
+// stop and remove.
 func stubEngine(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
 	scripts := map[string]string{
 		"devcontainer": "#!/bin/sh\ncase \"$1\" in read-configuration) echo '{\"mergedConfiguration\":{}}';; esac\nexit 0\n",
-		// `ps --format {{.State}}` is how Status asks; `ps -aq` is how the
-		// container's id is found. Both say there is one, and it is running.
+		// ps -aq finds the container's id; both lookups answer that it is
+		// running.
 		"docker": "#!/bin/sh\ncase \"$*\" in\n" +
 			"  *State*) echo running ;;\n" +
 			"  ps*) echo abc123 ;;\n" +
@@ -59,9 +58,8 @@ func auditBytes(t *testing.T) string {
 	return string(b)
 }
 
-// The invariant the whole log rests on: a resolved setting never reaches it.
-// The setting is a literal, so its value is resolved and handed to every
-// command below — and must appear in none of the records they write.
+// A resolved setting must reach no record: it is handed to every command, and
+// must appear in none.
 func TestAuditLogNeverHoldsASettingValue(t *testing.T) {
 	const secret = "sk-SENTINEL-must-never-be-logged"
 	a, _ := newTestApp(t)
@@ -103,7 +101,6 @@ func TestAuditLogNeverHoldsASettingValue(t *testing.T) {
 	}
 }
 
-// An exec record carries what the operator ran and how it ended.
 func TestAuditExecRecordsArgvAndExitCode(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -167,7 +164,7 @@ func TestAuditCommand(t *testing.T) {
 		t.Errorf("filtered:\n%s", text)
 	}
 
-	// A removed container still has history, so an unknown name is not 3.
+	// A removed container still has history, so an unknown name is not a 3.
 	code, text = auditCmd(t, a, out, "--container", "gone")
 	if code != 0 || text != "" {
 		t.Errorf("unknown name: exit %d, output %q", code, text)
@@ -208,9 +205,7 @@ func TestParseSince(t *testing.T) {
 	}
 }
 
-// TestSummariseRelay covers the one line `dev audit` prints for a relay: how
-// it ended, and — the question the 2026-10-10 incident could not answer — when
-// it went down. Fields arrive as JSON decodes them, so drops is []any of maps.
+// TestSummariseRelay covers the one line `dev audit` prints for a relay.
 func TestSummariseRelay(t *testing.T) {
 	base := map[string]any{
 		"started": "2026-10-09T08:31:37Z",

@@ -1,10 +1,8 @@
 //go:build smoke
 
-// Package smoke drives the real binary against a real container engine.
-//
-// Behind a build tag so `make test` never reaches for an engine. Run it with
-// `make smoke`, on a host that has the devcontainer CLI, a Docker-compatible
-// engine, and network access for the image pull.
+// Package smoke drives the real binary against a real container engine. Run it
+// with `make smoke`, which needs the devcontainer CLI, an engine and network
+// access.
 package smoke
 
 import (
@@ -17,9 +15,7 @@ import (
 	"time"
 )
 
-// A tiny image, so the pull is seconds rather than minutes. The devcontainer
-// CLI supplies its own long-running command for an image-based config, so
-// alpine does not need one.
+// A tiny image, so the pull is seconds rather than minutes.
 const fixtureConfig = `{
   "name": "dev-smoke",
   "image": "docker.io/library/alpine:3.20"
@@ -34,8 +30,7 @@ const (
 func TestSmoke(t *testing.T) {
 	requireBinaries(t, "devcontainer", "docker")
 
-	// A state directory of its own: the operator's real database is not a test
-	// fixture.
+	// A state directory of its own, never the operator's database.
 	state := t.TempDir()
 	t.Setenv("DEV_STATE", state)
 
@@ -47,8 +42,8 @@ func TestSmoke(t *testing.T) {
 		return run(t, bin, args...)
 	}
 
-	// Removal has to happen even when an assertion fails part way through, or
-	// the next run finds a container it did not create.
+	// Runs even when an assertion fails, so the next run finds no stale
+	// container.
 	t.Cleanup(func() {
 		_ = exec.Command(bin, "container", "remove", containerName, "--force").Run()
 	})
@@ -60,7 +55,7 @@ func TestSmoke(t *testing.T) {
 	t.Log("creating the container; the first run pulls an image")
 	dev("container", "create", containerName, "--folder", project)
 
-	// Both labels, or the isolation the whole design rests on is not there.
+	// Both labels must match, or the container is not isolated from others.
 	ids := dockerPS(t, "-q",
 		"--filter", "label=dev.workspace="+workspaceName,
 		"--filter", "label=dev.container="+containerName)
@@ -72,8 +67,7 @@ func TestSmoke(t *testing.T) {
 		t.Errorf("workspace setting did not reach the container: printenv GREETING = %q, want %q", got, "hello")
 	}
 
-	// The record is what `list` prints; the status beside it comes from the
-	// engine.
+	// The record is what `list` prints; the status comes from the engine.
 	if out := dev("container", "list"); !strings.Contains(out, containerName) || !strings.Contains(out, "running") {
 		t.Errorf("container list does not show a running %s:\n%s", containerName, out)
 	}
@@ -95,8 +89,7 @@ func TestSmoke(t *testing.T) {
 
 // --- helpers -------------------------------------------------------------------
 
-// requireAnyBinary skips unless at least one of the alternatives is present,
-// for a job either of them can do.
+// requireAnyBinary skips unless at least one of the named binaries is on PATH.
 func requireAnyBinary(t *testing.T, names ...string) {
 	t.Helper()
 	for _, n := range names {
@@ -116,8 +109,7 @@ func requireBinaries(t *testing.T, names ...string) {
 	}
 }
 
-// buildBinary compiles the CLI under test, so the smoke test cannot pass
-// against a stale dist/dev from an earlier build.
+// buildBinary compiles the CLI under test, never a stale dist/dev.
 func buildBinary(t *testing.T) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "dev")
@@ -150,8 +142,7 @@ func run(t *testing.T, bin string, args ...string) string {
 	cmd := exec.Command(bin, args...)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	// An image pull on a cold cache is the slow part; everything else is
-	// seconds.
+	// Only a cold image pull is slow.
 	timer := time.AfterFunc(10*time.Minute, func() {
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
@@ -198,8 +189,7 @@ func dockerVolumes(t *testing.T, name string) []string {
 	return names
 }
 
-// A folder with no configuration of its own is the whole point of --generate,
-// so the fixture is a bare directory.
+// A folder with no configuration of its own, to exercise --generate.
 func TestSmokeGeneratedConfig(t *testing.T) {
 	requireBinaries(t, "devcontainer", "docker")
 
@@ -251,8 +241,7 @@ func TestSmokeGeneratedConfig(t *testing.T) {
 	dev("container", "remove", name)
 }
 
-// --from copies a tool list, not a document: the clone has to install what the
-// source installs, and on volumes named for itself.
+// --from copies the source's tool list, and the clone gets its own volumes.
 func TestSmokeCreateFrom(t *testing.T) {
 	requireBinaries(t, "devcontainer", "docker")
 
@@ -281,14 +270,14 @@ func TestSmokeCreateFrom(t *testing.T) {
 	dev("provider", "configure", "dev-smoke-from-local", "--kind", "local")
 	dev("workspace", "init", ws, "--provider", "dev-smoke-from-local")
 
-	// Recorded only: the source never needs to run for its tools to be read.
+	// Recorded only; the source never runs.
 	dev("container", "create", src, "--no-folder", "--generate", "--tools", "yq", "--no-start")
 
 	t.Log("creating a container --from another; the first run pulls a base image and installs features")
 	dev("container", "create", clone, "--from", src, "--no-folder")
 
-	// yq because the base image does not ship it, so finding it proves the
-	// source's tool list reached the clone's build.
+	// yq is not in the base image, so finding it proves the tool list was
+	// copied.
 	if out := dev("container", "exec", clone, "--", "yq", "--version"); !strings.Contains(out, "yq") {
 		t.Errorf("yq is not installed in the clone: %q", out)
 	}
@@ -300,8 +289,8 @@ func TestSmokeCreateFrom(t *testing.T) {
 	dev("container", "remove", src)
 }
 
-// The claim a folderless container rests on: work survives a stop and a start,
-// because it is in a volume rather than in the container filesystem.
+// Work in a folderless container survives a stop and start, because it lives in
+// a volume.
 func TestSmokeFolderless(t *testing.T) {
 	requireBinaries(t, "devcontainer", "docker")
 
@@ -320,8 +309,7 @@ func TestSmokeFolderless(t *testing.T) {
 	)
 	t.Cleanup(func() {
 		_ = exec.Command(bin, "container", "remove", name, "--force").Run()
-		// The volume outlives a failed remove, and the next run would mount
-		// the previous run's files.
+		// A surviving volume would hand the next run the previous run's files.
 		_ = exec.Command("docker", "volume", "rm", "--force", "dev-"+ws+"-"+name).Run()
 	})
 
@@ -341,7 +329,7 @@ func TestSmokeFolderless(t *testing.T) {
 		t.Errorf("the workspace did not survive a stop and start: marker = %q, want %q", got, "persisted")
 	}
 
-	// The volume is dev's to remove. Left behind, it accumulates silently.
+	// dev owns the volume and must remove it.
 	volume := "dev-" + ws + "-" + name
 	dev("container", "remove", name)
 	if out := dockerVolumes(t, volume); len(out) != 0 {
@@ -349,12 +337,8 @@ func TestSmokeFolderless(t *testing.T) {
 	}
 }
 
-// The whole point of the feature: an agent's configuration outlives a rebuild.
-//
-// A rebuild is what makes this worth testing rather than a stop and start.
-// `up --remove-existing-container` throws the container filesystem away, which
-// is exactly where ~/.claude used to live, so a mount that is not reapplied on
-// every up looks fine until the first rebuild.
+// An agent's configuration outlives a rebuild. A rebuild, not a stop and start,
+// is what discards the container filesystem and so tests the mount.
 func TestSmokePersistState(t *testing.T) {
 	requireBinaries(t, "devcontainer", "docker")
 
@@ -384,9 +368,8 @@ func TestSmokePersistState(t *testing.T) {
 	t.Log("creating a container; persisting the agents' state is the default")
 	dev("container", "create", name, "--no-folder")
 
-	// Written through the variable rather than to a hardcoded path: if
-	// CLAUDE_CONFIG_DIR did not arrive, this writes somewhere else and the read
-	// after the rebuild fails, which is the failure worth catching.
+	// Through the variable, so a missing CLAUDE_CONFIG_DIR fails the read after
+	// rebuild.
 	dev("container", "exec", name, "--", "sh", "-c",
 		`mkdir -p "$CLAUDE_CONFIG_DIR" && echo plugin > "$CLAUDE_CONFIG_DIR/marker"`)
 	dev("container", "exec", name, "--", "git", "config", "--global", "alias.st", "status")
@@ -408,8 +391,8 @@ func TestSmokePersistState(t *testing.T) {
 			alias, "status")
 	}
 
-	// Writable by the remote user, not root: a volume arrives root-owned and
-	// nothing remaps it, so without the chown the very first write above fails.
+	// A volume arrives root-owned; the postCreate chown makes it writable by
+	// the remote user.
 	owner := strings.TrimSpace(dev("container", "exec", name, "--", "sh", "-c",
 		`[ -w "$CLAUDE_CONFIG_DIR" ] && echo writable`))
 	if owner != "writable" {

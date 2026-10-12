@@ -25,10 +25,8 @@ func newContainerCmd(a *app) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "container",
 		Short: "Create and run devcontainers",
-		// A group, not a command. Both are needed: Args rejects the stray
-		// argument, and RunE overrides the root's inherited "print help and
-		// return nil", which would otherwise exit 0 for a mistyped subcommand
-		// and let a script read it as success.
+		// RunE stops cobra inheriting the root's RunE, which exits 0 for a
+		// mistyped subcommand.
 		Args: noArgs(),
 		RunE: groupRunE,
 	}
@@ -53,30 +51,19 @@ func newContainerCmd(a *app) *cobra.Command {
 
 // --- create -------------------------------------------------------------------
 
-// createOpts is what `container create` was asked for beyond the name and the
-// folder. A struct rather than more parameters: the list grows, and six
-// positional booleans at a call site say nothing about which is which.
+// createOpts holds the flags of `container create` beyond the name and folder.
 type createOpts struct {
-	noStart        bool
-	noFolder       bool
-	generate       bool
-	noPersistState bool
-	tools          []string
-	// agentConfig is --agent-config: an agents.yaml to apply instead of the
-	// project's own. noAgentConfig is --no-agent-config: apply none.
-	agentConfig   string
-	noAgentConfig bool
-	// from is --from: an existing generated container in the same workspace
-	// whose tools and persisted choices this one starts from. See applyFrom.
-	from string
-	// allowPrivileged is --allow-privileged: let the configuration ask its
-	// engine for the host. See checkEscape.
+	noStart         bool
+	noFolder        bool
+	generate        bool
+	noPersistState  bool
+	tools           []string
+	agentConfig     string
+	noAgentConfig   bool
+	from            string
 	allowPrivileged bool
-	// mode is --mode: guarded or isolated, empty for the provider's default.
-	mode model.Mode
-	// legacy records the row as a container from before modes, under the
-	// single-file git guard. No flag sets it: it exists so that guard, which
-	// every row the migration marked legacy still runs, keeps its tests.
+	mode            model.Mode
+	// Set only on rows from before modes; no flag sets it.
 	legacy bool
 }
 
@@ -152,9 +139,6 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 	if folder != "" && opts.noFolder {
 		return usageErrorf("--folder and --no-folder contradict each other")
 	}
-	// Neither flag means the folder the command runs in, which is almost
-	// always the project. Said out loud below, once it is known to be usable,
-	// so a wrong guess is seen before the container is.
 	defaulted := false
 	if folder == "" && !opts.noFolder {
 		cwd, err := os.Getwd()
@@ -171,8 +155,8 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 	if len(opts.tools) > 0 && !opts.generate && !opts.noFolder && opts.from == "" {
 		return usageErrorf("--tools only applies with --generate or --from")
 	}
-	// Before anything else is resolved, so a bad flag or a missing file is
-	// reported as itself rather than as whatever fails first after it.
+	// Checked first, so a bad flag is reported as itself, not as a later
+	// failure.
 	if _, err := agentConfigChoice(opts.agentConfig, opts.noAgentConfig); err != nil {
 		return err
 	}
@@ -188,13 +172,12 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 	if opts.legacy && mode == model.ModeGuarded {
 		mode = model.ModeLegacy
 	}
-	// Before the source below is resolved, so it renders from the tools and
-	// inherited choices --from carries rather than asking for them.
+	// Before the source is resolved, so the render sees the tools --from
+	// carries.
 	if err := applyFrom(a, wsName, &opts); err != nil {
 		return err
 	}
-	// Again, now that --from may have filled in what the flags left empty. A
-	// file the source named that has since gone fails here, before any row.
+	// Re-checked: --from may have filled in what the flags left empty.
 	agentConfig, err := agentConfigChoice(opts.agentConfig, opts.noAgentConfig)
 	if err != nil {
 		return err
@@ -207,11 +190,8 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 		worktreeRepo string
 	)
 	if opts.noFolder {
-		// No project, so nothing can ship a configuration and there is nothing
-		// for --generate to shadow: --generate is accepted but redundant here.
-		// Passing opts.generate rather than a hardcoded true lets a terminal
-		// run without --tools fall into generatedConfigFor's picker branch,
-		// same as the folder path.
+		// No project to shadow, so --generate is redundant here. Passing
+		// opts.generate, not true, keeps the picker reachable from a terminal.
 		generated, err = generatedConfigFor(name, opts.generate, opts.tools,
 			folderlessMount(wsName, name), stateFor(!opts.noPersistState, wsName, name),
 			os.Stdin, a.out)
@@ -219,11 +199,8 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 			return err
 		}
 		if generated == "" {
-			// generatedConfigFor returns "" only for a scripted run with no
-			// --tools: unlike folderSource, that is not an error here, since a
-			// folderless container always has something to generate and the
-			// spec promises a bare Ubuntu image rather than a picker nobody
-			// can see.
+			// Empty only for a scripted run without --tools; here that means
+			// the bare image, not an error.
 			generated, err = dcgen.Render(name, nil, folderlessMount(wsName, name),
 				stateFor(!opts.noPersistState, wsName, name))
 			if err != nil {
@@ -240,8 +217,8 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 		}
 	}
 
-	// A worktree's .git file and the repository's backlink are both absolute
-	// host paths, which a pod cannot reach.
+	// A worktree's .git and backlink are absolute host paths a pod cannot
+	// reach.
 	if worktreeRepo != "" {
 		if err := a.requireLocalProvider(wsName); err != nil {
 			return err
@@ -253,8 +230,7 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 		}
 	}
 
-	// Advisory, and nothing is stored: the project can gain or lose a compose
-	// file later, so every invocation re-derives this.
+	// Advisory and not stored: the compose file can be added or removed later.
 	if msg := composeWarning(configPath, !opts.noPersistState); msg != "" {
 		warnf(a, "%s", msg)
 	}
@@ -269,44 +245,34 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 		kind = model.SourceNone
 	}
 	c := model.Container{
-		Name:          name,
-		WorkspaceName: wsName,
-		SourceKind:    kind,
-		Source:        source,
-		ConfigPath:    configPath,
-		// Exactly one of these two is set: a project-owned container has a
-		// path, a generated one has the document itself.
+		Name:            name,
+		WorkspaceName:   wsName,
+		SourceKind:      kind,
+		Source:          source,
+		ConfigPath:      configPath,
 		GeneratedConfig: generated,
-		// A column rather than only a field in the document above: a
-		// project-owned container has no document at all, and `rebuild --tools`
-		// re-renders a generated one from scratch.
+		// A column, not a document field: rebuild --tools re-renders the
+		// document and would drop it.
 		PersistState: !opts.noPersistState,
 		AgentConfig:  agentConfig,
-		// The operator's choice, by flag, and nothing else's: a project file
-		// the agent can edit must not be able to grant it.
+		// Set by flag only: a project file the agent can edit must not grant
+		// it.
 		AllowPrivileged: opts.allowPrivileged,
-		// A folder that is a git repository today, a worktree's included.
-		// Fixed at create, like the other guards; a folderless container has
-		// no host .git at all.
-		// Never for an isolated container: its folder is copied in and never
-		// mounted, so host git reads nothing it writes and there is nothing to
-		// guard — and the guard's mounts would bind the host's .git into it.
+		// Fixed at create. Off for isolated, which never mounts the folder, and
+		// for folderless, which has no host .git.
 		GitGuard: !opts.noFolder && mode != model.ModeIsolated &&
 			(isGitCheckout(source) || worktreeRepo != ""),
-		// Kept on the row, like the workspace mount it accompanies, so every
-		// later command mounts the same repository without asking git again.
+		// Stored so every later command mounts the same repository.
 		WorktreeRepo: worktreeRepo,
 		Mode:         mode,
 	}
-	// After the source is known, since the default file lives in it, and
-	// before the row is written, so a malformed agents.yaml creates nothing.
+	// After the source is known, before the row is written, so a bad file
+	// creates nothing.
 	if err := markAgentConfig(&c); err != nil {
 		return err
 	}
-	// Before the row, for the same reason: a configuration that reaches the
-	// host must create nothing. Only when starting now — start checks again on
-	// every call, so `--no-start` defers it there, and recording a container
-	// still needs no engine.
+	// Only when starting now: start checks again, so --no-start defers the
+	// check there.
 	if !opts.noStart {
 		if err := a.guardNewContainer(ctx, wsName, &c); err != nil {
 			return err
@@ -335,16 +301,12 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 	return a.start(ctx, wsName, c)
 }
 
-// modeFor decides a new container's mode: what --mode said, checked against
-// the folder and the provider, or the provider's default.
-//
-// Guarded on local and isolated on k8s, so that a create with no flag works on
-// both: a pod has no host bind mounts, so a live folder is impossible there,
-// and copying the folder in is what the k8s provider has always done.
+// modeFor decides a new container's mode: --mode if given, else the provider's
+// default. Guarded on local, isolated on k8s, where a pod cannot mount a live
+// folder.
 func (a *app) modeFor(wsName string, opts createOpts) (model.Mode, error) {
 	if opts.noFolder {
 		if opts.mode != "" {
-			// Nothing to describe: no checkout is reached either way.
 			return "", usageErrorf("--mode applies to a folder; a --no-folder container has no checkout to guard or isolate")
 		}
 		return model.ModeNone, nil
@@ -372,17 +334,12 @@ func (a *app) modeFor(wsName string, opts createOpts) (model.Mode, error) {
 	}
 }
 
-// checkGuarded refuses what guarded mode cannot protect at all, and warns about
-// what it protects only in part.
-//
-// Refused: a project that names its own workspace mount, since .git then lands
-// where no read-only mount can be aimed. Warned: the .git files outside .git
-// that point host git at a repository — a submodule's, a worktree's — which
-// sit in the writable tree. Each warning names isolated mode, the one that
-// covers them.
+// checkGuarded refuses a project mount guarded mode cannot protect, and warns
+// about nested .git files it protects only in part. Both point at isolated
+// mode.
 func checkGuarded(a *app, source, configPath, worktreeRepo string) error {
-	// A folder that is not a repository has no .git to guard, and a project
-	// file that does not parse is reported by the commands that read it.
+	// No .git to guard in a non-repository. A bad project file is reported by
+	// its readers.
 	if !isGitCheckout(source) && worktreeRepo == "" {
 		return nil
 	}
@@ -408,9 +365,7 @@ func checkGuarded(a *app, source, configPath, worktreeRepo string) error {
 	return nil
 }
 
-// modeFlag parses --mode. Only the two a create may ask for: legacy is what
-// the migration writes for rows that predate modes, and none what a folderless
-// container is, so neither is a choice.
+// modeFlag parses --mode, accepting only what a create may ask for.
 type modeFlag struct{ target *model.Mode }
 
 func (f modeFlag) String() string {
@@ -427,16 +382,11 @@ func (f modeFlag) Set(v string) error {
 
 func (modeFlag) Type() string { return "mode" }
 
-// refuseBroadFolder refuses the host's root or the operator's home as a
-// container's folder. Either mounts everything under it — every project, every
-// key in ~/.ssh — and the likeliest way to ask for one is a forgotten cd now
-// that the folder defaults to the working directory. The escape guard already
-// refuses a project configuration that mounts either; this is the same rule for
-// dev's own mount.
+// refuseBroadFolder refuses the host root or the operator's home as a
+// container's folder: either mounts every project and every key in ~/.ssh.
 func refuseBroadFolder(folder string) error {
 	resolved, err := xpath.Resolve(folder)
 	if err != nil {
-		// Reported by folderSource, which resolves it again and says why.
 		return nil
 	}
 	home, err := operatorHome()
@@ -450,32 +400,26 @@ func refuseBroadFolder(folder string) error {
 	return nil
 }
 
-// folderSource works out what a --folder container is built from: the resolved
-// path, the project's own config if it has one, and a generated document if it
-// does not.
+// folderSource resolves a --folder to its source, project config or generated
+// document.
 func folderSource(ctx context.Context, wsName, name, folder string, mode model.Mode, opts createOpts, a *app) (source, configPath, generated, worktreeRepo string, err error) {
-	// Physical path, before anything stores or mounts it: the engine resolves
-	// the string inside its VM on macOS, where /tmp is a real directory rather
-	// than a symlink to /private/tmp, so an unresolved path mounts an empty
-	// directory with no error to show for it.
+	// Physical path first: the macOS engine resolves it inside its VM, where an
+	// unresolved /tmp mounts an empty directory silently.
 	source, err = xpath.Resolve(folder)
 	if err != nil {
 		return "", "", "", "", usageError(err)
 	}
-	// A linked worktree's .git file names its repository by absolute host
-	// path, so the container needs that repository mounted at the same path or
-	// git fails inside it (invariant 11). Read from git here rather than from
-	// a worktree row, so one made by `git worktree add` or by Herdr is mounted
-	// as correctly as one dev made.
+	// A worktree's .git names its repository by absolute host path, so it is
+	// mounted at the same path. Read from git, so a worktree made outside dev
+	// is covered too.
 	mount := dcgen.Mount{}
 	repo, isWorktree := gitwt.WorktreeRepo(ctx, source)
 	if mode == model.ModeIsolated {
-		// The folder is copied into a volume on first create and never
-		// mounted, so neither its path nor a worktree's repository is any of
-		// the container's business. The seed reads both on the host.
+		// Copied into a volume, never mounted, so there is no host path to
+		// mount.
 		mount = folderlessMount(wsName, name)
-		// Still refused on k8s, whose seed copies .git as files: a worktree's
-		// is a file naming a host path the pod does not have.
+		// Refused on k8s: a worktree's .git file names a host path the pod does
+		// not have.
 		if isWorktree {
 			if err := a.requireLocalProvider(wsName); err != nil {
 				return "", "", "", "", err
@@ -488,9 +432,7 @@ func folderSource(ctx context.Context, wsName, name, folder string, mode model.M
 	configPath, err = dcconfig.Find(source)
 	switch {
 	case err == nil && opts.generate:
-		// The project ships one. Generating a second would shadow the
-		// definition the project owns, with no way to tell from the outside
-		// which of the two built the container.
+		// Generating would shadow the project's own definition.
 		return "", "", "", "", usageErrorf("%s already has a devcontainer config; --generate would shadow it",
 			xpath.Shorten(source))
 	case err != nil && !errors.Is(err, dcconfig.ErrNoConfig):
@@ -498,11 +440,9 @@ func folderSource(ctx context.Context, wsName, name, folder string, mode model.M
 	}
 
 	if errors.Is(err, dcconfig.ErrNoConfig) {
-		// A folder with no configuration of its own is not the end of the
-		// road: dev can render one, and keeps it in the database rather than
-		// writing into a project it does not own. The zero Mount leaves the
-		// CLI's own bind mount of the folder in place; a worktree's names both
-		// of its host paths.
+		// No project config: generate one, kept in the database rather than
+		// written into the folder. A zero Mount leaves the CLI's own bind mount
+		// of the folder in place.
 		generated, err = generatedConfigFor(name, opts.generate, opts.tools, mount,
 			stateFor(!opts.noPersistState, wsName, name), os.Stdin, a.out)
 		if err != nil {
@@ -519,20 +459,9 @@ func folderSource(ctx context.Context, wsName, name, folder string, mode model.M
 }
 
 // composeWarning says why a compose project will not get its state volume, or
-// returns "" when there is nothing to say.
-//
-// `mounts` is documented as a cross-orchestrator property, but mounts under
-// compose belong in the compose file and implementations differ on whether they
-// inject it (devcontainers/spec#106). The container still runs; its state
-// volume is simply absent, and nothing anywhere reports an error — which is the
-// only reason this is worth a line of output.
-//
-// Returns the message rather than printing it so the decision can be tested:
-// warnf writes to stderr, which no test here captures.
-//
-// A config it cannot read or parse is silent. That is reported by the commands
-// that actually need the document, and refusing here would be a second, earlier
-// answer to the same question.
+// returns "". Compose implementations differ on applying `mounts`
+// (devcontainers/spec#106), and nothing reports the omission. An unreadable
+// config is silent: the commands that need it report it.
 func composeWarning(configPath string, persistState bool) string {
 	if configPath == "" || !persistState {
 		return ""
@@ -552,9 +481,7 @@ func composeWarning(configPath string, persistState bool) string {
 
 // --- list ---------------------------------------------------------------------
 
-// defaultListTimeout bounds how long `container list` waits on one workspace's
-// engine. An unreachable cluster or a wedged docker daemon would otherwise hang
-// the one command an operator runs to find out what is wrong.
+// defaultListTimeout bounds one workspace's engine call in `container list`.
 const defaultListTimeout = 10 * time.Second
 
 func newContainerListCmd(a *app) *cobra.Command {
@@ -605,10 +532,8 @@ func runContainerList(ctx context.Context, a *app, workspace string, all bool, t
 		return nil
 	}
 
-	// One provider per workspace, built once: every row otherwise rebuilds the
-	// same one. The deadline is per workspace too, started at its first lookup,
-	// so one unreachable cluster costs the list one timeout rather than one per
-	// container, and does not eat into the budget of the workspaces after it.
+	// One provider per workspace. Each workspace's deadline starts at its first
+	// lookup, so one unreachable cluster costs one timeout.
 	providers := map[string]provider.Provider{}
 	deadlines := map[string]context.Context{}
 	var cancels []context.CancelFunc
@@ -638,16 +563,14 @@ func runContainerList(ctx context.Context, a *app, workspace string, all bool, t
 		}
 		s, err := statusWithin(wctx, p, c)
 		if err != nil {
-			// A missing engine, or one too slow to answer, should not stop the
-			// list from printing what it knows: the records are the point, the
-			// status is the extra.
+			// A slow or missing engine must not stop the list; the records are
+			// the point.
 			return "?"
 		}
 		return string(s)
 	}
 
-	// An empty cell reads as a printing bug rather than as "there is no
-	// folder".
+	// A dash, not an empty cell, which would read as a printing bug.
 	sourceOf := func(c model.Container) string {
 		if c.SourceKind == model.SourceNone {
 			return "-"
@@ -655,9 +578,7 @@ func runContainerList(ctx context.Context, a *app, workspace string, all bool, t
 		return xpath.Shorten(c.Source)
 	}
 
-	// Who owns the devcontainer.json decides what a rebuild reads and whether
-	// --tools applies, and a folder path alone does not say: a folder created
-	// with --generate looks the same as one that ships its own.
+	// A folder path alone does not say whether dev generated the config.
 	configOf := func(c model.Container) string {
 		if c.GeneratedConfig != "" {
 			return "generated"
@@ -665,9 +586,8 @@ func runContainerList(ctx context.Context, a *app, workspace string, all bool, t
 		return "project"
 	}
 
-	// Whether a container keeps its agents' configuration is fixed at create
-	// and invisible otherwise, so the list is the only place to find out
-	// without reading the generated document.
+	// Fixed at create and otherwise invisible; this column is the cheap way to
+	// see it.
 	return a.table(func(w io.Writer) {
 		header(w, "WORKSPACE", "NAME", "STATUS", "SOURCE", "CONFIG", "STATE", "HOST", "MODE")
 		for _, c := range containers {
@@ -677,11 +597,9 @@ func runContainerList(ctx context.Context, a *app, workspace string, all bool, t
 	})
 }
 
-// statusWithin returns when ctx is done even if Status has not. Cancelling the
-// context kills the engine CLI, but os/exec then waits for its stdout to close,
-// and a child it spawned that still holds the pipe keeps that wait going past
-// the deadline. The abandoned call finishes, or dies with the process, on its
-// own.
+// statusWithin returns at ctx's deadline even if Status has not: os/exec waits
+// for stdout to close, and a child still holding it would hold the wait past
+// the deadline.
 func statusWithin(ctx context.Context, p provider.Provider, c model.Container) (model.Status, error) {
 	if err := ctx.Err(); err != nil {
 		return model.StatusAbsent, err
@@ -690,7 +608,7 @@ func statusWithin(ctx context.Context, p provider.Provider, c model.Container) (
 		s   model.Status
 		err error
 	}
-	// Buffered, so the goroutine can send and exit after nobody is listening.
+	// Buffered, so the goroutine can exit after the caller has returned.
 	done := make(chan result, 1)
 	go func() {
 		s, err := p.Status(ctx, c)
@@ -746,17 +664,13 @@ func (a *app) start(ctx context.Context, workspace string, c model.Container) er
 		return err
 	}
 
-	// The create path builds its own container value and never goes through
-	// resolve, so a generated configuration has to become a file here too —
-	// the merged one has to be built here too. Fatal rather than deferred:
-	// this function exists to start the container, and starting it without
-	// the merged document would leave the state volume silently unmounted.
+	// Create builds its own value and skips resolve, so the merged config is
+	// written here too. Fatal, not deferred: starting without it leaves the
+	// state volume unmounted.
 	//
-	// Seeded here: start is where a container that does not exist yet is
-	// created — after create, after `create --no-start`, or after a remove
-	// outside dev — and that is when the hooks copy should match the project.
-	// Re-seeding a stopped container's copy on start would only discard what
-	// the container installed, which rebuild already does deliberately.
+	// Seeded here, where a missing container is created, so the hooks copy
+	// matches the project. Re-seeding a stopped one would discard what it
+	// installed.
 	plan, err := a.planGitGuard(ctx, c, c.WorktreeRepo, true, overridesConfig(p))
 	if err != nil {
 		return a.recordRefusal(c, err)
@@ -764,8 +678,7 @@ func (a *app) start(ctx context.Context, workspace string, c model.Container) er
 	if overridesConfig(p) {
 		c.GitGuardMounts = plan.mounts
 	}
-	// A stopped container keeps the mounts it was created with, and start
-	// only restarts it.
+	// Stopped containers keep the mounts they were created with.
 	if err := a.checkTreeMounts(ctx, p, c, plan); err != nil {
 		return err
 	}
@@ -775,11 +688,8 @@ func (a *app) start(ctx context.Context, workspace string, c model.Container) er
 	}
 	defer cleanup()
 
-	// Every start, not only create's: `create --no-start` defers the check
-	// to here, and up applies a project's edited configuration to a container
-	// that does not exist yet just as rebuild does. A start of an existing,
-	// stopped container re-reads nothing, but telling the two apart would
-	// need the engine's answer first — and the check is the cheaper question.
+	// Checked on every start, since a project's edited config applies to a
+	// container that does not exist yet.
 	cc, err := readConfig(ctx, p, c, plan)
 	if err != nil {
 		return err
@@ -793,11 +703,8 @@ func (a *app) start(ctx context.Context, workspace string, c model.Container) er
 	if err := trustMountedRepository(ctx, p, c); err != nil {
 		return err
 	}
-	// A row with no digest — created with --no-start, or before the drift
-	// check existed — gets the one it just started from, so the next rebuild
-	// has something to compare against. Never overwritten here: start does not
-	// apply an existing container's edited configuration, so a changed
-	// document is still rebuild's to catch.
+	// A row with no digest takes the one just started from. Never overwritten
+	// here: rebuild is what catches an edited document.
 	if cc != nil && c.ConfigDigest == "" {
 		if err := a.recordFirstDigest(cc); err != nil {
 			return err
@@ -806,9 +713,8 @@ func (a *app) start(ctx context.Context, workspace string, c model.Container) er
 	a.record("start", workspace, c.Name, nil)
 	a.printf("container %s is running\n", c.Name)
 
-	// Only when owed: at create, after `create --no-start`, or after an apply
-	// that failed. A plain start must not re-apply a file whose edits are
-	// meant to wait for a rebuild, the same contract devcontainer.json has.
+	// Only when owed: a plain start must not re-apply edits that wait for a
+	// rebuild.
 	if !c.AgentConfigPending {
 		return nil
 	}
@@ -875,9 +781,8 @@ func runContainerRemove(ctx context.Context, a *app, workspace, name string, for
 	}
 	defer t.release()
 
-	// An isolated container's volume is the only copy of its work, and
-	// removing the container takes it. So it is asked first, and anything the
-	// folder lacks refuses the removal: --force is the only way past.
+	// An isolated volume is the only copy of its work; anything the folder
+	// lacks refuses the removal unless --force is given.
 	if t.container.Mode == model.ModeIsolated && !force {
 		found, err := unexported(ctx, t)
 		if err != nil {
@@ -903,8 +808,8 @@ func runContainerRemove(ctx context.Context, a *app, workspace, name string, for
 		return err
 	}
 
-	// A container on a worktree checkout leaves the checkout and its record:
-	// both belong to the worktree, which `dev worktree remove` takes.
+	// The checkout and its record belong to the worktree; `dev worktree remove`
+	// takes them.
 	if err := st.DeleteContainer(t.workspace.Name, name); err != nil {
 		return err
 	}
@@ -916,11 +821,9 @@ func runContainerRemove(ctx context.Context, a *app, workspace, name string, for
 
 func newContainerRebuildCmd(a *app) *cobra.Command {
 	var (
-		workspace string
-		noCache   bool
-		toolList  string
-		// acceptConfig is --accept-config: rebuild with a configuration that
-		// changed since the container was last built. See checkDrift.
+		workspace    string
+		noCache      bool
+		toolList     string
 		acceptConfig bool
 	)
 
@@ -931,7 +834,7 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if tools := parseToolList(toolList); len(tools) > 0 {
 				// Before resolve, so the rebuild materialises the new
-				// configuration rather than the one being replaced.
+				// configuration.
 				if err := rewriteGeneratedTools(cmd.Context(), a, workspace, args[0], tools); err != nil {
 					return err
 				}
@@ -949,21 +852,16 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// Loaded before the rebuild, not after it: a malformed file, or
-			// an --agent-config file that has since gone, must stop the
-			// command while the old container still exists, rather than
-			// after it has been replaced by one that cannot be configured.
+			// Loaded before the rebuild, so a bad file fails while the old
+			// container still exists.
 			spec, err := loadAgentConfig(t.container)
 			if err != nil {
 				return err
 			}
-			// Before the rebuild, for agents.yaml's reason: a configuration
-			// that changed since it was last built, or has come to ask for the
-			// host, is refused while the old container still exists. Drift
-			// first: a changed configuration is the more general answer, and
-			// --accept-config is the operator's review of exactly that.
-			// Only create can grant --allow-privileged, so an escape refusal
-			// means recreate — the moment to think about it.
+			// Checked before the rebuild, so a refusal leaves the old container
+			// in place. Drift first: --accept-config is the operator's review
+			// of that. An escape refusal needs recreate, since only create
+			// grants --allow-privileged.
 			cc, err := readConfig(cmd.Context(), t.provider, t.container, t.gitGuard)
 			if err != nil {
 				return err
@@ -975,11 +873,8 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 			if err := a.escape(cc); err != nil {
 				return err
 			}
-			// Re-seeded after every refusal, so a refused rebuild leaves the
-			// container exactly as it was: the reset discards whatever hooks
-			// the container installed, which is the point of a rebuild.
-			// Unseeded, resolve already planned the mounts the rebuilt
-			// container gets; this only resets the hooks copy.
+			// Only resets the hooks copy; resolve already planned the mounts
+			// the rebuilt container gets.
 			if _, _, err := a.planGitDir(t.container, t.container.WorktreeRepo, true); err != nil {
 				return err
 			}
@@ -989,9 +884,8 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 			if err := trustMountedRepository(cmd.Context(), t.provider, t.container); err != nil {
 				return err
 			}
-			// After the rebuild succeeded, never before: a failed rebuild
-			// leaves the container on its old configuration, and the digest
-			// must go on describing that one.
+			// After a successful rebuild only: the digest must describe the
+			// configuration the container has.
 			if cc != nil && digest.Sum != t.container.ConfigDigest {
 				st, err := a.store()
 				if err != nil {
@@ -1004,9 +898,8 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 			a.record("rebuild", t.workspace.Name, t.container.Name, map[string]any{"config_digest": digest.Sum})
 
 			a.printf("container %s rebuilt\n", t.container.Name)
-			// Every rebuild re-reads the file: it is the moment an edit takes
-			// effect, and a container without the state volume has just lost
-			// everything the last apply installed.
+			// Re-read on every rebuild: the state volume may be gone, taking
+			// the last apply with it.
 			return a.applyAgentConfig(cmd.Context(), t.provider, t.container, environ, spec)
 		},
 	}
@@ -1081,8 +974,7 @@ func runContainerSync(ctx context.Context, a *app, workspace, name string) error
 	if err := a.requireRunning(ctx, t); err != nil {
 		return err
 	}
-	// The same environment `up` would build, state variables included, so the
-	// two cannot disagree about what the container's environment is.
+	// The environment up builds, so the two cannot disagree.
 	environ, err := a.containerEnv(ctx, t.container)
 	if err != nil {
 		return err
@@ -1091,18 +983,15 @@ func runContainerSync(ctx context.Context, a *app, workspace, name string) error
 	if err := syncer.Sync(ctx, t.container, environ); err != nil {
 		return err
 	}
-	// Keys, never values — the rule `workspace show` follows. Sorted, because
-	// the environment is assembled in a fixed order that is not this one, and a
-	// list that reshuffles between runs reads as though something changed.
+	// Keys only, never values, sorted so the output is stable across runs.
 	keys := make([]string, 0, len(environ))
 	for _, e := range environ {
 		keys = append(keys, e.Key)
 	}
 	slices.Sort(keys)
 	a.record("sync", t.workspace.Name, t.container.Name, map[string]any{"settings": keys})
-	// What is true afterwards, rather than what was done — the same postcondition
-	// Syncer promises. "Synced N settings" would contradict the local provider's
-	// own line a moment earlier saying it had nothing to push.
+	// Says what is true afterwards, not what was done. The local provider
+	// pushed nothing.
 	a.printf("%d settings current in %s: %s\n", len(keys), name, strings.Join(keys, ", "))
 	return nil
 }
@@ -1183,11 +1072,8 @@ func runContainerShell(ctx context.Context, a *app, workspace, name string, kube
 	return err
 }
 
-// detectShell picks the best shell the image actually has.
-//
-// Asked rather than attempted: starting zsh in an image without it produces the
-// container's own "executable file not found" rather than anything this tool
-// can turn into a retry, and plenty of project images ship only bash or sh.
+// detectShell asks the image which shell it has: an absent zsh fails with the
+// engine's own error, which this tool cannot turn into a retry.
 func detectShell(ctx context.Context, t *target) string {
 	const fallback = "sh"
 
@@ -1217,8 +1103,7 @@ func newContainerExecCmd(a *app) *cobra.Command {
 		Use:   "exec NAME -- COMMAND [ARGS...]",
 		Short: "Run one command in a container",
 		Args:  minArgs(1),
-		// Everything after -- belongs to the command being run, not to dev.
-		// Without this, a flag meant for the inner command is parsed here.
+		// Flags after -- belong to the inner command, not dev.
 		DisableFlagsInUseLine: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dash := cmd.ArgsLenAtDash()
@@ -1282,8 +1167,7 @@ func runContainerExec(ctx context.Context, a *app, workspace, name string, comma
 			Stderr: os.Stderr,
 		})
 	})
-	// argv only: the command the operator typed. environ holds resolved
-	// settings and never reaches the log.
+	// argv only: environ holds resolved settings and must not reach the log.
 	a.recordRun("exec", t, started, map[string]any{
 		"argv":       command,
 		"ssh_agent":  agentForwarded(t, sshOverride),

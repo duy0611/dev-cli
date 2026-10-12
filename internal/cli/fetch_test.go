@@ -19,11 +19,8 @@ func isolatedOn(t *testing.T, a *app, name, folder string) {
 	}
 }
 
-// stubContainerRepo is a devcontainer whose exec runs the command on the host,
-// standing in for the container: what fetch and remove ask of the container is
-// answered by a real git in a real repository at dir. The commands name the
-// container's workspace as /workspaces/<name>; workspaceFolderOf is pointed at
-// dir for the test, so they cd there instead.
+// stubContainerRepo runs the container's commands on the host, against a real
+// repository at dir.
 func stubContainerRepo(t *testing.T, dir string) {
 	t.Helper()
 	old := workspaceRoot
@@ -31,7 +28,6 @@ func stubContainerRepo(t *testing.T, dir string) {
 	t.Cleanup(func() { workspaceRoot = old })
 
 	bin := t.TempDir()
-	// The command is everything after devcontainer's own options.
 	writeFile(t, filepath.Join(bin, "devcontainer"), `#!/bin/sh
 case "$1" in
   exec) ;;
@@ -57,9 +53,6 @@ exec "$@"
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
-// fetch brings every branch the container has into the folder it came from,
-// as remote-tracking refs under the container's name — never over a local
-// branch, so the operator decides what to merge.
 func TestFetchBringsTheContainersBranchesHome(t *testing.T) {
 	requireGit(t)
 	a, out := newTestApp(t)
@@ -88,8 +81,6 @@ func TestFetchBringsTheContainersBranchesHome(t *testing.T) {
 	}
 }
 
-// fetch has nothing to do for a guarded container: its work is already in the
-// folder.
 func TestFetchRefusesAGuardedContainer(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
@@ -103,9 +94,6 @@ func TestFetchRefusesAGuardedContainer(t *testing.T) {
 	}
 }
 
-// Removing an isolated container takes its volume, the only copy of the work.
-// So commits the folder does not have, or changes nobody committed, refuse the
-// removal unless --force.
 func TestRemoveRefusesUnfetchedIsolatedWork(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
@@ -126,7 +114,6 @@ func TestRemoveRefusesUnfetchedIsolatedWork(t *testing.T) {
 		t.Errorf("error %q does not name fetch", err)
 	}
 
-	// Fetched, it goes.
 	if err := runContainerFetch(t.Context(), a, "", "iso"); err != nil {
 		t.Fatalf("fetch: %v", err)
 	}

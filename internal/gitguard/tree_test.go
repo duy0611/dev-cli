@@ -8,8 +8,8 @@ import (
 	"testing"
 )
 
-// treeRepo is a repository whose git sees no global or system config, so what
-// FindTree reports is what the test set and nothing from the operator's setup.
+// treeRepo is a repository with no global or system config, so FindTree sees
+// only what the test sets.
 func treeRepo(t *testing.T) (string, []Root) {
 	t.Helper()
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
@@ -39,8 +39,7 @@ func TestFindTreeOfAPlainRepositoryIsEmpty(t *testing.T) {
 	}
 }
 
-// The case this exists for: `make hooks` or husky pointing core.hooksPath at a
-// directory in the checkout, which the container can edit.
+// core.hooksPath into the checkout is the case this guards against.
 func TestFindTreeFindsAHooksPathInTheCheckout(t *testing.T) {
 	dir, roots := treeRepo(t)
 	writeFile(t, filepath.Join(dir, ".githooks", "commit-msg"), "#!/bin/sh\n")
@@ -57,8 +56,7 @@ func TestFindTreeFindsAHooksPathInTheCheckout(t *testing.T) {
 	}
 }
 
-// Asked from a subfolder, git answers a relative hooksPath relative to there;
-// FindTree asks from the top so the answer means the same thing.
+// FindTree asks from the top so a relative hooksPath means the same thing.
 func TestFindTreeFromASubfolder(t *testing.T) {
 	dir, roots := treeRepo(t)
 	writeFile(t, filepath.Join(dir, ".githooks", "commit-msg"), "#!/bin/sh\n")
@@ -74,7 +72,7 @@ func TestFindTreeFromASubfolder(t *testing.T) {
 	}
 }
 
-// A hooksPath outside the workspace is nothing the container can reach.
+// A hooksPath outside the workspace is not reachable from the container.
 func TestFindTreeIgnoresAHooksPathOutside(t *testing.T) {
 	dir, roots := treeRepo(t)
 	elsewhere, _ := filepath.EvalSymlinks(t.TempDir())
@@ -84,8 +82,7 @@ func TestFindTreeIgnoresAHooksPathOutside(t *testing.T) {
 	}
 }
 
-// Not there yet is still found, and unmountable: the container creating the
-// directory is the same as editing it.
+// A missing path is found and unmountable.
 func TestFindTreeReportsAMissingHooksPath(t *testing.T) {
 	dir, roots := treeRepo(t)
 	git(t, dir, "config", "core.hooksPath", ".husky")
@@ -95,8 +92,7 @@ func TestFindTreeReportsAMissingHooksPath(t *testing.T) {
 	}
 }
 
-// A symlink in the checkout can be repointed by the container, so the path is
-// reported as reached through it rather than followed.
+// A symlink in the checkout is reported as reached through, not followed.
 func TestFindTreeReportsASymlinkInTheCheckout(t *testing.T) {
 	dir, roots := treeRepo(t)
 	writeFile(t, filepath.Join(dir, "real", "commit-msg"), "#!/bin/sh\n")
@@ -110,8 +106,7 @@ func TestFindTreeReportsASymlinkInTheCheckout(t *testing.T) {
 	}
 }
 
-// A symlink outside every root is the host's own and followed: a TMPDIR under
-// /var on macOS is one.
+// A symlink outside every root is followed, as a TMPDIR under /var on macOS is.
 func TestFindTreeFollowsASymlinkOutside(t *testing.T) {
 	dir, roots := treeRepo(t)
 	writeFile(t, filepath.Join(dir, ".githooks", "x"), "")
@@ -126,9 +121,7 @@ func TestFindTreeFollowsASymlinkOutside(t *testing.T) {
 	}
 }
 
-// An include naming a file in the checkout lets the container write config
-// host git reads — core.fsmonitor included. Every condition counts: onbranch
-// is one checkout away from true.
+// An include in the checkout is a route host git reads; every condition counts.
 func TestFindTreeFindsIncludes(t *testing.T) {
 	dir, roots := treeRepo(t)
 	writeFile(t, filepath.Join(dir, "a.inc"), "")
@@ -150,7 +143,7 @@ func TestFindTreeFindsIncludes(t *testing.T) {
 	}
 }
 
-// A hook that is a symlink runs what it names, wherever the link itself sits.
+// A symlinked hook's target is found wherever the link sits.
 func TestFindTreeFollowsHookSymlinksIntoTheCheckout(t *testing.T) {
 	dir, roots := treeRepo(t)
 	writeFile(t, filepath.Join(dir, "scripts", "pre-commit"), "#!/bin/sh\n")
@@ -163,7 +156,7 @@ func TestFindTreeFollowsHookSymlinksIntoTheCheckout(t *testing.T) {
 	}
 }
 
-// Two settings naming one path are one mount, with both reasons.
+// Two settings naming one path are one mount with both reasons.
 func TestFindTreeMergesReasons(t *testing.T) {
 	dir, roots := treeRepo(t)
 	writeFile(t, filepath.Join(dir, ".githooks", "pre-commit"), "#!/bin/sh\n")
@@ -177,7 +170,7 @@ func TestFindTreeMergesReasons(t *testing.T) {
 	}
 }
 
-// No git on the host is nothing to guard, not a failure.
+// No git on the host means nothing to guard.
 func TestFindTreeWithoutGit(t *testing.T) {
 	dir, roots := treeRepo(t)
 	old := gitBin
@@ -189,8 +182,7 @@ func TestFindTreeWithoutGit(t *testing.T) {
 	}
 }
 
-// Each directory between the root and the target is pinned, parents first,
-// and the target itself is read-only.
+// Each directory between the root and the target is pinned, parents first.
 func TestTreeBindsPinEveryParent(t *testing.T) {
 	root := Root{Host: "/h/r", Container: "/workspaces/r"}
 	got := TreeBinds([]TreePath{{
@@ -206,8 +198,8 @@ func TestTreeBindsPinEveryParent(t *testing.T) {
 	}
 }
 
-// A parent the guard already mounts — .git, for a file inside it — is not
-// mounted twice, which docker refuses as a duplicate destination.
+// A parent already mounted is not mounted twice: docker refuses a duplicate
+// destination.
 func TestTreeBindsSkipExistingMounts(t *testing.T) {
 	root := Root{Host: "/h/r", Container: "/workspaces/r"}
 	got := TreeBinds([]TreePath{{
@@ -218,7 +210,7 @@ func TestTreeBindsSkipExistingMounts(t *testing.T) {
 	}
 }
 
-// What cannot be mounted is left for the caller to refuse.
+// Unmountable paths are left for the caller to refuse.
 func TestTreeBindsSkipUnmountable(t *testing.T) {
 	root := Root{Host: "/h/r", Container: "/workspaces/r"}
 	got := TreeBinds([]TreePath{
@@ -230,7 +222,7 @@ func TestTreeBindsSkipUnmountable(t *testing.T) {
 	}
 }
 
-// The fallback notices a hook edited, added, or created where none was.
+// The fallback notices a hook edited, added, or created.
 func TestSnapshotPaths(t *testing.T) {
 	dir := t.TempDir()
 	hooks := filepath.Join(dir, ".githooks")

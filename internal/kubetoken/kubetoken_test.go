@@ -13,14 +13,9 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// stubKubectl replaces PATH with a directory holding one kubectl script.
-//
-// Replaces, not precedes, for the reason the k8s harness gives: a stub PATH
-// that still ends in the host's lets every call the stub does not expect fall
-// through to the operator's real kubectl — and a real cluster.
-//
-// The body is a shell case over "$*", and every call is appended to a log so a
-// test can assert what was asked.
+// stubKubectl replaces PATH with a directory holding a kubectl stub, so no
+// unexpected call reaches a real cluster. The body is a shell case over "$*";
+// every call is logged.
 func stubKubectl(t *testing.T, body string) (log string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -60,7 +55,7 @@ esac`)
 	}
 }
 
-// A kubeconfig with no current context is ordinary; the list is still usable.
+// No current context is not an error.
 func TestContextsWithoutCurrent(t *testing.T) {
 	stubKubectl(t, `case "$*" in
 "config get-contexts -o name") printf 'a\n' ;;
@@ -110,8 +105,7 @@ esac`)
 	}
 }
 
-// A listing kubectl refuses is an error the caller can fall back from, and it
-// names what kubectl said.
+// A refused listing is an error that names kubectl's message.
 func TestListingForbidden(t *testing.T) {
 	stubKubectl(t, `echo 'Error from server (Forbidden): serviceaccounts is forbidden' >&2; exit 1`)
 
@@ -129,16 +123,14 @@ func TestNoKubectl(t *testing.T) {
 	}
 }
 
-// fakeJWT builds a token with the given claims segment. The signature is junk:
-// nothing here verifies it, and nothing should.
+// fakeJWT builds a token with the given claims. The signature is junk.
 func fakeJWT(claims string) string {
 	enc := base64.RawURLEncoding
 	return enc.EncodeToString([]byte(`{"alg":"RS256"}`)) + "." +
 		enc.EncodeToString([]byte(claims)) + ".c2ln"
 }
 
-// The host view carries the operator's own credentials; none of them may reach
-// the container.
+// Host credentials here must not reach the kubeconfig.
 const hostView = `{
   "clusters": [{"name": "prod", "cluster": {
     "server": "https://prod.example:6443",
@@ -216,7 +208,7 @@ func TestMint(t *testing.T) {
 	}
 }
 
-// An empty duration is kubectl's default, which only holds if dev passes none.
+// No --duration must be passed when none was asked for.
 func TestMintDefaultDuration(t *testing.T) {
 	log := mintStub(t, fakeJWT(`{"exp":1}`))
 

@@ -63,8 +63,7 @@ func (s *Store) ListWorktrees(workspace string) ([]model.Worktree, error) {
 	return out, rows.Err()
 }
 
-// DeleteWorktree forgets a checkout. Containers on it are untouched; the
-// caller refuses while there are any.
+// DeleteWorktree forgets a checkout. Containers on it are left alone.
 func (s *Store) DeleteWorktree(workspace, name string) error {
 	res, err := s.db.Exec(
 		`DELETE FROM worktrees WHERE workspace_name = ? AND name = ?`,

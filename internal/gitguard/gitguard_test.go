@@ -48,9 +48,7 @@ func TestLayoutOfARepositoryRoot(t *testing.T) {
 	}
 }
 
-// The CLI mounts the repository's root, not the folder it was handed, when the
-// folder is inside one (mount-workspace-git-root, on by default) — so .git
-// lands under the root's basename, not the folder's.
+// The CLI mounts the repository root, so .git lands under the root's basename.
 func TestLayoutOfASubfolderFollowsTheGitRoot(t *testing.T) {
 	root := repo(t)
 	sub := filepath.Join(root, "services", "api")
@@ -72,9 +70,7 @@ func TestLayoutOfANonRepositoryIsNone(t *testing.T) {
 	}
 }
 
-// A worktree checkout's .git is a file. The CLI's own layout logic does not
-// apply to dev's worktree containers — they mount the checkout at its host
-// path — so LayoutOf declines and the worktree route is separate.
+// A worktree checkout is declined: WorktreeMounts covers it.
 func TestLayoutOfAWorktreeCheckoutIsNone(t *testing.T) {
 	root := repo(t)
 	git(t, root, "-c", "user.name=a", "-c", "user.email=a@b", "commit", "-q", "--allow-empty", "-m", "i")
@@ -99,9 +95,7 @@ func TestMountsOfAnOrdinaryCheckout(t *testing.T) {
 	}
 }
 
-// A worktree container's config and hooks are in git's common directory,
-// mounted at its own host path, and its own .git file and administration files
-// are redirects that must not be rewritable.
+// A worktree container's config and hooks are in the common directory.
 func TestWorktreeMounts(t *testing.T) {
 	root := repo(t)
 	git(t, root, "-c", "user.name=a", "-c", "user.email=a@b", "commit", "-q", "--allow-empty", "-m", "i")
@@ -127,8 +121,7 @@ func TestWorktreeMounts(t *testing.T) {
 	}
 }
 
-// With extensions.worktreeConfig, a worktree's config.worktree is read by host
-// git too, so it is a route of its own.
+// config.worktree is read by host git, so it is a route of its own.
 func TestWorktreeMountsCoverConfigWorktree(t *testing.T) {
 	root := repo(t)
 	git(t, root, "-c", "user.name=a", "-c", "user.email=a@b", "commit", "-q", "--allow-empty", "-m", "i")
@@ -172,8 +165,7 @@ func TestSeedHooksCopiesAndEmptiesFirst(t *testing.T) {
 	}
 }
 
-// The destination is agent-controlled. Seeding must never be led outside it,
-// and must never follow a link the agent planted.
+// The destination is agent-controlled, so seeding never follows a link.
 func TestSeedHooksNeverFollowsSymlinks(t *testing.T) {
 	src, dst, outside := t.TempDir(), t.TempDir(), t.TempDir()
 	victim := filepath.Join(outside, "victim")
@@ -211,8 +203,8 @@ func TestSeedHooksFromAMissingDirectoryLeavesItEmpty(t *testing.T) {
 	}
 }
 
-// The fallback for layouts mounts cannot reach: a fingerprint of everything
-// under .git that host git would execute, compared after the command.
+// The fallback fingerprints what host git would execute, compared after the
+// command.
 func TestSnapshotNoticesEachRoute(t *testing.T) {
 	cases := map[string]func(gitdir string) error{
 		"config": func(g string) error {
@@ -255,9 +247,7 @@ func TestSnapshotIgnoresWhatGitWritesInNormalUse(t *testing.T) {
 	}
 }
 
-// commondir is checked on its own too: in an ordinary checkout nothing can be
-// mounted there, since a mount needs a target and an empty commondir breaks
-// host git outright.
+// commondir cannot be mounted: an empty one breaks host git.
 func TestCommondirPlanted(t *testing.T) {
 	root := repo(t)
 	gitdir := filepath.Join(root, ".git")
@@ -272,9 +262,8 @@ func TestCommondirPlanted(t *testing.T) {
 	}
 }
 
-// A guarded checkout's .git is one read-only directory mount and nothing
-// inside it: a file mount is detached by a host rename, and on a
-// case-insensitive host a case variant of its name goes around it.
+// A guarded .git is one read-only directory mount: a file mount is detached by
+// rename.
 func TestReadOnlyMountsOfAnOrdinaryCheckout(t *testing.T) {
 	root := repo(t)
 	l, _ := LayoutOf(root)
@@ -285,10 +274,8 @@ func TestReadOnlyMountsOfAnOrdinaryCheckout(t *testing.T) {
 	}
 }
 
-// For a worktree, the repository's common directory is read-only at its own
-// path. The checkout's .git file stays in the writable tree: a single-file
-// mount on it would fail as every other one did, so it is a documented gap
-// rather than a mount that only looks like a guard.
+// The checkout's .git file is a documented gap, not a mount that only looks
+// like a guard.
 func TestReadOnlyWorktreeMounts(t *testing.T) {
 	got := ReadOnlyWorktreeMounts("/src/app/.git")
 	want := []string{"source=/src/app/.git,target=/src/app/.git,type=bind,readonly"}

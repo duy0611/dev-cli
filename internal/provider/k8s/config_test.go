@@ -51,8 +51,6 @@ func TestParseConfigKeepsExplicitValues(t *testing.T) {
 	}
 }
 
-// Without a registry the build pushes somewhere unintended and the failure
-// surfaces a long way from the missing setting.
 func TestParseConfigRequiresARegistry(t *testing.T) {
 	if _, err := ParseConfig(`{}`); err == nil {
 		t.Error("ParseConfig accepted a config with no registry")
@@ -71,8 +69,6 @@ func TestParseConfigRejectsNonsense(t *testing.T) {
 	}
 }
 
-// Defaults are written into the stored config rather than left implicit, so a
-// later change to a default cannot move a provider that already exists.
 func TestMarshalRoundTripsWithDefaults(t *testing.T) {
 	raw, err := Config{Registry: "reg.example/dev"}.Marshal()
 	if err != nil {

@@ -7,9 +7,8 @@ import (
 	"testing"
 )
 
-// The catalog is the user-visible contract of `dev container tools`, and a
-// typo in a feature reference only shows up as a failed image build minutes
-// later. These assert the shape, not the taste.
+// The catalog's shape is checked here, since a bad feature reference only fails
+// at image build.
 func TestCatalogEntriesAreWellFormed(t *testing.T) {
 	for _, tool := range Catalog() {
 		if tool.ID == "" || tool.Summary == "" {
@@ -33,8 +32,7 @@ func TestLookupFindsAndRejects(t *testing.T) {
 	}
 }
 
-// Sorted, because it is printed as a list and the order must not depend on
-// Go's map iteration.
+// Sorted, so listing is stable.
 func TestCatalogIsSorted(t *testing.T) {
 	got := Catalog()
 	for i := 1; i < len(got); i++ {
@@ -44,8 +42,7 @@ func TestCatalogIsSorted(t *testing.T) {
 	}
 }
 
-// opencode installs through an npm feature, so an image without a node runtime
-// fails at install time rather than at render time.
+// opencode needs a node runtime, so its requirement must be declared.
 func TestOpencodeDependsOnNode(t *testing.T) {
 	tool, ok := Lookup("opencode")
 	if !ok {
@@ -56,8 +53,7 @@ func TestOpencodeDependsOnNode(t *testing.T) {
 	}
 }
 
-// The stored string is compared and committed, so it has to be byte-stable:
-// sorted keys, two-space indent, one trailing newline.
+// The stored string must be byte-stable.
 func TestRenderIsExactAndStable(t *testing.T) {
 	got, err := Render("demo", []string{"node", "yq"}, Mount{}, State{})
 	if err != nil {
@@ -89,8 +85,7 @@ func TestRenderIsExactAndStable(t *testing.T) {
 	}
 }
 
-// A bare Ubuntu box is a reasonable thing to ask for, and an empty features
-// object would be noise in the stored document.
+// A bare Ubuntu container has no features key.
 func TestRenderWithNoToolsOmitsFeatures(t *testing.T) {
 	got, err := Render("bare", nil, Mount{}, State{})
 	if err != nil {
@@ -101,9 +96,8 @@ func TestRenderWithNoToolsOmitsFeatures(t *testing.T) {
 	}
 }
 
-// kubectl and helm come from one feature. Emitting it twice is impossible in a
-// JSON object, so the failure mode is the second overwriting the first and
-// quietly disabling a tool the operator asked for.
+// kubectl and helm share one feature, so a second entry would overwrite the
+// first.
 func TestKubectlAndHelmShareOneFeature(t *testing.T) {
 	both, err := Render("k", []string{"kubectl", "helm"}, Mount{}, State{})
 	if err != nil {
@@ -116,8 +110,8 @@ func TestKubectlAndHelmShareOneFeature(t *testing.T) {
 		t.Error("helm was asked for and disabled")
 	}
 
-	// Asking for one must not install the other: the feature defaults all
-	// three on, so the ones not selected have to be turned off explicitly.
+	// The feature defaults all three on, so unselected ones are turned off
+	// explicitly.
 	only, err := Render("k", []string{"kubectl"}, Mount{}, State{})
 	if err != nil {
 		t.Fatalf("Render: %v", err)
@@ -138,8 +132,7 @@ func TestRenderRejectsAnUnknownTool(t *testing.T) {
 	}
 }
 
-// Exercised against a catalog of its own, so a chain of requirements is
-// covered whatever the real entries happen to declare.
+// Requirement chains are tested against their own catalog.
 func TestResolveAddsRequirements(t *testing.T) {
 	saved := catalog
 	t.Cleanup(func() { catalog = saved })
@@ -169,8 +162,8 @@ func TestResolveDeduplicates(t *testing.T) {
 	}
 }
 
-// The tool set is derived from the stored document rather than stored beside
-// it, so `rebuild --tools +x` has to be able to read back what it wrote.
+// The tool set is derived from the stored document, so rebuild --tools must
+// read it back.
 func TestToolsOfRoundTrips(t *testing.T) {
 	want := []string{"claude-code", "helm", "kubectl", "node", "opencode", "yq"}
 	cfg, err := Render("demo", want, Mount{}, State{})
@@ -186,8 +179,7 @@ func TestToolsOfRoundTrips(t *testing.T) {
 	}
 }
 
-// A hand-edited document is still a document dev has to work with, so an
-// unrecognised feature is ignored rather than treated as an error.
+// An unrecognised feature is ignored, not an error.
 func TestToolsOfIgnoresUnknownFeatures(t *testing.T) {
 	const cfg = `{
   "features": {
@@ -210,18 +202,9 @@ func TestToolsOfRejectsBrokenJSON(t *testing.T) {
 	}
 }
 
-// A folderless container has no host directory to bind-mount, so the document
-// has to name a volume and the path it appears at.
-//
-// workspaceFolder is not optional here. Left unset, the CLI derives one from
-// the basename of --workspace-folder, which for a folderless container is a
-// per-invocation temporary directory: the in-container path would change on
-// every command, and on k8s the PVC would mount somewhere new each time.
-//
-// postCreateCommand chowns the mount to the remote user. Docker creates a
-// named volume owned by root, and unlike a bind mount — which the devcontainer
-// CLI UID-remaps to the host user automatically — a fresh volume gets no such
-// fixup, so the first write from vscode fails with EACCES.
+// A folderless container names a volume and the path it appears at.
+// workspaceFolder is required, otherwise the CLI derives it from the temporary
+// directory and it changes every run.
 func TestRenderWithAVolumeNamesBothFields(t *testing.T) {
 	got, err := Render("scratch", nil, Mount{Volume: "dev-ws-scratch", Folder: "/workspaces/scratch"}, State{})
 	if err != nil {
@@ -242,10 +225,8 @@ func TestRenderWithAVolumeNamesBothFields(t *testing.T) {
 	}
 }
 
-// The zero Mount is a folder-backed container, where the CLI's own default
-// bind mount is exactly what is wanted. Emitting either field there would
-// override that bind mount with nothing, and the bind mount needs no chown:
-// the CLI already UID-remaps it to the host user.
+// The zero Mount is a folder-backed container: emitting a field would override
+// the CLI's bind.
 func TestRenderWithoutAVolumeOmitsBothFields(t *testing.T) {
 	got, err := Render("demo", nil, Mount{}, State{})
 	if err != nil {
@@ -258,9 +239,8 @@ func TestRenderWithoutAVolumeOmitsBothFields(t *testing.T) {
 	}
 }
 
-// rebuild --tools re-renders from scratch. A round trip that drops the mount
-// would leave the next up creating a fresh empty workspace in the container
-// filesystem, with the volume still there and no longer referenced.
+// A round trip that drops the mount would leave the next up with an empty
+// workspace.
 func TestToolsOfSurvivesAVolumeDocument(t *testing.T) {
 	cfg, err := Render("scratch", []string{"yq"}, Mount{Volume: "dev-ws-scratch", Folder: "/workspaces/scratch"}, State{})
 	if err != nil {
@@ -275,9 +255,8 @@ func TestToolsOfSurvivesAVolumeDocument(t *testing.T) {
 	}
 }
 
-// A container that persists state names the volume, points every agent at it,
-// and chowns it — a volume is root-owned on creation exactly as the workspace
-// one is.
+// A state-persisting container names the volume, points agents at it, and
+// chowns it.
 func TestRenderWithStateNamesMountAndEnv(t *testing.T) {
 	got, err := Render("api", nil, Mount{}, State{Volume: "dev-ws-api-state"})
 	if err != nil {
@@ -306,9 +285,7 @@ func TestRenderWithStateNamesMountAndEnv(t *testing.T) {
 	}
 }
 
-// The zero State is a container that does not persist anything. A stray mounts
-// or containerEnv key there would create a volume nobody asked for and nothing
-// would ever remove it, since Remove only looks when the column says to.
+// The zero State creates no volume.
 func TestRenderWithoutStateOmitsMountAndEnv(t *testing.T) {
 	got, err := Render("demo", nil, Mount{}, State{})
 	if err != nil {
@@ -321,10 +298,7 @@ func TestRenderWithoutStateOmitsMountAndEnv(t *testing.T) {
 	}
 }
 
-// postCreateCommand is a single string, and a folderless container that also
-// persists state has two directories to claim. Assigning the key twice would
-// keep only the last, and whichever volume lost would be unwritable — the
-// failure arrives as EACCES from the agent, far from this line.
+// Two chowns must both be kept, since postCreateCommand is a single string.
 func TestRenderChownsBothVolumes(t *testing.T) {
 	got, err := Render("scratch", nil,
 		Mount{Volume: "dev-ws-scratch", Folder: "/workspaces/scratch"},
@@ -344,16 +318,13 @@ func TestRenderChownsBothVolumes(t *testing.T) {
 			t.Errorf("postCreateCommand %q does not chown %s", doc.PostCreate, dir)
 		}
 	}
-	// && rather than ;: a chown that fails should stop there rather than be
-	// hidden by the next one succeeding.
+	// && so a failed chown stops the chain.
 	if !strings.Contains(doc.PostCreate, " && ") {
 		t.Errorf("postCreateCommand %q does not join its commands with &&", doc.PostCreate)
 	}
 }
 
-// The reverse map reads features and must not be confused by the new keys, or
-// `rebuild --tools +x` on a state-persisting container would drop every tool it
-// already had.
+// The reverse map must ignore the new keys.
 func TestToolsOfSurvivesAStateDocument(t *testing.T) {
 	cfg, err := Render("api", []string{"yq"}, Mount{}, State{Volume: "dev-ws-api-state"})
 	if err != nil {
@@ -368,10 +339,7 @@ func TestToolsOfSurvivesAStateDocument(t *testing.T) {
 	}
 }
 
-// codex is in the agent registry, so a generated container must be able to
-// install it. A catalog entry is only half-wired until ToolsOf maps it back:
-// without that, `rebuild --tools +yq` silently drops codex from a container
-// that had it.
+// A catalog entry must map back through ToolsOf or rebuild --tools drops it.
 func TestCodexRoundTrips(t *testing.T) {
 	cfg, err := Render("api", []string{"codex"}, Mount{}, State{})
 	if err != nil {
@@ -386,14 +354,9 @@ func TestCodexRoundTrips(t *testing.T) {
 	}
 }
 
-// A worktree container names the checkout as its workspace at the host path,
-// and bind-mounts git's common directory at the identical path beside it.
-//
-// The identical path is the whole trick: the checkout's .git file holds an
-// absolute `gitdir:` pointing into that directory, and the repository holds an
-// absolute backlink to the checkout. Both are host paths, and `git gc --auto`
-// prunes the worktree's registration when the backlink does not resolve — from
-// inside the container, silently.
+// A worktree container mounts the checkout and the common directory at their
+// host paths. Both must be identical: the .git file and the repository's
+// backlink are absolute host paths.
 func TestRenderWorktreeMounts(t *testing.T) {
 	got, err := Render("feat", nil, Mount{
 		Host: "/home/u/wt/feat",
@@ -425,8 +388,7 @@ func TestRenderWorktreeMounts(t *testing.T) {
 	}
 }
 
-// Both mounts at once, no target repeated: docker refuses the whole run with
-// "duplicate mount destination" if one arrives twice.
+// Both mounts are present, with no duplicate target.
 func TestRenderWorktreeWithState(t *testing.T) {
 	got, err := Render("feat", nil, Mount{
 		Host: "/home/u/wt/feat",
@@ -455,9 +417,7 @@ func TestRenderWorktreeWithState(t *testing.T) {
 		}
 		seen[target] = true
 	}
-	// The state volume is chowned and the bind mounts are not: the devcontainer
-	// CLI UID-remaps a bind mount to the host user already, and a recursive
-	// chown over a repository would be slow and pointless.
+	// Only the state volume is chowned: the CLI remaps bind mounts itself.
 	if !strings.Contains(doc.PostCreateCommand, StateDir) {
 		t.Errorf("postCreateCommand %q does not chown the state volume", doc.PostCreateCommand)
 	}
@@ -466,7 +426,7 @@ func TestRenderWorktreeWithState(t *testing.T) {
 	}
 }
 
-// A folderless container is unchanged by any of this.
+// A folderless container is unaffected by the worktree mounts.
 func TestRenderFolderlessIsUnchanged(t *testing.T) {
 	got, err := Render("scratch", nil,
 		Mount{Volume: "dev-ws-scratch", Folder: "/workspaces/scratch"}, State{})
@@ -478,8 +438,8 @@ func TestRenderFolderlessIsUnchanged(t *testing.T) {
 	}
 }
 
-// Byte-stable output is what makes the stored copy comparable and lets
-// `rebuild --tools` tell a real change from a re-render.
+// Output must be byte-stable, so rebuild --tools can tell a change from a
+// re-render.
 func TestRenderWorktreeIsStable(t *testing.T) {
 	m := Mount{Host: "/home/u/wt/feat", Bind: "/home/u/src/app/.git"}
 	first, err := Render("feat", []string{"yq"}, m, State{Volume: "v"})

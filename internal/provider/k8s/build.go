@@ -14,17 +14,13 @@ import (
 
 const (
 	devcontainerBin = "devcontainer"
-	// Still needed on a k8s provider: the image is built on the host, and the
-	// CLI shells out to docker even to read a configuration.
+	// The CLI shells out to docker even to read a configuration, so it is
+	// needed here too.
 	dockerBin = "docker"
 )
 
-// Lifecycle holds the merged lifecycle commands, still encoded.
-//
-// Each element is a string, an array of strings, or an object of named
-// commands — all three are legal and all three occur. They are decoded where
-// they are run, not here, so that reading the configuration cannot fail over a
-// command shape that would only have mattered later.
+// Lifecycle holds the merged lifecycle commands as raw JSON. Each element may
+// be a string, an array or an object, and is decoded where it runs.
 type Lifecycle struct {
 	OnCreate      []json.RawMessage
 	UpdateContent []json.RawMessage
@@ -33,19 +29,15 @@ type Lifecycle struct {
 	PostAttach    []json.RawMessage
 }
 
-// readConfiguration asks the devcontainer CLI for the merged configuration.
-//
-// Merged, not raw: Features contribute lifecycle commands and environment of
-// their own, and only the CLI knows how to combine them. Its merged form uses
-// plural names holding arrays — onCreateCommands, not onCreateCommand — which
-// is why this does not simply unmarshal devcontainer.json itself.
+// readConfiguration returns the merged configuration from the devcontainer CLI.
+// Only the CLI combines Feature lifecycle commands, and its plural keys
+// (onCreateCommands) do not match devcontainer.json.
 func readConfiguration(ctx context.Context, folder, configPath string) (DevConfig, Lifecycle, error) {
 	if err := requireBinary(devcontainerBin); err != nil {
 		return DevConfig{}, Lifecycle{}, err
 	}
-	// The CLI runs `docker ps` while reading a configuration, to see whether a
-	// container already exists, and fails with "spawn docker ENOENT" without
-	// it. Checked here so the error names the missing tool instead.
+	// The CLI runs `docker ps` even to read a configuration and fails with
+	// "spawn docker ENOENT" without it, so check here for a clearer error.
 	engine := engineBin()
 	if err := requireBinary(engine); err != nil {
 		return DevConfig{}, Lifecycle{}, fmt.Errorf("reading the devcontainer config: %w", err)
@@ -57,8 +49,8 @@ func readConfiguration(ctx context.Context, folder, configPath string) (DevConfi
 		"--include-merged-configuration",
 		"--log-format", "json",
 	}
-	// Passed rather than inferred: a generated configuration lives in a
-	// temporary directory, and the CLI's own lookup only searches the folder.
+	// Passed, not inferred: a generated configuration lives in a temp directory
+	// the CLI does not search.
 	if configPath != "" {
 		args = append(args, "--config", configPath)
 	}
@@ -69,8 +61,6 @@ func readConfiguration(ctx context.Context, folder, configPath string) (DevConfi
 	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, devcontainerBin, args...)
 	cmd.Stdout = &stdout
-	// The CLI logs progress on stderr and puts the result on stdout; the log is
-	// only interesting when something failed.
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
@@ -80,8 +70,7 @@ func readConfiguration(ctx context.Context, folder, configPath string) (DevConfi
 
 	var out struct {
 		Merged struct {
-			// Null when the configuration does not set one, which is the
-			// common case.
+			// Null when unset.
 			WorkspaceFolder *string           `json:"workspaceFolder"`
 			RemoteUser      string            `json:"remoteUser"`
 			ContainerEnv    map[string]string `json:"containerEnv"`
@@ -105,8 +94,7 @@ func readConfiguration(ctx context.Context, folder, configPath string) (DevConfi
 	if out.Merged.WorkspaceFolder != nil && *out.Merged.WorkspaceFolder != "" {
 		dev.WorkspaceFolder = *out.Merged.WorkspaceFolder
 	} else {
-		// The same default the devcontainer CLI uses when the configuration is
-		// silent, so a project behaves the same on both providers.
+		// Same default as the devcontainer CLI, so both providers agree.
 		dev.WorkspaceFolder = "/workspaces/" + filepath.Base(strings.TrimRight(folder, "/"))
 	}
 
@@ -120,11 +108,8 @@ func readConfiguration(ctx context.Context, folder, configPath string) (DevConfi
 	return dev, lc, nil
 }
 
-// mergeEnv combines containerEnv and remoteEnv.
-//
-// The spec distinguishes them — one is set on the container, the other only for
-// user commands — but here everything arrives through one Secret, so remoteEnv
-// simply wins where they disagree, matching the order the CLI applies them.
+// mergeEnv flattens containerEnv and remoteEnv into one map. remoteEnv wins
+// where they disagree, as it does in the CLI.
 func mergeEnv(containerEnv, remoteEnv map[string]string) map[string]string {
 	out := make(map[string]string, len(containerEnv)+len(remoteEnv))
 	for k, v := range containerEnv {
@@ -136,18 +121,10 @@ func mergeEnv(containerEnv, remoteEnv map[string]string) map[string]string {
 	return out
 }
 
-// buildAndPush builds the image on the host and pushes it to the registry.
-//
-// The devcontainer CLI does the building because that is the part worth not
-// reimplementing: Features, a Dockerfile, build args and the rest. It needs
-// Docker, which is why a k8s provider still expects an engine on the operator's
-// machine — docker or podman.
-//
-// How it builds depends on what the host has; see selectBuilder. A builder that
-// cannot cross-build is only usable when the target platform is this host's
-// own, because producing the wrong architecture silently is the worst outcome
-// available — the pod crash-loops with "exec format error", which says nothing
-// about the build.
+// buildAndPush builds the image on the host with the devcontainer CLI and
+// pushes it. That needs docker or podman locally. A builder that cannot
+// cross-build is refused for a foreign platform: the wrong architecture would
+// build silently and crash-loop in the pod with "exec format error".
 func buildAndPush(ctx context.Context, folder, configPath, image, platform string, noCache bool, progress io.Writer) error {
 	if err := requireBinary(devcontainerBin); err != nil {
 		return err
@@ -157,9 +134,8 @@ func buildAndPush(ctx context.Context, folder, configPath, image, platform strin
 
 	args := append([]string{"build", "--workspace-folder", folder, "--image-name", image},
 		b.dockerPathArgs()...)
-	// `build` is the one subcommand with no --override-config, so --config is
-	// both the only option and the right one: given explicitly, it is used as
-	// is and the folder is never searched.
+	// build takes no --override-config: --config is the only way to pass a
+	// generated configuration.
 	if configPath != "" {
 		args = append(args, "--config", configPath)
 	}
@@ -176,8 +152,6 @@ func buildAndPush(ctx context.Context, folder, configPath, image, platform strin
 	}
 
 	cmd := exec.CommandContext(ctx, devcontainerBin, args...)
-	// A build is minutes of silence otherwise, so its progress goes straight
-	// through; only the CLI's own result JSON on stdout is dropped.
 	cmd.Stdout = io.Discard
 	cmd.Stderr = progressOr(progress)
 	if err := cmd.Run(); err != nil {
@@ -187,9 +161,8 @@ func buildAndPush(ctx context.Context, folder, configPath, image, platform strin
 		return nil // --push already sent it
 	}
 
-	// Tee'd rather than just streamed: the operator wants to watch the upload,
-	// and the failure needs to be read afterwards to recognise a rejection the
-	// exit status alone does not describe.
+	// Teed so the failure text can be read afterwards: the exit status alone
+	// does not say a push was rejected.
 	var captured bytes.Buffer
 	push := exec.CommandContext(ctx, b.engine, "push", image)
 	push.Stdout = io.Discard
@@ -200,12 +173,8 @@ func buildAndPush(ctx context.Context, folder, configPath, image, platform strin
 	return nil
 }
 
-// pushError turns a rejected push into something actionable.
-//
-// A registry that has never seen a credential answers the token request with
-// 401 or 403, and the engine surfaces that as "exit status 125" — true, and
-// useless. The registry is in the image name, so the command to fix it can be
-// spelled out.
+// pushError explains a rejected push. The engine reports an auth failure only
+// as "exit status 125", so the stderr text is what identifies it.
 func pushError(engine, image, stderr string, err error) error {
 	if isAuthFailure(stderr) {
 		return fmt.Errorf("pushing %s: the registry refused the credentials. Run: %s login %s",
@@ -227,17 +196,14 @@ func isAuthFailure(stderr string) bool {
 	return false
 }
 
-// registryHost is the part of an image name a login applies to.
-//
-// An image with no registry is a Docker Hub name, where the host is implicit
-// and `login` takes no argument.
+// registryHost returns the registry a login applies to, or "" for a Docker Hub
+// name, where login takes no argument.
 func registryHost(image string) string {
 	head, _, found := strings.Cut(image, "/")
 	if !found {
 		return ""
 	}
-	// Docker's rule: the first segment is a registry only if it looks like a
-	// host. Otherwise it is a Docker Hub namespace.
+	// The first segment is a registry only if it looks like a host.
 	if strings.ContainsAny(head, ".:") || head == "localhost" {
 		return head
 	}
@@ -268,8 +234,8 @@ func progressOr(w io.Writer) io.Writer {
 	return w
 }
 
-// lastLine returns the final non-empty line, which for the CLI's JSON log is
-// the record that explains the failure.
+// lastLine returns the final non-empty line: for the CLI's JSON log, the record
+// that explains a failure.
 func lastLine(s string) string {
 	lines := strings.Split(strings.TrimSpace(s), "\n")
 	for i := len(lines) - 1; i >= 0; i-- {

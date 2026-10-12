@@ -67,8 +67,6 @@ func TestFindMissingIsAnError(t *testing.T) {
 	}
 }
 
-// A project one level up is somebody else's project. The folder argument is
-// explicit here, so searching above it would guess at what the operator meant.
 func TestFindDoesNotWalkUp(t *testing.T) {
 	parent := t.TempDir()
 	writeFile(t, filepath.Join(parent, ".devcontainer", "devcontainer.json"))

@@ -64,7 +64,7 @@ func runContainerFetch(ctx context.Context, a *app, workspace, name string) erro
 		return nil
 	}
 
-	// A file rather than stdin: git fetch refuses "-" as a bundle path.
+	// A file, not stdin: git fetch refuses "-" as a bundle path.
 	f, err := os.CreateTemp("", "dev-fetch-*.bundle")
 	if err != nil {
 		return err
@@ -78,10 +78,8 @@ func runContainerFetch(ctx context.Context, a *app, workspace, name string) erro
 		return err
 	}
 
-	// fsckObjects so a malformed object from the container is rejected rather
-	// than stored. Remote-tracking refs under the container's name, forced,
-	// since a branch the agent rewrote is still what it now holds; never a
-	// local branch, which is the operator's.
+	// fsckObjects rejects a malformed object from the container. Forced, since
+	// the agent may have rewritten a branch.
 	cmd := exec.CommandContext(ctx, "git", "-c", "transfer.fsckObjects=true",
 		"fetch", "--quiet", f.Name(), "+refs/heads/*:refs/remotes/"+name+"/*")
 	cmd.Dir = t.container.Source
@@ -117,9 +115,8 @@ func displayMode(m model.Mode) string {
 	return string(m)
 }
 
-// containerBundle asks the container's repository for a bundle of every
-// branch, or returns nil when it has none — a folder that was not a repository,
-// or one with no commits yet.
+// containerBundle returns a bundle of every branch, or nil when the repository
+// has none.
 func containerBundle(ctx context.Context, t *target) ([]byte, error) {
 	var out, stderr bytes.Buffer
 	err := t.provider.Exec(ctx, t.container,
@@ -136,13 +133,12 @@ func containerBundle(ctx context.Context, t *target) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-// unexported names what an isolated container holds that its folder does not:
-// branch tips the folder lacks, and uncommitted changes. Empty when removing it
-// loses nothing.
+// unexported names what an isolated container holds that its folder lacks.
+// Empty when removing it loses nothing.
 func unexported(ctx context.Context, t *target) ([]string, error) {
 	var out, stderr bytes.Buffer
-	// One exec for both questions: the porcelain status, then each branch and
-	// its tip, separated by a line the status cannot contain.
+	// One exec for both questions, separated by a line the status cannot
+	// contain.
 	err := t.provider.Exec(ctx, t.container,
 		[]string{"sh", "-c", `cd "$1" || exit 4
 git rev-parse --git-dir >/dev/null 2>&1 || exit 4
@@ -177,14 +173,12 @@ git for-each-ref --format='%(refname:short) %(objectname)' refs/heads`,
 	return found, nil
 }
 
-// workspaceFolderOf is where an isolated container's workspace is inside it:
-// the volume, mounted where the configuration dev renders puts it.
+// workspaceFolderOf is where an isolated container's workspace is inside it.
 func workspaceFolderOf(c model.Container) string {
 	return workspaceRoot(c)
 }
 
-// workspaceRoot is workspaceFolderOf's answer. A variable so a test whose
-// stand-in for the container is a directory on the host can point it there.
+// workspaceRoot is a variable so a test can point it at a host directory.
 var workspaceRoot = func(c model.Container) string {
 	return local.WorkspaceFolder(c.Name)
 }
@@ -205,7 +199,7 @@ func gitLines(ctx context.Context, dir string, args ...string) ([]string, error)
 	return lines, nil
 }
 
-// exitCode is the exit status a failed command reported, or -1.
+// exitCode is the failed command's exit status, or -1.
 func exitCode(err error) int {
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {

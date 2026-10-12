@@ -13,17 +13,10 @@ const (
 	labelContainer = "dev.container"
 )
 
-// idLabels returns the labels identifying one container, in a fixed order.
-//
-// This is the single place they are built, and it has to stay that way. The
-// devcontainer CLI infers an id label from --workspace-folder when none is
-// given, so two containers created from one folder would otherwise be the same
-// container. Passing them explicitly also means every lookup filters on our own
-// keys rather than on a path that a symlink could spell two ways.
-//
-// The consequence: the same set must be passed on *every* invocation for a
-// container. A call that omits one looks up a container that does not exist,
-// and the CLI helpfully creates a second one.
+// idLabels returns the labels identifying one container, in a fixed order. This
+// is the only place they are built. The CLI infers a label from
+// --workspace-folder when none is given, so a call that passes a different set,
+// or none, creates a second container beside the first.
 func idLabels(c model.Container) []string {
 	return []string{
 		fmt.Sprintf("%s=%s", labelWorkspace, c.WorkspaceName),
@@ -40,8 +33,7 @@ func idLabelArgs(c model.Container) []string {
 	return args
 }
 
-// dockerFilterArgs renders the same labels as docker filters, so that the two
-// tools are always asked about the same container.
+// dockerFilterArgs renders the same labels as docker filters.
 func dockerFilterArgs(c model.Container) []string {
 	var args []string
 	for _, l := range idLabels(c) {
@@ -50,39 +42,20 @@ func dockerFilterArgs(c model.Container) []string {
 	return args
 }
 
-// VolumeName is the docker volume a folderless container keeps its work in.
-//
-// Here rather than beside the caller, and for the same reason as the id
-// labels: the name is written at create, read at up, and passed to `docker
-// volume rm` at remove. A second spelling in any one of those leaks the volume
-// or mounts an empty one.
-//
-// xpath.ValidateName already restricts both names to letters, digits, dot,
-// underscore and hyphen, which is a subset of what docker accepts for a volume
-// name, so no escaping is needed here.
+// VolumeName is the docker volume a folderless or isolated container keeps its
+// work in. It is built here so create, up and remove agree on the spelling.
 func VolumeName(workspace, container string) string {
 	return fmt.Sprintf("dev-%s-%s", workspace, container)
 }
 
-// WorkspaceFolder is where a container's workspace volume is mounted: a
-// folderless container's, and an isolated one's. Here beside VolumeName so the
-// configuration dev renders and the seed the provider streams name the same
-// path.
+// WorkspaceFolder is where a container's workspace volume is mounted.
 func WorkspaceFolder(container string) string {
 	return "/workspaces/" + container
 }
 
 // StateVolumeName is the docker volume a container keeps its agents'
-// configuration on.
-//
-// Here for the same reason as VolumeName: the name is written into the
-// generated document at create, into the merged override materialise builds
-// for a project-owned container at up, and handed to `docker volume rm` at
-// remove.
-//
-// The workspace is part of the name because container names are unique only
-// within a workspace, so dev-<container>-state would be one volume shared by
-// every workspace that happened to use the name.
+// configuration on. The workspace is part of the name because container names
+// are unique only within a workspace.
 func StateVolumeName(workspace, container string) string {
 	return fmt.Sprintf("dev-%s-%s-state", workspace, container)
 }

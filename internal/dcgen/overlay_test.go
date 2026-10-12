@@ -7,8 +7,7 @@ import (
 	"testing"
 )
 
-// mountsOfJSON pulls the "mounts" array out of a rendered document as strings,
-// for assertions. An object-form entry comes back as its compact JSON.
+// mountsOfJSON returns the mounts array as strings, for assertions.
 func mountsOfJSON(t *testing.T, doc []byte) []string {
 	t.Helper()
 	var parsed struct {
@@ -29,8 +28,7 @@ func mountsOfJSON(t *testing.T, doc []byte) []string {
 	return out
 }
 
-// The ordinary case: a project that never heard of dev gets dev's mount added
-// and everything else back unchanged.
+// A project that never heard of dev keeps everything, with dev's mount added.
 func TestOverlayAddsTheStateMount(t *testing.T) {
 	in := []byte(`{
 	  "name": "demo",
@@ -48,9 +46,8 @@ func TestOverlayAddsTheStateMount(t *testing.T) {
 		t.Errorf("mounts = %v, want [%s]", got, want)
 	}
 
-	// Every field dev does not touch must survive. --override-config replaces
-	// rather than deep-merges, so a field dropped here is a field the container
-	// loses.
+	// Untouched fields must survive, since --override-config replaces the whole
+	// document.
 	var parsed map[string]json.RawMessage
 	if err := json.Unmarshal(out, &parsed); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -62,7 +59,7 @@ func TestOverlayAddsTheStateMount(t *testing.T) {
 	}
 }
 
-// A project's own mounts at other targets are none of dev's business.
+// A project's mounts at other targets are left alone.
 func TestOverlayPreservesOtherMounts(t *testing.T) {
 	in := []byte(`{"mounts": ["source=cache,target=/cache,type=volume"]}`)
 
@@ -83,9 +80,7 @@ func TestOverlayPreservesOtherMounts(t *testing.T) {
 	}
 }
 
-// The replace rule, string spelling. Leaving both would make docker refuse the
-// whole run with "duplicate mount destination" — the failure this change exists
-// to remove.
+// The replace rule, string spelling: a duplicate target fails the whole run.
 func TestOverlayReplacesAStringStateMount(t *testing.T) {
 	in := []byte(`{"mounts": ["source=dev-cli-state,target=/var/dev-state,type=volume"]}`)
 
@@ -106,8 +101,7 @@ func TestOverlayReplacesAStringStateMount(t *testing.T) {
 	}
 }
 
-// The replace rule, object spelling. The CLI accepts both, so target detection
-// must read both or an object-form project doubles the mount.
+// The replace rule, object spelling: target detection must read both spellings.
 func TestOverlayReplacesAnObjectStateMount(t *testing.T) {
 	in := []byte(`{"mounts": [{"source": "dev-cli-state", "target": "/var/dev-state", "type": "volume"}]}`)
 
@@ -125,8 +119,7 @@ func TestOverlayReplacesAnObjectStateMount(t *testing.T) {
 	}
 }
 
-// devcontainer.json is JSONC. VS Code's own templates ship comments, and
-// encoding/json rejects both of these.
+// JSONC comments and trailing commas are accepted.
 func TestOverlayAcceptsJSONC(t *testing.T) {
 	in := []byte(`// what this container is
 {
@@ -145,8 +138,7 @@ func TestOverlayAcceptsJSONC(t *testing.T) {
 	}
 }
 
-// The case a hand-rolled comment stripper gets wrong. Corrupting this line
-// would change what the container runs, silently, on every up.
+// A // inside a string must survive: a hand-rolled stripper would corrupt it.
 func TestOverlayKeepsCommentMarkersInsideStrings(t *testing.T) {
 	in := []byte(`{"postCreateCommand": "echo // not a comment"}`)
 
@@ -166,8 +158,7 @@ func TestOverlayKeepsCommentMarkersInsideStrings(t *testing.T) {
 	}
 }
 
-// dev parses a file it did not write, so it must report a file it cannot parse
-// rather than return a partial document.
+// An unparseable file is an error, not a partial document.
 func TestOverlayRejectsAMalformedDocument(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -189,10 +180,8 @@ func TestOverlayRejectsAMalformedDocument(t *testing.T) {
 	}
 }
 
-// A project-owned worktree container needs both of a worktree's bind mounts,
-// merged the same way the state mount is: dev never writes into a project's
-// own devcontainer.json (invariant 9), so a generated document is not an
-// option here.
+// A project-owned worktree container gets both mounts merged, since no
+// generated document applies.
 func TestOverlayWorktreeAddsBothMounts(t *testing.T) {
 	in := []byte(`{"name": "demo", "image": "ubuntu"}`)
 
@@ -221,7 +210,7 @@ func TestOverlayWorktreeAddsBothMounts(t *testing.T) {
 	}
 }
 
-// The project's own mounts at other targets survive, appended after.
+// The project's mounts at other targets survive, appended after.
 func TestOverlayWorktreePreservesOtherMounts(t *testing.T) {
 	in := []byte(`{"mounts": ["source=cache,target=/cache,type=volume"]}`)
 
@@ -238,9 +227,7 @@ func TestOverlayWorktreePreservesOtherMounts(t *testing.T) {
 	}
 }
 
-// The replace rule, same as the state mount: a project that already names a
-// mount at one of the two paths gets it replaced, not duplicated — docker
-// refuses "duplicate mount destination" otherwise.
+// The replace rule matches the state mount: replaced, never duplicated.
 func TestOverlayWorktreeReplacesACollidingMount(t *testing.T) {
 	in := []byte(`{"mounts": ["source=x,target=/repo/.git,type=bind"]}`)
 
@@ -259,9 +246,7 @@ func TestOverlayWorktreeReplacesACollidingMount(t *testing.T) {
 	}
 }
 
-// A worktree container that also persists state needs both merges applied:
-// dev's overlay runs once per invocation, and the state mount must not be
-// dropped by the worktree merge or vice versa.
+// A worktree container that also persists state needs both merges.
 func TestOverlayWorktreeThenStateKeepsBothMounts(t *testing.T) {
 	in := []byte(`{"name": "demo"}`)
 
@@ -280,8 +265,7 @@ func TestOverlayWorktreeThenStateKeepsBothMounts(t *testing.T) {
 	}
 }
 
-// A compose project cannot carry the mount, so create warns. Detection is free
-// here because the document is already parsed.
+// A compose project cannot carry the mount, so create warns.
 func TestUsesCompose(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -347,9 +331,7 @@ func TestNamesWorkspaceMount(t *testing.T) {
 	}
 }
 
-// An isolated container's workspace is a volume, never the operator's folder:
-// both workspaceMount and workspaceFolder are set, so the CLI neither binds
-// the host folder nor derives the in-container path from it.
+// An isolated workspace is a volume: both workspace fields are set.
 func TestOverlayIsolatedWorkspaceSetsBoth(t *testing.T) {
 	out, err := OverlayIsolatedWorkspace([]byte(`{"image":"x","workspaceMount":"source=${localWorkspaceFolder},target=/src,type=bind","workspaceFolder":"/src"}`),
 		Mount{Volume: "dev-ws-api", Folder: "/workspaces/api"})

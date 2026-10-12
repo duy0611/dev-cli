@@ -11,10 +11,8 @@ import (
 	"github.com/duy0611/dev-cli/internal/audit"
 )
 
-// stubCapturingDevcontainer is a devcontainer that keeps a copy of every
-// --override-config and --config it is handed, so a test can read the document
-// a container was actually started from. read-configuration reports an empty
-// merged configuration.
+// stubCapturingDevcontainer keeps a copy of each --config and --override-config
+// it is given.
 func stubCapturingDevcontainer(t *testing.T) (calls, captured string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -23,9 +21,8 @@ func stubCapturingDevcontainer(t *testing.T) (calls, captured string) {
 	if err := os.MkdirAll(captured, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// The call number names each captured file, so it must be a bare number:
-	// BSD wc on macOS pads its count with spaces, which made the captured
-	// names never match the line they were looked up by. Hence the tr.
+	// BSD wc pads its count with spaces, so the count is tr-stripped to match
+	// the file name.
 	script := `#!/bin/sh
 printf '%s\n' "$*" >> '` + calls + `'
 n=$(wc -l < '` + calls + `' | tr -d ' ')
@@ -45,8 +42,7 @@ exit 0
 	return calls, captured
 }
 
-// mountsUsedForUp returns the mounts in the document the last `up` received:
-// the override for a project-owned config, the --config for a generated one.
+// mountsUsedForUp returns the mounts in the document the last up received.
 func mountsUsedForUp(t *testing.T, calls, captured string) []string {
 	t.Helper()
 	lines := strings.Split(strings.TrimSpace(callsIn(t, calls)), "\n")
@@ -63,7 +59,6 @@ func mountsUsedForUp(t *testing.T, calls, captured string) []string {
 	var doc struct {
 		Mounts []string `json:"mounts"`
 	}
-	// The override wins when both were passed, as the CLI applies it.
 	slices.Sort(files)
 	for _, f := range files {
 		b, err := os.ReadFile(f)
@@ -98,10 +93,6 @@ func hasMount(mounts []string, target string, readonly bool) bool {
 	return false
 }
 
-// The tests from here to the working-tree ones exercise the single-file guard,
-// which only a legacy container — one from before modes — still runs. They
-// make one with createOpts.legacy.
-
 func TestCreateOnAGitRepositoryMountsTheGuard(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -121,15 +112,12 @@ func TestCreateOnAGitRepositoryMountsTheGuard(t *testing.T) {
 		t.Errorf("guard mounts missing at %s:\n  %s", gitdir, strings.Join(mounts, "\n  "))
 	}
 
-	// The hooks copy is the project's hooks, ready before the first up.
 	hooks, _ := hooksCopyDir("ws", "api")
 	if _, err := os.Stat(filepath.Join(hooks, "pre-commit")); err != nil {
 		t.Errorf("hooks copy not seeded: %v", err)
 	}
 }
 
-// A generated configuration for a repository folder gets the mounts too,
-// added per invocation and never stored in the row's document.
 func TestGeneratedConfigGetsTheGuardWithoutStoringIt(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -162,8 +150,6 @@ func TestFolderThatIsNotARepositoryIsNotGuarded(t *testing.T) {
 	}
 }
 
-// A project that names its own workspace mount puts .git where dev cannot see,
-// so instead of mounts, .git is fingerprinted around each command.
 func TestCustomWorkspaceMountFallsBackToFingerprinting(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -180,7 +166,6 @@ func TestCustomWorkspaceMountFallsBackToFingerprinting(t *testing.T) {
 		}
 	}
 
-	// An exec that rewrites the config is reported once it ends, exit 1.
 	err := runContainerExec(t.Context(), a, "", "api",
 		[]string{"sh", "-c", "true"}, false, nil)
 	if err != nil {
@@ -197,8 +182,6 @@ func TestCustomWorkspaceMountFallsBackToFingerprinting(t *testing.T) {
 	}
 }
 
-// A commondir in an ordinary checkout cannot be mounted away, so it is checked:
-// a command finding one refuses to run at all.
 func TestPlantedCommondirRefusesTheNextCommand(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -216,8 +199,6 @@ func TestPlantedCommondirRefusesTheNextCommand(t *testing.T) {
 	}
 }
 
-// rebuild resets the hooks copy to the project's: whatever the container
-// installed there is gone.
 func TestRebuildReseedsTheHooksCopy(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -255,8 +236,6 @@ func TestRemoveDeletesTheHooksCopy(t *testing.T) {
 	}
 }
 
-// A worktree container's config and hooks are in git's common directory, and
-// its own .git file and administration files are redirects; all are mounted.
 func TestWorktreeContainerMountsTheGuard(t *testing.T) {
 	requireGit(t)
 	a, _ := newTestApp(t)
@@ -289,8 +268,8 @@ func TestWorktreeContainerMountsTheGuard(t *testing.T) {
 	}
 }
 
-// stubEngineDocker is a docker that reports one running container, so exec
-// and remove get past their status checks.
+// stubEngineDocker reports one running container, so exec and remove pass their
+// status checks.
 func stubEngineDocker(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
@@ -302,8 +281,8 @@ func stubEngineDocker(t *testing.T) {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
-// stubTamperingExec makes the devcontainer stub's exec append a hostile
-// setting to the file at path, as an agent inside the container would.
+// stubTamperingExec makes the devcontainer exec append a setting to path, as an
+// agent would.
 func stubTamperingExec(t *testing.T, path string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -316,17 +295,16 @@ func stubTamperingExec(t *testing.T, path string) {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
-// isolateGit keeps the operator's own git config out of a test: what host git
-// reports as running from the tree has to be only what the test set.
+// isolateGit keeps the operator's git config out, so the tree paths reported
+// are only the test's.
 func isolateGit(t *testing.T) {
 	t.Helper()
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 }
 
-// stubEngineWithMounts is stubEngineDocker whose container reports mounts,
-// as `docker inspect --format '{{json .Mounts}}'` prints them. Empty mounts is
-// an engine with no container at all.
+// stubEngineWithMounts is stubEngineDocker reporting the given mounts, as
+// docker inspect prints them.
 func stubEngineWithMounts(t *testing.T, mounts string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -339,8 +317,6 @@ func stubEngineWithMounts(t *testing.T, mounts string) {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
-// A core.hooksPath pointed into the checkout — what `make hooks` used to do
-// here, and what husky does — is mounted read-only, with its parents pinned.
 func TestHooksPathInTheCheckoutIsMountedReadOnly(t *testing.T) {
 	isolateGit(t)
 	a, _ := newTestApp(t)
@@ -349,7 +325,6 @@ func TestHooksPathInTheCheckoutIsMountedReadOnly(t *testing.T) {
 	root := gitRepoWithConfig(t, `{"image":"ubuntu"}`)
 	writeFile(t, filepath.Join(root, "tools", "hooks", "commit-msg"), "#!/bin/sh\n")
 	gitIn(t, root, "config", "core.hooksPath", "tools/hooks")
-	// No container yet, so start creates one rather than checking its mounts.
 	stubEngineWithMounts(t, "")
 
 	if err := runContainerCreate(t.Context(), a, "", "api", root, createOpts{}); err != nil {
@@ -362,8 +337,6 @@ func TestHooksPathInTheCheckoutIsMountedReadOnly(t *testing.T) {
 	}
 }
 
-// A hooksPath that does not exist yet cannot be mounted, and the container
-// creating it would be the same as editing it: refused, and recorded.
 func TestMissingHooksPathInTheCheckoutIsRefused(t *testing.T) {
 	isolateGit(t)
 	a, _ := newTestApp(t)
@@ -382,9 +355,6 @@ func TestMissingHooksPathInTheCheckoutIsRefused(t *testing.T) {
 	}
 }
 
-// The setting usually arrives after the container: `make hooks` run on the
-// host later. A running container without the mount is refused, naming
-// rebuild, since mounts are fixed at create.
 func TestContainerPredatingTheHooksPathIsRefused(t *testing.T) {
 	isolateGit(t)
 	a, _ := newTestApp(t)
@@ -407,15 +377,12 @@ func TestContainerPredatingTheHooksPathIsRefused(t *testing.T) {
 		t.Fatalf("exec = %v", err)
 	}
 
-	// Rebuilt with it, the same exec runs.
 	stubEngineWithMounts(t, `[{"Destination":"`+ws+`","RW":true},{"Destination":"`+ws+`/.githooks","RW":false}]`)
 	if err := runContainerExec(t.Context(), a, "", "api", []string{"true"}, false, nil); err != nil {
 		t.Fatalf("exec with the mount: %v", err)
 	}
 }
 
-// Where .git lands is unknown, so nothing can be mounted: the tree's hooks are
-// fingerprinted around the command with the rest.
 func TestCustomWorkspaceMountFingerprintsTheTreeHooks(t *testing.T) {
 	isolateGit(t)
 	a, _ := newTestApp(t)

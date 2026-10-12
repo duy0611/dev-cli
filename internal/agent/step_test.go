@@ -11,8 +11,8 @@ import (
 	"github.com/duy0611/dev-cli/internal/agentcfg"
 )
 
-// fakeExec records every command and answers from a table of substring →
-// reply. The first matching rule wins; no match succeeds with empty stdout.
+// fakeExec records every command and answers from a table of substring rules.
+// The first match wins; no match returns empty stdout.
 type fakeExec struct {
 	calls []string
 	stdin [][]byte
@@ -116,7 +116,7 @@ func TestApplySkipsAnAgentThatIsNotInstalled(t *testing.T) {
 			t.Errorf("ran a hermes step anyway: %s", c)
 		}
 	}
-	// The other two still got theirs.
+	// The other agents still ran.
 	if !slices.ContainsFunc(f.calls, func(c string) bool { return strings.Contains(c, "claude mcp add-json") }) {
 		t.Errorf("claude was skipped too: %v", f.calls)
 	}
@@ -165,9 +165,8 @@ func TestSkillStepsForAGitSkill(t *testing.T) {
 		{Name: "r", Git: "https://x/r", Path: "."},
 	})
 	withRef, noRef := steps[0].Cmd, steps[1].Cmd
-	// The URL, ref and each name and subdirectory arrive as positional
-	// arguments, never spliced into the script, since agents.yaml is not dev's
-	// to trust.
+	// The URL, ref and names arrive as positional arguments, never spliced into
+	// the script.
 	if !slices.Equal(withRef[3:], []string{"sh", "https://x/sp", "v1", "brainstorming", "skills/brainstorming"}) {
 		t.Errorf("args = %v", withRef[3:])
 	}
@@ -179,8 +178,8 @@ func TestSkillStepsForAGitSkill(t *testing.T) {
 	}
 }
 
-// Skills from one repository at one ref share a clone, wherever they sit in
-// the list; a different ref of the same repository is a different checkout.
+// Skills from one repository at one ref share a clone; a different ref does
+// not.
 func TestSkillStepsCloneEachRepositoryOnce(t *testing.T) {
 	steps := skillSteps("claude", "${D:-$HOME/.claude}/skills", []agentcfg.Skill{
 		{Name: "a", Git: "https://x/sp", Ref: "v1", Path: "skills/a"},

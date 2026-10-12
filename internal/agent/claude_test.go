@@ -53,7 +53,7 @@ func TestClaudeSteps(t *testing.T) {
 		t.Errorf("install cmd = %v", steps[1].Cmd)
 	}
 
-	// Removal is allowed to fail — there is nothing to remove the first time.
+	// Removal may fail when there is nothing to remove.
 	if !strings.Contains(steps[2].Cmd[2], "|| true") || steps[2].Cmd[4] != "ctx" {
 		t.Errorf("remove cmd = %v", steps[2].Cmd)
 	}
@@ -66,8 +66,7 @@ func TestClaudeSteps(t *testing.T) {
 	if err := json.Unmarshal([]byte(add[6]), &doc); err != nil {
 		t.Fatal(err)
 	}
-	// References pass through: Claude resolves ${K} itself, from the
-	// environment dev launches it with.
+	// ${K} passes through for Claude to resolve at start.
 	if doc["type"] != "stdio" || doc["command"] != "npx" || doc["env"].(map[string]any)["K"] != "${K}" {
 		t.Errorf("stdio doc = %v", doc)
 	}

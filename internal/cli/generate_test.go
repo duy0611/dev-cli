@@ -15,15 +15,12 @@ import (
 	"github.com/duy0611/dev-cli/internal/provider/k8s"
 )
 
-// seedWorkspace gives a test app a usable provider and workspace, since every
-// container command resolves one before it does anything else.
+// seedWorkspace gives a test app an active workspace and provider.
 func seedWorkspace(t *testing.T, a *app) {
 	t.Helper()
 	if err := runProviderConfigure(a, "p", "local", k8s.Config{}); err != nil {
 		t.Fatalf("configure: %v", err)
 	}
-	// The first workspace becomes the active one, so nothing needs `workspace
-	// use` afterwards.
 	if err := runWorkspaceInit(a, "ws", "p", false); err != nil {
 		t.Fatalf("workspace init: %v", err)
 	}
@@ -47,8 +44,7 @@ func TestParseToolList(t *testing.T) {
 	}
 }
 
-// Under `go test` stdin is /dev/null, which isTerminal rejects — so these
-// exercise the scripted path, which is the one that must never block.
+// Scripted path: go test's stdin is not a terminal, so no picker opens.
 func TestCreateWithoutAConfigStillFails(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -60,7 +56,6 @@ func TestCreateWithoutAConfigStillFails(t *testing.T) {
 	if got := exitCodeOf(err); got != exitUsage {
 		t.Errorf("exit code = %d, want %d", got, exitUsage)
 	}
-	// The error has to teach the way forward; there is no other discovery path.
 	if !strings.Contains(err.Error(), "--generate") {
 		t.Errorf("error %q does not mention --generate", err)
 	}
@@ -91,8 +86,6 @@ func TestCreateGeneratesAConfig(t *testing.T) {
 		t.Errorf("ConfigPath = %q, want empty for a generated container", c.ConfigPath)
 	}
 
-	// Nothing may be written into the folder: the project owns its own
-	// directory, and a generated config lives in the database instead.
 	entries, err := os.ReadDir(folder)
 	if err != nil {
 		t.Fatalf("ReadDir: %v", err)
@@ -102,8 +95,6 @@ func TestCreateGeneratesAConfig(t *testing.T) {
 	}
 }
 
-// The project owns its container definition. Shadowing a configuration that is
-// right there is the worst of both behaviours.
 func TestGenerateRefusesAFolderThatHasAConfig(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -151,9 +142,7 @@ func TestGenerateRejectsAnUnknownTool(t *testing.T) {
 	}
 }
 
-// projectWithConfig builds a folder that ships its own devcontainer config,
-// which is the case --generate must refuse and config show must not invent one
-// for.
+// projectWithConfig returns a folder that ships its own devcontainer config.
 func projectWithConfig(t *testing.T) string {
 	t.Helper()
 	folder := t.TempDir()
@@ -180,8 +169,6 @@ func TestContainerToolsListsTheCatalog(t *testing.T) {
 	}
 }
 
-// With the configuration in the database rather than on disk, this is the only
-// way to see what a container was built from.
 func TestConfigShowPrintsTheStoredConfig(t *testing.T) {
 	a, out := newTestApp(t)
 	seedWorkspace(t, a)
@@ -200,9 +187,6 @@ func TestConfigShowPrintsTheStoredConfig(t *testing.T) {
 	}
 }
 
-// A project-owned container is built from the merged document, not from the
-// file on disk, and that document lives only for one invocation — so this is
-// the only way to see what the container was actually created from.
 func TestConfigShowPrintsTheMergedConfig(t *testing.T) {
 	a, out := newTestApp(t)
 	seedWorkspace(t, a)
@@ -216,8 +200,6 @@ func TestConfigShowPrintsTheMergedConfig(t *testing.T) {
 	if err := runContainerConfigShow(t.Context(), a, "", "owned"); err != nil {
 		t.Fatalf("config show: %v", err)
 	}
-	// The mount dev added is the whole point: it is the one thing that is in
-	// the running container and not in the file the operator committed.
 	if !strings.Contains(out.String(), "dev-ws-owned-state") {
 		t.Errorf("config show did not print the merged document:\n%s", out.String())
 	}
@@ -226,8 +208,6 @@ func TestConfigShowPrintsTheMergedConfig(t *testing.T) {
 	}
 }
 
-// Without state there is no merge, so what the CLI receives really is the
-// project's own file. Printing it anyway keeps the command one shape.
 func TestConfigShowPrintsTheProjectFileWhenStateIsOff(t *testing.T) {
 	a, out := newTestApp(t)
 	seedWorkspace(t, a)
@@ -251,8 +231,6 @@ func TestConfigShowPrintsTheProjectFileWhenStateIsOff(t *testing.T) {
 	}
 }
 
-// Stdout carries the document and nothing else, so `config show | jq` works.
-// The path that says where it came from goes to stderr.
 func TestConfigShowPrintsOnlyJSONToStdout(t *testing.T) {
 	a, out := newTestApp(t)
 	seedWorkspace(t, a)
@@ -272,9 +250,6 @@ func TestConfigShowPrintsOnlyJSONToStdout(t *testing.T) {
 	}
 }
 
-// Fatal here, unlike on stop or remove: this command exists to say what the
-// container was built from, and a file dev cannot parse has no honest answer
-// other than the error.
 func TestConfigShowReportsAnUnparseableProjectFile(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -294,9 +269,6 @@ func TestConfigShowReportsAnUnparseableProjectFile(t *testing.T) {
 	}
 }
 
-// The devcontainer CLI only accepts a path, so a configuration that lives in
-// the database has to become a file for the length of one invocation — and
-// stop being one afterwards.
 func TestMaterialiseWritesAndCleansUp(t *testing.T) {
 	c := model.Container{Name: "demo", GeneratedConfig: "{\"name\":\"demo\"}\n"}
 
@@ -309,8 +281,7 @@ func TestMaterialiseWritesAndCleansUp(t *testing.T) {
 	}
 	if filepath.Base(got.ConfigPath) != "devcontainer.json" ||
 		filepath.Base(filepath.Dir(got.ConfigPath)) != ".devcontainer" {
-		// The CLI reads the layout around the file and rejects any other
-		// filename outright, so the temporary copy mirrors a real project.
+		// The CLI rejects any filename but devcontainer.json.
 		t.Errorf("unexpected layout: %s", got.ConfigPath)
 	}
 	body, err := os.ReadFile(got.ConfigPath)
@@ -368,8 +339,6 @@ func TestApplyToolDiff(t *testing.T) {
 	}
 }
 
-// "node,+yq" reads as one intent and means another, so it is refused rather
-// than guessed at.
 func TestApplyToolDiffRejectsMixedForms(t *testing.T) {
 	_, err := applyToolDiff([]string{"node"}, []string{"node", "+yq"})
 	if err == nil {
@@ -389,8 +358,7 @@ func TestRebuildToolsRewritesTheStoredConfig(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	// The rebuild itself needs an engine; this asserts the rewrite, which is
-	// the part that belongs to dev.
+	// Engine-free: asserts the rewrite, not the rebuild.
 	if err := rewriteGeneratedTools(t.Context(), a, "", "demo", []string{"+python"}); err != nil {
 		t.Fatalf("rewrite: %v", err)
 	}
@@ -412,7 +380,6 @@ func TestRebuildToolsRewritesTheStoredConfig(t *testing.T) {
 	}
 }
 
-// A project's configuration is not dev's to rewrite.
 func TestRebuildToolsRefusesAProjectOwnedContainer(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -431,8 +398,6 @@ func TestRebuildToolsRefusesAProjectOwnedContainer(t *testing.T) {
 	}
 }
 
-// Neither flag means the current directory, said out loud before anything is
-// created so a wrong guess is seen.
 func TestCreateWithNeitherFlagUsesTheWorkingDirectory(t *testing.T) {
 	a, out := newTestApp(t)
 	seedWorkspace(t, a)
@@ -462,12 +427,10 @@ func TestCreateWithNeitherFlagUsesTheWorkingDirectory(t *testing.T) {
 	}
 }
 
-// A forgotten cd would otherwise mount everything under it.
 func TestCreateRefusesTheHomeDirectoryAndRoot(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
-	// A home with a devcontainer config of its own, so the only thing left to
-	// refuse it for is being the home directory.
+	// A config of its own leaves only the home-directory check to refuse it.
 	home := projectWithConfig(t)
 	t.Setenv("HOME", home)
 
@@ -503,9 +466,6 @@ func TestCreateWithBothFolderAndNoFolderIsRejected(t *testing.T) {
 	}
 }
 
-// A folderless container is always a generated one: there is no project to
-// ship a configuration. The document must carry the volume, and the row must
-// record that there is no source.
 func TestCreateNoFolderStoresAVolumeBackedConfig(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -537,12 +497,7 @@ func TestCreateNoFolderStoresAVolumeBackedConfig(t *testing.T) {
 	}
 }
 
-// --no-folder needs no --generate: there is no project configuration for a
-// generated one to shadow, which is the only thing --generate guards against.
-// A scripted run must not block on the picker either. Under `go test` stdin is
-// /dev/null, which isTerminal rejects, so this is the scripted path: per the
-// spec it must succeed with a bare Ubuntu image and no tools, not fail the
-// way folderSource does for a folder with no config.
+// Scripted path: a bare image with no tools, and no --generate needed.
 func TestCreateNoFolderNeedsNoGenerateFlag(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -560,21 +515,16 @@ func TestCreateNoFolderNeedsNoGenerateFlag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetContainer: %v", err)
 	}
-	// A scripted run with no --tools must not silently install anything.
 	if strings.Contains(c.GeneratedConfig, "apt-get-packages") {
 		t.Errorf("bare no-folder container installed a tool it was not asked for:\n%s", c.GeneratedConfig)
 	}
-	// The volume mount must still be there: a bare image is still a
-	// folderless one, and materialise still points the provider at the
-	// generated document rather than an empty one.
 	if !strings.Contains(c.GeneratedConfig, "workspaceMount") {
 		t.Errorf("bare no-folder container lost its volume mount:\n%s", c.GeneratedConfig)
 	}
 }
 
-// rebuild --tools re-renders the whole document. Dropping the mount here would
-// be invisible until the next up, which would start a container with an empty
-// workspace and the operator's work still in an unreferenced volume.
+// rebuild --tools re-renders the whole document, so a dropped mount goes
+// unnoticed until the next up.
 func TestRebuildToolsKeepsTheVolumeMount(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -603,8 +553,6 @@ func TestRebuildToolsKeepsTheVolumeMount(t *testing.T) {
 	}
 }
 
-// An empty SOURCE column reads as a bug in the table. A dash says "there is
-// none" rather than "something went wrong printing it".
 func TestListShowsADashForAFolderlessContainer(t *testing.T) {
 	a, out := newTestApp(t)
 	seedWorkspace(t, a)
@@ -627,8 +575,7 @@ func TestListShowsADashForAFolderlessContainer(t *testing.T) {
 	if line == "" {
 		t.Fatalf("scratch is not in the list:\n%s", out.String())
 	}
-	// By column rather than by suffix: the row has gained a field since, and a
-	// suffix check would silently start asserting on whatever is last.
+	// By column: a suffix check would assert on whichever field is last.
 	fields := strings.Fields(line)
 	const sourceCol = 3
 	if len(fields) <= sourceCol || fields[sourceCol] != "-" {
@@ -636,9 +583,6 @@ func TestListShowsADashForAFolderlessContainer(t *testing.T) {
 	}
 }
 
-// Whether dev wrote the configuration or the project ships it decides what a
-// rebuild reads and whether --tools applies, and nothing else on screen says
-// which.
 func TestListShowsWhereTheConfigCameFrom(t *testing.T) {
 	a, out := newTestApp(t)
 	seedWorkspace(t, a)
@@ -678,9 +622,6 @@ func TestListShowsWhereTheConfigCameFrom(t *testing.T) {
 	}
 }
 
-// On by default, and the column is what every later command reads: the
-// document is re-rendered from it, the local provider mounts from it, and the
-// k8s manifest grows a subPath from it.
 func TestCreateStoresPersistState(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -706,10 +647,7 @@ func TestCreateStoresPersistState(t *testing.T) {
 	}
 }
 
-// The sharpest edge in the change. rewriteGeneratedTools re-renders the whole
-// document, so a state mount it does not put back is gone — and the next up
-// would start a container with no volume, quietly, leaving the old one behind
-// holding the plugins the operator is about to notice missing.
+// rewriteGeneratedTools would silently drop a state mount it does not re-add.
 func TestRebuildToolsKeepsTheStateMount(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -740,9 +678,6 @@ func TestRebuildToolsKeepsTheStateMount(t *testing.T) {
 	}
 }
 
-// A container that does not persist state must not acquire a mount from a
-// rebuild either: that would create a volume nobody asked for, and Remove only
-// deletes one when the column says there is one.
 func TestRebuildToolsAddsNoStateMountWhenOff(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -769,8 +704,6 @@ func TestRebuildToolsAddsNoStateMountWhenOff(t *testing.T) {
 	}
 }
 
-// --no-persist-state is the way out, and it has to reach the row: a container
-// created with it must get no volume, no mount and no variables.
 func TestCreateHonoursNoPersistState(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -796,10 +729,8 @@ func TestCreateHonoursNoPersistState(t *testing.T) {
 	}
 }
 
-// A project that ships its own devcontainer.json gets no "containerEnv" from
-// dev — dev does not write into a project folder — so the variables have to
-// come from here or that half of the containers would mount the volume and
-// leave every agent still writing to its default path inside the container.
+// A project-owned container has no containerEnv, so the variables come from
+// here.
 func TestContainerEnvCarriesTheStateVariables(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -821,9 +752,6 @@ func TestContainerEnvCarriesTheStateVariables(t *testing.T) {
 	}
 }
 
-// Without the column there is no volume, so pointing an agent at /var/dev-state
-// would send it writing into the container filesystem at a path nothing mounts
-// — losing the state on rebuild exactly as before, but less visibly.
 func TestContainerEnvOmitsStateVariablesWhenOff(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -839,8 +767,6 @@ func TestContainerEnvOmitsStateVariablesWhenOff(t *testing.T) {
 	}
 }
 
-// A workspace setting of the same name wins, the way the git identity does:
-// these are defaults the operator may have a better answer for.
 func TestWorkspaceSettingOverridesAStateVariable(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -864,8 +790,6 @@ func TestWorkspaceSettingOverridesAStateVariable(t *testing.T) {
 			}
 		}
 	}
-	// Exactly one: both would arrive as --remote-env and the last would win,
-	// which is a coin toss rather than a precedence rule.
 	if seen != 1 {
 		t.Errorf("CLAUDE_CONFIG_DIR appears %d times, want exactly 1", seen)
 	}
@@ -883,9 +807,6 @@ func writeProjectConfigIn(t *testing.T, dir, body string) {
 	}
 }
 
-// A compose project cannot carry the state mount, and nothing reports an error
-// when it silently does not: the agents write to the container filesystem and
-// lose it at the next rebuild.
 func TestComposeWarningForAComposeProject(t *testing.T) {
 	dir := t.TempDir()
 	writeProjectConfigIn(t, dir, `{"dockerComposeFile":"docker-compose.yml","service":"app"}`)
@@ -895,9 +816,6 @@ func TestComposeWarningForAComposeProject(t *testing.T) {
 	if got == "" {
 		t.Fatal("no warning for a compose project")
 	}
-	// The way out has to be in the message, in the house style of the
-	// kind-change error: an operator who is not told what to do has nothing to
-	// try.
 	for _, want := range []string{"docker compose", dcgen.StateDir, "--no-persist-state"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("warning %q does not mention %q", got, want)
@@ -915,7 +833,6 @@ func TestComposeWarningSilentForAnImageProject(t *testing.T) {
 	}
 }
 
-// Nothing to lose, nothing to warn about.
 func TestComposeWarningSilentWithoutPersistState(t *testing.T) {
 	dir := t.TempDir()
 	writeProjectConfigIn(t, dir, `{"dockerComposeFile":"docker-compose.yml"}`)
@@ -926,8 +843,6 @@ func TestComposeWarningSilentWithoutPersistState(t *testing.T) {
 	}
 }
 
-// A generated container has no project config, and an unreadable one is the
-// business of the commands that need it.
 func TestComposeWarningSilentWithoutAConfig(t *testing.T) {
 	if got := composeWarning("", true); got != "" {
 		t.Errorf("warned with no config path: %q", got)
@@ -937,7 +852,6 @@ func TestComposeWarningSilentWithoutAConfig(t *testing.T) {
 	}
 }
 
-// Still created: the warning is advisory, not a refusal.
 func TestCreateSucceedsForAComposeProject(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -950,18 +864,8 @@ func TestCreateSucceedsForAComposeProject(t *testing.T) {
 	}
 }
 
-// The guarantee the deferred parse error exists for: a project file dev cannot
-// parse must not strand its container in the engine.
-//
-// materialise runs for every container command, but stop, remove, logs and
-// status find their container through docker label filters and never read a
-// config at all. Failing those too would leave a syntax error in a project's
-// devcontainer.json holding the container hostage, with dev refusing to clean
-// up after itself and the operator sent to docker directly.
-//
-// The mechanism is asserted in resolve_test.go; this asserts the outcome, and
-// it is what fails loudly if a future command forgets which side of the
-// deferred/fatal line it belongs on.
+// A project file that will not parse must not strand the container; see
+// resolve_test.go.
 func TestRemoveSucceedsWithAnUnparseableProjectFile(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -972,16 +876,13 @@ func TestRemoveSucceedsWithAnUnparseableProjectFile(t *testing.T) {
 		createOpts{noStart: true}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	// --force, because make test runs with no engine on PATH: what is being
-	// asserted is that the deferred parse error never reaches this command,
-	// not what docker would have said.
+	// --force: no engine on PATH, so only the parse-error path is under test.
 	if err := runContainerRemove(t.Context(), a, "", "c1", true); err != nil {
 		t.Fatalf("a broken project file stranded the container: %v", err)
 	}
 }
 
-// A wedged engine must not hang the list: past the timeout the row reads "?"
-// and the command still succeeds, because the records are what it is for.
+// A wedged engine must not hang the list; past the timeout the row reads "?".
 func TestListGivesUpOnASlowEngine(t *testing.T) {
 	a, out := newTestApp(t)
 	seedWorkspace(t, a)
@@ -994,8 +895,7 @@ func TestListGivesUpOnASlowEngine(t *testing.T) {
 
 	dir := t.TempDir()
 	t.Setenv("PATH", dir)
-	// exec, so the kill on cancel reaches the sleep rather than a shell that
-	// would leave it holding stdout open.
+	// exec, so the cancel kills the sleep, not a shell that holds stdout open.
 	stubBin(t, dir, "docker", "exec /bin/sleep 30")
 
 	start := time.Now()

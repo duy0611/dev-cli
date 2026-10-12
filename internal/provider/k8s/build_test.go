@@ -10,8 +10,8 @@ import (
 	"testing"
 )
 
-// withBuildx installs a docker whose `buildx version` answers the way the real
-// plugin does. The probe looks for a semver, so a silent success is not enough.
+// withBuildx installs a docker whose `buildx version` prints a semver, as the
+// CLI's probe needs.
 func withBuildx(t *testing.T, s *stubs) {
 	t.Helper()
 	s.installScript(t, dockerBin, `case "$1 $2" in
@@ -19,8 +19,8 @@ func withBuildx(t *testing.T, s *stubs) {
 esac`)
 }
 
-// withoutBuildx installs a docker that fails `buildx version`, as a bare docker
-// CLI does, while still accepting a push.
+// withoutBuildx installs a docker whose `buildx version` fails, as a bare
+// docker does.
 func withoutBuildx(t *testing.T, s *stubs) {
 	t.Helper()
 	s.installScript(t, dockerBin, `case "$1" in
@@ -28,8 +28,8 @@ func withoutBuildx(t *testing.T, s *stubs) {
 esac`)
 }
 
-// withPodman installs a podman whose `buildx version` prints a version, which
-// is all the devcontainer CLI's BuildKit probe looks for.
+// withPodman installs a podman whose `buildx version` prints a version, enough
+// for the CLI's probe.
 func withPodman(t *testing.T, s *stubs) {
 	t.Helper()
 	s.installScript(t, podmanBin, `case "$1 $2" in
@@ -55,8 +55,7 @@ func TestBuildAndPushPassesPlatformAndPush(t *testing.T) {
 	for _, want := range [][]string{
 		{"--workspace-folder", "/projects/api"},
 		{"--image-name", "reg.example/dev/ws-api:latest"},
-		// The host is arm64 and the nodes are not. Without this the pod
-		// crash-loops with "exec format error".
+		// Nodes are amd64; an arm64 image crash-loops with "exec format error".
 		{"--platform", "linux/amd64"},
 	} {
 		if !hasPair(argv, want[0], want[1]) {
@@ -98,8 +97,8 @@ func TestBuildAndPushReportsFailure(t *testing.T) {
 	}
 }
 
-// The CLI rejects --platform and --push outright without BuildKit, so without
-// buildx the image is built locally and pushed with docker afterwards.
+// Without BuildKit the CLI refuses --platform and --push, so the push is done
+// with docker.
 func TestBuildAndPushWithoutBuildx(t *testing.T) {
 	s := newStubs(t)
 	s.installScript(t, devcontainerBin, "")
@@ -120,8 +119,8 @@ func TestBuildAndPushWithoutBuildx(t *testing.T) {
 	}
 }
 
-// Producing the wrong architecture silently is the worst outcome available: the
-// pod crash-loops with "exec format error", which says nothing about the build.
+// A wrong-architecture image crash-loops with "exec format error", far from the
+// build.
 func TestBuildAndPushRefusesCrossArchWithoutBuildx(t *testing.T) {
 	s := newStubs(t)
 	s.installScript(t, devcontainerBin, "")
@@ -136,7 +135,6 @@ func TestBuildAndPushRefusesCrossArchWithoutBuildx(t *testing.T) {
 	if err == nil {
 		t.Fatal("buildAndPush built for the wrong architecture without complaint")
 	}
-	// The message has to carry both ways out, or it is just a refusal.
 	if !strings.Contains(err.Error(), "buildx") || !strings.Contains(err.Error(), hostArch) {
 		t.Errorf("error %q does not say how to proceed", err)
 	}
@@ -151,9 +149,8 @@ func anyBuildCall(calls []string, substr string) bool {
 	return false
 }
 
-// podman satisfies the CLI's BuildKit probe, so --platform is available through
-// it. `podman buildx build` is an alias for `podman build`, which has no
-// --push, so the push is a separate step.
+// podman passes the CLI's BuildKit probe but has no --push, so it pushes
+// separately.
 func TestBuildAndPushPrefersPodmanOverAHostArchBuild(t *testing.T) {
 	s := newStubs(t)
 	s.installScript(t, devcontainerBin, "")
@@ -165,8 +162,6 @@ func TestBuildAndPushPrefersPodmanOverAHostArchBuild(t *testing.T) {
 		other = "arm64"
 	}
 
-	// The cross-architecture request is the point: without podman this would be
-	// refused outright.
 	err := buildAndPush(context.Background(), "/p", "", "reg.example/x:latest",
 		"linux/"+other, false, io.Discard)
 	if err != nil {
@@ -188,8 +183,8 @@ func TestBuildAndPushPrefersPodmanOverAHostArchBuild(t *testing.T) {
 	}
 }
 
-// Preferred for the single step, and because building Features under rootless
-// podman is known to fail on the bind mount the generated Dockerfile uses.
+// Rootless podman fails to build Features on the Dockerfile's bind mount
+// (devcontainers/cli#548).
 func TestBuildAndPushPrefersDockerBuildxOverPodman(t *testing.T) {
 	s := newStubs(t)
 	s.installScript(t, devcontainerBin, "")
@@ -208,8 +203,8 @@ func TestBuildAndPushPrefersDockerBuildxOverPodman(t *testing.T) {
 	}
 }
 
-// A version-free answer means the CLI's probe fails too, so --platform would be
-// refused; matching its rule is what keeps the two in agreement.
+// A version-free answer fails the CLI's probe too, so --platform would be
+// refused.
 func TestPodmanWithoutAVersionIsNotABuildKitBuilder(t *testing.T) {
 	s := newStubs(t)
 	withoutBuildx(t, s)
@@ -238,18 +233,8 @@ func fixture(t *testing.T, body string) string {
 	return dir
 }
 
-// requireRealCLI skips unless the devcontainer CLI is installed, and puts a
-// stub docker in front of whatever else is on PATH.
-//
-// These tests read the CLI's real output rather than a recorded copy, because
-// the shape is undocumented and is not what it looks like from the outside: the
-// merged configuration uses plural names holding arrays, and reports a null
-// workspaceFolder when the project does not set one.
-//
-// The stub keeps that hermetic. Reading a configuration makes the CLI run
-// `docker ps` to look for an existing container, and "no container" is exactly
-// the answer these tests want — so a docker that exits 0 saying nothing is
-// better here than a real one.
+// requireRealCLI skips without the devcontainer CLI and stubs docker.
+// The CLI's merged output is undocumented, so these tests read the real thing.
 func requireRealCLI(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath(devcontainerBin); err != nil {
@@ -258,17 +243,12 @@ func requireRealCLI(t *testing.T) {
 
 	host := os.Getenv("PATH")
 	s := newStubs(t)
-	// The stub directory still wins, but the host's PATH goes back on the end:
-	// this is the one test that wants the real CLI, and the CLI is a node
-	// program that has to be able to find node.
+	// The host PATH follows the stub dir: the CLI is a node program and needs
+	// node.
 	t.Setenv("PATH", os.Getenv("PATH")+string(os.PathListSeparator)+host)
 
-	// Told nothing about the image, the CLI fetches its metadata from the
-	// registry instead, which makes `make test` need the network and fail with
-	// "Unexpected end of JSON input" wherever a registry is unreachable or
-	// rate-limiting. One inspect answer keeps the whole thing local. The
-	// fields are the shape of `docker inspect`, not the image's real values:
-	// read-configuration never looks at them.
+	// With no inspect answer the CLI fetches image metadata from the registry,
+	// which fails offline.
 	s.installScript(t, dockerBin, `case "$1 $2" in
   "inspect --type")
     printf '%s' '[{"Id":"sha256:0000000000000000000000000000000000000000000000000000000000000000","Config":{"Env":[],"Labels":{},"User":""},"Architecture":"arm64","Os":"linux"}]'
@@ -309,7 +289,6 @@ func TestReadConfigurationAgainstTheRealCLI(t *testing.T) {
 		t.Errorf("remoteEnv did not survive: %v", dev.ContainerEnv)
 	}
 
-	// Each of the three legal shapes reaches the right bucket, still encoded.
 	if len(lc.OnCreate) != 1 || !strings.Contains(string(lc.OnCreate[0]), "echo on") {
 		t.Errorf("OnCreate = %v", lc.OnCreate)
 	}
@@ -321,8 +300,8 @@ func TestReadConfigurationAgainstTheRealCLI(t *testing.T) {
 	}
 }
 
-// The merged configuration reports workspaceFolder as null when the project
-// does not set one, which is the common case.
+// The CLI reports workspaceFolder as null when unset, so this checks its own
+// default.
 func TestReadConfigurationDefaultsTheWorkspaceFolder(t *testing.T) {
 	requireRealCLI(t)
 
@@ -338,8 +317,8 @@ func TestReadConfigurationDefaultsTheWorkspaceFolder(t *testing.T) {
 	}
 }
 
-// The CLI shells out to `docker ps` even to read a configuration, and fails
-// with "spawn docker ENOENT" otherwise. Naming the tool beats relaying that.
+// The CLI runs `docker ps` even to read a configuration; name docker rather
+// than relay ENOENT.
 func TestReadConfigurationNamesMissingDocker(t *testing.T) {
 	s := newStubs(t)
 	s.install(t, devcontainerBin, "{}", 0) // present, so docker is what is missing
@@ -366,8 +345,8 @@ func TestMergeEnvPrefersRemoteEnv(t *testing.T) {
 	}
 }
 
-// The real failure this replaces: podman reported "exit status 125" for a
-// registry that had simply never been logged in to.
+// podman exits 125 on an unauthenticated registry; the error must name the
+// login command.
 func TestPushRejectionNamesTheLoginCommand(t *testing.T) {
 	s := newStubs(t)
 	s.installScript(t, devcontainerBin, "")
@@ -392,7 +371,6 @@ esac`)
 	}
 }
 
-// A failure that is not about credentials must not be reported as one.
 func TestPushFailureQuotesTheRegistry(t *testing.T) {
 	s := newStubs(t)
 	s.installScript(t, devcontainerBin, "")
@@ -432,9 +410,8 @@ func TestRegistryHost(t *testing.T) {
 	}
 }
 
-// The k8s provider reads the configuration and builds the image through the
-// same CLI, so both have to be told where the configuration is: a generated one
-// lives in a temporary directory, not in the folder.
+// A generated configuration lives in a temp dir, so --config must be passed to
+// both calls.
 func TestReadConfigurationPassesTheConfigPath(t *testing.T) {
 	s := newStubs(t)
 	s.install(t, devcontainerBin, `{"configuration":{},"mergedConfiguration":{}}`, 0)

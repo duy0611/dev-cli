@@ -1,17 +1,7 @@
-// Package audit appends a record of what dev did to a file on the host.
-//
-// The file lives beside the database, out of every container's reach, so an
-// agent that wants to hide what it did cannot edit the record of it. It is a
-// log rather than a table: it only grows, it is read rarely and whole, and it
-// must outlive `workspace remove` and the cascade that comes with it — which a
-// table hanging off containers would not.
-//
-// It is accountability, not enforcement. A record that cannot be written warns
-// and the command carries on: a full disk must not stop an agent mid-task.
-//
-// Names, never values. A record carries setting names, argv the operator typed,
-// and identifiers — never a resolved setting, an environment value or a token.
-// That is invariant 3 extended to one more file, and a test holds it.
+// Package audit appends a record of what dev did to a log beside the database,
+// out of every container's reach. Records hold names, argv and identifiers,
+// never setting values or tokens. A record that cannot be written warns and the
+// command carries on.
 package audit
 
 import (
@@ -27,11 +17,8 @@ import (
 // FileName is the log's name inside the state directory.
 const FileName = "audit.jsonl"
 
-// maxLine bounds one record. Linux guarantees a single O_APPEND write(2) to a
-// regular file is not interleaved with another process's, and in practice that
-// holds for writes far larger than this; the bound is there so that one record
-// carrying a pasted megabyte of argv cannot make the file unreadable line by
-// line. A record over it has its argv dropped and says so.
+// maxLine bounds one record. Concurrent dev processes rely on a single O_APPEND
+// write not interleaving, which holds in practice below this size.
 const maxLine = 16 << 10
 
 // Record is one event. Fields that do not apply to an event are left zero and
@@ -44,21 +31,17 @@ type Record struct {
 	Dev       string    `json:"dev"`
 	User      string    `json:"user,omitempty"`
 
-	// Fields holds the event's own fields. A map rather than a struct per
-	// event: the reader treats records as data, and a new event should not
-	// need a new type in two places.
+	// Fields holds the event's own fields, flattened into the line.
 	Fields map[string]any `json:"-"`
 
 	Truncated bool `json:"truncated,omitempty"`
 }
 
-// MarshalJSON flattens Fields into the record, so a line reads as one object
-// rather than one object with the interesting part nested inside it.
+// MarshalJSON flattens Fields into the top level of the line.
 func (r Record) MarshalJSON() ([]byte, error) {
 	out := make(map[string]any, len(r.Fields)+7)
 	maps.Copy(out, r.Fields)
-	// The common fields are written last, so an event field that happens to
-	// share a name cannot overwrite them.
+	// Written last, so an event field cannot overwrite a common one.
 	out["time"] = r.Time.UTC().Format(time.RFC3339Nano)
 	out["event"] = r.Event
 	out["dev"] = r.Dev
@@ -82,15 +65,13 @@ type Log struct {
 	path    string
 	version string
 	user    string
-	// warn reports a failed write. Once per Log: a command that writes several
-	// records to a full disk says so once, not once per record.
+	// warn reports a failed write, once per Log.
 	warn   func(error)
 	warned bool
 }
 
-// Open returns a Log appending to FileName in dir. Nothing is opened yet: the
-// file is created on the first record, so a command that records nothing
-// leaves nothing behind.
+// Open returns a Log appending to FileName in dir. The file is created on the
+// first record.
 func Open(dir, version string, warn func(error)) *Log {
 	name := ""
 	if u, err := user.Current(); err == nil {
@@ -107,7 +88,7 @@ func Open(dir, version string, warn func(error)) *Log {
 // Path is where the log is written.
 func (l *Log) Path() string { return l.path }
 
-// Record appends one event. It never returns an error: see the package doc.
+// Record appends one event. Failures are warned about, never returned.
 func (l *Log) Record(event, workspace, container string, fields map[string]any) {
 	if l == nil {
 		return
@@ -132,9 +113,7 @@ func (l *Log) append(r Record) error {
 		return err
 	}
 
-	// 0700 to match what store.Open makes, for the same reason: the log says a
-	// good deal about what the operator works on. Created here as well as
-	// there because the log may be written before the database is opened.
+	// 0700, as store.Open: the log may be written before the database exists.
 	if err := os.MkdirAll(filepath.Dir(l.path), 0o700); err != nil {
 		return err
 	}

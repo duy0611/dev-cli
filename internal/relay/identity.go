@@ -10,31 +10,20 @@ import (
 	"time"
 )
 
-// The two agent protocol messages needed to list identities (RFC 4251 §5 wire
-// format, draft-miller-ssh-agent). Asking the agent directly rather than
-// shelling out to `ssh-add -L`: that binary is not guaranteed to be on the
-// host's PATH, and parsing its output would be a second format to get wrong.
+// The agent protocol messages for listing identities. The agent is asked
+// directly, since ssh-add is not guaranteed to be on the host's PATH.
 const (
 	agentRequestIdentities = 11
 	agentIdentitiesAnswer  = 12
 )
 
-// identityTimeout bounds the exchange. A wedged or hostile agent must not hang
-// a command that was only going to sign a commit.
+// identityTimeout bounds the exchange, so a wedged agent cannot hang the
+// command.
 const identityTimeout = 5 * time.Second
 
 // SigningKey returns the first public key the host's agent holds, in the
-// `key::ssh-ed25519 AAAA...` form git wants for user.signingkey.
-//
-// The first, because an agent gives no indication which of its keys the
-// operator would want to sign with, and asking would be a question most people
-// have one answer to. An agent holding several may sign with one the forge does
-// not know, which shows up as an unverified commit rather than a failure.
-//
-// The `key::` prefix is not optional: without it git reads the value as a
-// *filename* and fails looking for a key file that does not exist. A bare
-// `ssh-...` value is accepted as a deprecated spelling, but the explicit prefix
-// is what the documentation asks for.
+// `key::ssh-ed25519 AAAA...` form git wants for user.signingkey. The `key::`
+// prefix matters: without it git reads the value as a filename.
 func SigningKey(agentSocket string) (string, error) {
 	conn, err := net.DialTimeout("unix", agentSocket, identityTimeout)
 	if err != nil {
@@ -56,7 +45,7 @@ func SigningKey(agentSocket string) (string, error) {
 		return "", errors.New("the ssh agent gave an unexpected answer when asked for its keys")
 	}
 
-	// uint32 count, then per key: a string blob and a string comment.
+	// Count, then per key a blob and a comment; only the first key is used.
 	if binary.BigEndian.Uint32(reply[1:5]) == 0 {
 		return "", errors.New("the ssh agent holds no keys; add one with: ssh-add")
 	}
@@ -65,8 +54,7 @@ func SigningKey(agentSocket string) (string, error) {
 		return "", fmt.Errorf("reading the ssh agent's keys: %w", err)
 	}
 
-	// The key's own type name is the first string inside the blob, and it is
-	// also the prefix of the authorized_keys form git expects.
+	// The key type is the first string inside the blob.
 	algo, _, err := readString(blob)
 	if err != nil {
 		return "", fmt.Errorf("reading the ssh agent's keys: %w", err)

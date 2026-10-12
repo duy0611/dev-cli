@@ -16,40 +16,32 @@ import (
 	"github.com/duy0611/dev-cli/internal/store"
 )
 
-// target is everything a container command needs: the record, the provider
-// that runs it, and the workspace it belongs to.
+// target is what a container command needs: the record, its provider and its
+// workspace.
 type target struct {
 	container model.Container
 	workspace model.Workspace
 	provider  provider.Provider
-	// cleanup removes whatever resolve had to write to disk for this
-	// container, which is the generated configuration and nothing else. Every
-	// caller defers release; see materialise.
+	// cleanup removes the generated configuration written for this container.
 	cleanup func()
-	// overrideErr is a failure to build the merged devcontainer.json, held
-	// rather than returned. The commands that drive up or exec surface it
-	// through requireOverride; the ones that do not need it carry on, so a
-	// project file that does not parse never strands a container in the engine.
+	// overrideErr is a failed merged-config build, held so only the commands
+	// that drive up or exec fail on it.
 	overrideErr error
 	// gitGuard is how this invocation keeps host git from running what the
-	// container writes; see planGitGuard. Zero for an unguarded container.
+	// container writes.
 	gitGuard gitGuardPlan
 }
 
-// release removes anything resolve wrote for this container. Safe on a nil
-// cleanup, so every caller can defer it without checking.
+// release removes what resolve wrote for this container. Safe on a nil cleanup.
 func (t *target) release() {
 	if t != nil && t.cleanup != nil {
 		t.cleanup()
 	}
 }
 
-// requireOverride reports a deferred overlay failure, recording it in the
-// audit log when it is the git guard refusing.
-//
-// Called by every path that drives up or exec, and by no other: those are the
-// commands that need the merged document, and starting a container without it
-// would silently leave the agents' state volume unmounted.
+// requireOverride reports a deferred overlay failure, recording a git-guard
+// refusal in the audit log. Called only by commands that drive up or exec:
+// starting without the merged document would leave the state volume unmounted.
 func (t *target) requireOverride(a *app) error {
 	return a.recordRefusal(t.container, t.overrideErr)
 }
@@ -60,8 +52,8 @@ func overridesConfig(p provider.Provider) bool {
 	return ok
 }
 
-// resolve looks up a container by name in the given workspace (or the active
-// one) and builds its provider.
+// resolve finds a container by name in the workspace, or the active one, and
+// builds its provider.
 func (a *app) resolve(ctx context.Context, workspace, name string) (*target, error) {
 	wsName, err := a.workspaceName(workspace)
 	if err != nil {
@@ -89,18 +81,15 @@ func (a *app) resolve(ctx context.Context, workspace, name string) (*target, err
 		return nil, err
 	}
 
-	// Before materialise, which merges the git guard's mounts in. Not seeded —
-	// the hooks copy is reset at create and rebuild only, so an exec does not
-	// throw away what the container did.
-	// Deferred like an overlay failure: stop, remove and logs never need it.
+	// Before materialise, which merges these mounts in. Not seeded: exec must
+	// not reset the hooks copy. Deferred on failure, like an overlay error.
 	plan, planErr := a.planGitGuard(ctx, c, c.WorktreeRepo, false, overridesConfig(p))
 	if planErr == nil && overridesConfig(p) {
 		c.GitGuardMounts = plan.mounts
 	}
 
-	// Done here rather than in each command: every provider call needs a
-	// container whose ConfigPath a child process can open, and a command that
-	// forgot would fail only for generated containers.
+	// Every provider call needs a ConfigPath a child process can open, so this
+	// runs here, not per command.
 	c, cleanup, err := materialise(c, overridesConfig(p))
 	if err == nil {
 		err = planErr
@@ -109,30 +98,16 @@ func (a *app) resolve(ctx context.Context, workspace, name string) (*target, err
 		if !isOverlayError(err) {
 			return nil, err
 		}
-		// Deferred, not fatal. See target.overrideErr.
 		return &target{container: c, workspace: ws, provider: p, cleanup: cleanup,
 			overrideErr: err}, nil
 	}
 	return &target{container: c, workspace: ws, provider: p, cleanup: cleanup, gitGuard: plan}, nil
 }
 
-// materialise gives a container a config path a child process can open.
-//
-// A generated configuration lives in the database, and the devcontainer CLI
-// takes a path and nothing else — so it becomes a file for the length of one
-// invocation. Written into a .devcontainer directory because the CLI reads the
-// layout around the file, and named devcontainer.json because it rejects any
-// other filename outright.
-//
-// For a folderless container, the temporary directory holding the configuration
-// is also supplied as the workspace folder, since the CLI requires one and the
-// container has no host directory.
-//
-// The returned cleanup is always safe to call, including for a project-owned
-// container where nothing was written.
-//
-// overrides says whether this container's provider consumes a merged
-// devcontainer.json. False for Kubernetes, which builds its own pod spec.
+// materialise gives a container a config path a child process can open. A
+// generated document is written to a temporary .devcontainer/devcontainer.json
+// for one invocation: the CLI reads the layout around the file and rejects any
+// other name. overrides is false for k8s, which builds its own spec.
 func materialise(c model.Container, overrides bool) (model.Container, func(), error) {
 	if c.GeneratedConfig == "" {
 		return overlayProjectConfig(c, overrides)
@@ -144,9 +119,8 @@ func materialise(c model.Container, overrides bool) (model.Container, func(), er
 	}
 	cleanup := func() { _ = os.RemoveAll(dir) }
 
-	// 0700 on the directory and 0600 on the file: the configuration says what
-	// the operator is building, and on a shared host that is nobody else's
-	// business.
+	// 0700 directory and 0600 file: the configuration describes the operator's
+	// build.
 	nested := filepath.Join(dir, ".devcontainer")
 	if err := os.MkdirAll(nested, 0o700); err != nil {
 		cleanup()
@@ -154,10 +128,8 @@ func materialise(c model.Container, overrides bool) (model.Container, func(), er
 	}
 	path := filepath.Join(nested, "devcontainer.json")
 	doc := []byte(c.GeneratedConfig)
-	// The git guard's mounts depend on where the project's .git is today, so
-	// they are added per invocation rather than baked into the stored copy —
-	// which rewriteGeneratedTools would otherwise have to re-derive (invariant
-	// 10's trap).
+	// Added per invocation, not stored, so rewriteGeneratedTools need not
+	// re-derive them.
 	if len(c.GitGuardMounts) > 0 {
 		var err error
 		if doc, err = dcgen.AppendMounts(doc, c.GitGuardMounts); err != nil {
@@ -170,11 +142,9 @@ func materialise(c model.Container, overrides bool) (model.Container, func(), er
 		return c, func() {}, fmt.Errorf("writing the generated config: %w", err)
 	}
 
-	// A folderless container has no host directory, but the devcontainer CLI
-	// takes --workspace-folder on every invocation and the k8s provider uses
-	// it as a build context. The temporary directory holding the configuration
-	// serves as both: it exists, it is empty, and the generated document names
-	// an explicit workspaceFolder so nothing downstream depends on its name.
+	// A folderless container has no host folder, but the CLI needs
+	// --workspace-folder. The temporary directory serves; the document names
+	// workspaceFolder explicitly so the name does not matter.
 	if c.SourceKind == model.SourceNone {
 		c.Source = dir
 	}
@@ -183,20 +153,11 @@ func materialise(c model.Container, overrides bool) (model.Container, func(), er
 	return c, cleanup, nil
 }
 
-// overlayProjectConfig merges dev's state mount, and a worktree's bind mounts
-// when the container is one, into a project's own devcontainer.json for the
-// length of one invocation.
-//
-// Per invocation rather than stored: a project-owned container picks up edits
-// to its own devcontainer.json today because the CLI reads the live file, and a
-// merge cached at create would freeze a snapshot — add a feature, rebuild, and
-// get the document as it stood weeks ago with no error to explain it.
-// GeneratedConfig is the wrong home for a second reason: rewriteGeneratedTools
-// re-renders it from the tool list and would destroy a project-derived copy.
-//
-// Nothing is written for a container that neither persists state nor is
-// worktree-backed, has no config of its own, or runs on a provider that
-// ignores a document's mounts.
+// overlayProjectConfig merges dev's state mount, and a worktree's bind mounts,
+// into a project's devcontainer.json for one invocation. Nothing is stored: a
+// stored copy would freeze the project's edits, and GeneratedConfig is
+// re-rendered over by rewriteGeneratedTools. Writes nothing when neither
+// applies.
 func overlayProjectConfig(c model.Container, overrides bool) (model.Container, func(), error) {
 	needsWorktree := c.WorktreeRepo != ""
 	needsGuard := len(c.GitGuardMounts) > 0
@@ -210,9 +171,8 @@ func overlayProjectConfig(c model.Container, overrides bool) (model.Container, f
 		return c, func() {}, &overlayError{fmt.Errorf("reading %s: %w", c.ConfigPath, err)}
 	}
 
-	// An isolated container's workspace is a volume, whatever the project's
-	// own document says: a project that binds ${localWorkspaceFolder} would
-	// otherwise mount the operator's folder live.
+	// An isolated workspace is a volume, whatever the project binds, so a
+	// ${localWorkspaceFolder} bind cannot expose the operator's folder.
 	if isolated {
 		merged, err = dcgen.OverlayIsolatedWorkspace(merged, dcgen.Mount{
 			Volume: local.VolumeName(c.WorkspaceName, c.Name),
@@ -222,9 +182,8 @@ func overlayProjectConfig(c model.Container, overrides bool) (model.Container, f
 			return c, func() {}, &overlayError{fmt.Errorf("merging %s: %w", c.ConfigPath, err)}
 		}
 	}
-	// Applied before the state mount so both end up in one document: a
-	// worktree container that also persists state needs all three bind mounts,
-	// and each merge round-trips whatever the previous one produced.
+	// Before the state mount, so both land in one document: each merge keeps
+	// the previous output.
 	if needsWorktree {
 		merged, err = dcgen.OverlayWorktree(merged, c.WorktreeRepo, c.Source)
 		if err != nil {
@@ -232,8 +191,8 @@ func overlayProjectConfig(c model.Container, overrides bool) (model.Container, f
 		}
 	}
 	if c.PersistState {
-		// The same helper the generated document uses, so the volume has one
-		// spelling across create, up and remove.
+		// The same helper as the generated document, so the volume has one
+		// spelling.
 		merged, err = dcgen.Overlay(merged, dcgen.State{
 			Volume: local.StateVolumeName(c.WorkspaceName, c.Name),
 		})
@@ -241,8 +200,8 @@ func overlayProjectConfig(c model.Container, overrides bool) (model.Container, f
 			return c, func() {}, &overlayError{fmt.Errorf("merging %s: %w", c.ConfigPath, err)}
 		}
 	}
-	// Last, and after the worktree binds: the guard's mounts sit inside the
-	// .git directory those binds bring in, and docker applies mounts in order.
+	// Last: the guard's mounts sit inside the .git the worktree binds bring in,
+	// and docker applies mounts in order.
 	if needsGuard {
 		merged, err = dcgen.OverlayMounts(merged, c.GitGuardMounts)
 		if err != nil {
@@ -256,9 +215,8 @@ func overlayProjectConfig(c model.Container, overrides bool) (model.Container, f
 	}
 	cleanup := func() { _ = os.RemoveAll(dir) }
 
-	// Flat rather than inside a .devcontainer directory: --override-config takes
-	// a document, while --config is what names the project's own file and keeps
-	// its path anchoring. 0600 for the reason the generated config uses it.
+	// Flat, since --override-config takes a document and --config keeps the
+	// project file's path anchoring. 0600 as for the generated one.
 	path := filepath.Join(dir, "devcontainer.json")
 	if err := os.WriteFile(path, merged, 0o600); err != nil {
 		cleanup()
@@ -286,16 +244,9 @@ func (a *app) providerFor(ws model.Workspace) (provider.Provider, error) {
 	return provider.New(rec)
 }
 
-// containerEnv resolves the workspace's settings into environment variables,
-// with the variables pointing agents at the state volume underneath.
-//
-// Done per invocation rather than cached at create, so a rotated secret is
-// picked up by the next command with no rebuild and no restart.
-//
-// Takes the container rather than a flag so that no command can forget the
-// state variables: a generated document also carries them in containerEnv, but
-// a project-owned one has no document for dev to put them in, and they would
-// otherwise reach only half the containers.
+// containerEnv resolves the workspace's settings and the state variables into
+// environment variables. Per invocation, so a rotated secret needs no restart.
+// Taken from the container, so no command can omit the state variables.
 func (a *app) containerEnv(ctx context.Context, c model.Container) ([]provider.EnvVar, error) {
 	st, err := a.store()
 	if err != nil {
@@ -313,9 +264,7 @@ func (a *app) containerEnv(ctx context.Context, c model.Container) ([]provider.E
 		return environ, nil
 	}
 
-	// First, so an explicit workspace setting of the same name still wins: the
-	// same precedence env.Assemble gives the git identity, and for the same
-	// reason — this is a default the operator may have a better answer for.
+	// First, so an explicit workspace setting of the same name still wins.
 	out := make([]provider.EnvVar, 0, len(environ)+len(dcgen.StateEnv()))
 	defined := make(map[string]bool, len(environ))
 	for _, e := range environ {
@@ -330,8 +279,8 @@ func (a *app) containerEnv(ctx context.Context, c model.Container) ([]provider.E
 	return append(out, environ...), nil
 }
 
-// requireRunning starts nothing; it reports the state in the terms the operator
-// needs to act on.
+// requireRunning reports a stopped container in terms the operator can act on,
+// without starting it.
 func (a *app) requireRunning(ctx context.Context, t *target) error {
 	status, err := t.provider.Status(ctx, t.container)
 	if err != nil {

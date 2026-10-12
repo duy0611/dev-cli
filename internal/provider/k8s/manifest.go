@@ -11,28 +11,14 @@ import (
 	"github.com/duy0611/dev-cli/internal/provider"
 )
 
-// Manifests are hand-rolled structs rather than client-go types. The whole
-// provider is a kubectl adapter, so the only thing needed is JSON of the right
-// shape; client-go would add a very large dependency to produce the same bytes.
-
-// Annotation keys on the Deployment.
 const (
-	// annRebuiltAt changes on every rebuild. The image tag never does, so
-	// without something in the pod template changing there is no new
-	// ReplicaSet, and the cluster keeps running the image it already has.
+	// annRebuiltAt changes on every rebuild. The image tag never does, so only
+	// a changed pod template starts a new ReplicaSet.
 	annRebuiltAt = "dev.rebuilt-at"
 )
 
-// Volume layout inside the pod. Two subPaths on one PVC, not one.
-//
-// Home has to persist or "postCreate runs once" is a lie: scaling to 0 and back
-// gives a fresh container filesystem, so a postCreate that installed something
-// into ~/.local or wrote ~/.gitconfig would be silently undone by every stop.
-//
-// A third subPath carries the agents' configuration when the container asks for
-// it. On the same claim rather than a claim of its own: it is deleted with the
-// container either way, and a second ReadWriteOnce claim would be a second thing
-// to schedule around for no gain.
+// Home must persist: scaling to 0 gives a fresh container filesystem, so
+// anything postCreate wrote to ~ would be lost on every stop.
 const (
 	volumeName        = "workspace"
 	subPathWorkspace  = "workspace"
@@ -58,12 +44,9 @@ func (d DevConfig) HomeDir() string {
 	}
 }
 
-// mounts is what the pod mounts off the claim.
-//
-// Only whether the container persists state is read here, never the volume name
-// the generated document carries: that names a docker volume, which means
-// nothing to a cluster. The same asymmetry as workspaceMount, which this
-// provider also ignores.
+// mounts is what the pod mounts off the claim. Only PersistState is read from
+// the container: its generated volume is a docker volume, meaningless to a
+// cluster.
 func mounts(in manifestInput) []volumeMount {
 	out := []volumeMount{
 		{Name: volumeName, MountPath: in.Dev.WorkspaceFolder, SubPath: subPathWorkspace},
@@ -123,9 +106,8 @@ func buildPVC(in manifestInput) pvc {
 			Annotations: annotations(in.Container),
 		},
 		Spec: pvcSpec{
-			// One pod at a time by design — the Deployment is Recreate and
-			// scales 0 or 1 — so ReadWriteOnce is what every cluster can
-			// provide.
+			// ReadWriteOnce is the one mode every cluster provides; the
+			// Deployment runs one pod.
 			AccessModes: []string{"ReadWriteOnce"},
 			Resources:   pvcResources{Requests: map[string]string{"storage": in.Config.StorageSize}},
 		},
@@ -147,16 +129,12 @@ type secret struct {
 	StringData map[string]string `json:"stringData"`
 }
 
-// buildSecret holds the resolved workspace settings.
-//
-// stringData rather than data, so the values are not base64-encoded here and
-// the API server does that itself. It changes nothing about how exposed they
-// are — a Secret is base64, not encryption — but it keeps this code from
-// pretending otherwise.
+// buildSecret holds the resolved workspace settings. stringData, so the API
+// server does the base64 encoding.
 func buildSecret(in manifestInput) secret {
 	data := make(map[string]string, len(in.Env)+len(in.Dev.ContainerEnv))
-	// The devcontainer.json's own containerEnv first, so a workspace setting of
-	// the same name wins — the same precedence the local provider gives.
+	// containerEnv first, so a workspace setting of the same name wins, as on
+	// local.
 	for k, v := range in.Dev.ContainerEnv {
 		data[k] = v
 	}
@@ -219,13 +197,11 @@ type localObjectRef struct {
 }
 
 type podSecurityCtx struct {
-	// FSGroup makes the PVC group-writable by the pod, which is what lets a
-	// non-root remoteUser write to a volume the cluster provisions as root.
+	// FSGroup makes the PVC group-writable, so a non-root remoteUser can write
+	// to it.
 	FSGroup int `json:"fsGroup"`
-	// SeccompProfile asks for the runtime's default syscall filter. Docker
-	// applies one to every local container unasked; a pod runs unconfined
-	// unless it says otherwise, which would leave the experimental provider
-	// the less contained of the two for no reason.
+	// A pod runs unconfined unless asked, so RuntimeDefault matches local
+	// containers.
 	SeccompProfile seccompProfile `json:"seccompProfile"`
 }
 
@@ -262,8 +238,8 @@ type pvcVolumeSrc struct {
 	ClaimName string `json:"claimName"`
 }
 
-// defaultFSGroup is an arbitrary non-root group shared by the pod and the
-// volume. Any fixed value works; what matters is that it is the same on both.
+// defaultFSGroup is the group shared by the pod and its volume. Any value
+// works, as long as both sides use it.
 const defaultFSGroup = 1000
 
 func buildDeployment(in manifestInput) deployment {
@@ -283,9 +259,8 @@ func buildDeployment(in manifestInput) deployment {
 		Spec: deploymentSpec{
 			Replicas: in.Replicas,
 			Selector: labelSelector{MatchLabels: labels(in.Container)},
-			// Recreate, not RollingUpdate: the PVC is ReadWriteOnce, so a
-			// rollout that briefly runs two pods would leave the new one
-			// unschedulable waiting for a volume the old one still holds.
+			// Recreate, not RollingUpdate: a second pod could not mount the
+			// ReadWriteOnce PVC.
 			Strategy: deploymentStrat{Type: "Recreate"},
 			Template: podTemplate{
 				Metadata: objectMeta{
@@ -301,21 +276,15 @@ func buildDeployment(in manifestInput) deployment {
 					Containers: []containerSpec{{
 						Name:  containerNameMain,
 						Image: in.Image,
-						// The tag is always :latest, so without this the node
-						// keeps serving whatever it cached and a rebuild has no
-						// visible effect.
+						// The tag is always :latest, so without Always a node
+						// serves its cached image.
 						ImagePullPolicy: "Always",
-						// The image's own entrypoint is whatever the project
-						// needs at runtime; a devcontainer just has to stay up.
-						// A loop rather than `sleep infinity`, which busybox
-						// does not accept.
+						// Loop, not `sleep infinity`, which busybox rejects.
 						//
-						// The trap is not decoration. This runs as PID 1, and
-						// PID 1 ignores signals it has no handler for — so
-						// without it a stop waits out the whole termination
-						// grace period and only then SIGKILLs. `sleep &` plus
-						// `wait` is what lets the trap run: a foreground sleep
-						// would not be interrupted.
+						// This is PID 1, which ignores signals without a
+						// handler, so the trap is what lets a stop finish
+						// before the grace period ends. The backgrounded sleep
+						// and wait let the trap run mid-sleep.
 						Command: []string{"sh", "-c",
 							"trap 'exit 0' TERM INT; while :; do sleep 3600 & wait $!; done"},
 						WorkingDir:   in.Dev.WorkspaceFolder,
@@ -338,9 +307,7 @@ func buildDeployment(in manifestInput) deployment {
 
 // --- assembly -------------------------------------------------------------------
 
-// buildManifest renders the three objects as a single List, so one apply
-// creates them in one call and either all or none of the command's intent
-// reaches the cluster.
+// buildManifest renders the three objects as one List, applied in one call.
 func buildManifest(in manifestInput) ([]byte, error) {
 	if in.Image == "" {
 		return nil, fmt.Errorf("no image for container %s", in.Container.Name)
@@ -348,10 +315,8 @@ func buildManifest(in manifestInput) ([]byte, error) {
 	if in.Dev.WorkspaceFolder == "" {
 		return nil, fmt.Errorf("no workspaceFolder for container %s", in.Container.Name)
 	}
-	// One mount point nested inside another would mount one subPath over the
-	// other, and which one wins is not something to leave to chance. Checked
-	// over every pair rather than the one that used to exist, so the state
-	// mount cannot shadow the workspace or the home directory either.
+	// A nested mount point shadows its parent's subPath; check every pair,
+	// state included.
 	paths := mounts(in)
 	for i, a := range paths {
 		for _, b := range paths[i+1:] {

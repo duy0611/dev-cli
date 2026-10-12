@@ -18,12 +18,8 @@ import (
 	"github.com/duy0611/dev-cli/internal/seed"
 )
 
-// The two binaries this provider drives.
-//
-// docker rather than the Docker Go SDK: DOCKER_HOST already points the CLI at
-// whichever engine is running (podman's socket included), the SDK would be a
-// large dependency for four commands, and shelling out keeps one story for both
-// providers — the Kubernetes one will drive kubectl the same way.
+// The two binaries this provider drives. docker is used through its CLI, not
+// the Go SDK, so DOCKER_HOST picks the engine, podman's socket included.
 const (
 	devcontainerBin = "devcontainer"
 	dockerBin       = "docker"
@@ -42,8 +38,7 @@ func init() {
 // devcontainer.json. See provider.ConfigOverrider.
 func (p *Provider) OverridesConfig() {}
 
-// Up creates or starts the container. The devcontainer CLI treats this as one
-// operation, so there is no separate create.
+// Up creates or starts the container. The CLI does both in one call.
 func (p *Provider) Up(ctx context.Context, c model.Container, env []provider.EnvVar) error {
 	return p.up(ctx, c, env, false, false)
 }
@@ -60,14 +55,11 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 		return err
 	}
 
-	// An isolated container's workspace is a volume that starts empty, and the
-	// project's lifecycle hooks — postCreate is usually "install what this
-	// needs" — need the project in it. So on first create the hooks are held
-	// back until the folder is seeded. The CLI writes no marker for a hook
-	// skipped this way, so run-user-commands then runs each of them once.
-	// A recreate keeps the volume, and the work in it, so it is never seeded
-	// again: seeding unpacks over the workspace and would destroy what an
-	// agent had half-done.
+	// An isolated workspace volume starts empty, so on first create the
+	// lifecycle hooks are skipped and run after seeding. The CLI writes no
+	// marker for a skipped hook, so run-user-commands runs each once. A
+	// recreate is never seeded: seeding unpacks over the workspace and would
+	// destroy agent work.
 	seeding := false
 	if c.Mode == model.ModeIsolated && !recreate {
 		id, err := p.containerID(ctx, c)
@@ -79,22 +71,14 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 
 	args := []string{"up", "--workspace-folder", c.Source}
 	args = append(args, idLabelArgs(c)...)
-	// The config path is passed rather than inferred. A generated one lives in
-	// a temporary directory the CLI's own lookup would never reach, and for a
-	// project-owned one this is the path dcconfig already resolved.
+	// Passed explicitly: a generated config lives in a temporary directory the
+	// CLI's own lookup never reaches.
 	if c.ConfigPath != "" {
 		args = append(args, "--config", c.ConfigPath)
 	}
-	// The project's own document with dev's state mount merged into it, built
-	// per invocation by materialise. --override-config *replaces* the document
-	// rather than deep-merging it, which is why the merge happens in dev rather
-	// than being left to the CLI.
-	//
-	// Passed here and in execArgs both: unlike --mount, which existed only on
-	// up, this flag exists on both commands — so the two paths finally describe
-	// the same container rather than one of them quietly omitting the volume.
-	// --config stays alongside; both are accepted, and it is what keeps a
-	// relative "dockerfile" anchored to the project.
+	// --override-config replaces the document rather than merging, so dev does
+	// the merge. --config stays alongside: it anchors a relative "dockerfile"
+	// to the project.
 	if c.OverrideConfigPath != "" {
 		args = append(args, "--override-config", c.OverrideConfigPath)
 	}
@@ -110,9 +94,8 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 	args = append(args, remoteEnvArgs(env)...)
 
 	cmd := exec.CommandContext(ctx, devcontainerBin, args...)
-	// `up` prints a JSON result line on success and progress on stderr. The
-	// progress is worth showing — an image build is minutes of silence
-	// otherwise — but the JSON is noise, so stdout is swallowed.
+	// stdout is the JSON result, which is noise. Progress on stderr is kept,
+	// since an image build is minutes of silence otherwise.
 	cmd.Stdout = io.Discard
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -130,22 +113,15 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 	return p.runUserCommands(ctx, c, env)
 }
 
-// seedWorkspace copies an isolated container's folder into its workspace
-// volume: the working tree as it is on the host, and the repository rebuilt
-// from a bundle so that nothing of the host's .git — its config, its hooks —
-// comes along. See internal/seed.
-//
-// Reachable only from up, and only on first create, for the k8s provider's
-// reason: it unpacks over the workspace.
+// seedWorkspace copies the folder into the workspace volume, with the
+// repository rebuilt from a bundle so no host .git config or hooks come along.
+// Only up on first create calls it, since it unpacks over the workspace.
 func (p *Provider) seedWorkspace(ctx context.Context, c model.Container) error {
 	folder := WorkspaceFolder(c.Name)
 
-	// The volume is created root-owned and gets no UID remapping, and the
-	// chown that fixes that for a folderless container is a postCreateCommand
-	// — which the seeding up has held back. So the folder is handed to the
-	// remote user here, before anything is unpacked as that user. Guarded by a
-	// writability test, as claimStateDir is, and run through sh so the ids
-	// are the container's.
+	// The volume is root-owned, and the postCreateCommand that would chown it
+	// is held back by this seeding up, so claim the folder before unpacking.
+	// Through sh so the ids are the container's.
 	var claimErr bytes.Buffer
 	if err := p.Exec(ctx, c,
 		[]string{"sh", "-c", `[ -w "$1" ] || sudo chown -R "$(id -u):$(id -g)" "$1"`, "claim", folder},
@@ -179,8 +155,7 @@ func (p *Provider) seedWorkspace(ctx context.Context, c model.Container) error {
 	return nil
 }
 
-// runUserCommands runs the lifecycle hooks the seeding up held back, with the
-// same id labels and documents as every other call (invariant 1).
+// runUserCommands runs the lifecycle hooks that the seeding up held back.
 func (p *Provider) runUserCommands(ctx context.Context, c model.Container, env []provider.EnvVar) error {
 	args := []string{"run-user-commands", "--workspace-folder", c.Source}
 	args = append(args, idLabelArgs(c)...)
@@ -200,32 +175,18 @@ func (p *Provider) runUserCommands(ctx context.Context, c model.Container, env [
 	return nil
 }
 
-// claimStateDir hands the state volume to the user the container runs as.
-//
-// Docker creates a named volume owned by root and, unlike a bind mount, it gets
-// no UID remapping from the devcontainer CLI — so the remote user's first write
-// there fails with permission denied, whether the volume arrived through a
-// generated document or through the merged override materialise built for a
-// project-owned one. A generated configuration does this in its own
-// postCreateCommand; a container whose project ships its own configuration has
-// no hook dev may write into (invariant 9), so it is done here instead.
-//
-// Only for a project-owned container. A generated one already chowns the
-// directory in the postCreateCommand dcgen renders, and doing it twice would be
-// a second answer to the same question.
-//
-// Guarded by a writability test rather than a marker file: it runs on every up,
-// and a recursive chown over a state directory holding an agent's history is
-// not something to repeat for nothing. The test is what makes it cheap; the
-// chown behind it is what makes a fresh volume usable.
+// claimStateDir hands the state volume to the remote user. Docker creates named
+// volumes root-owned, and only a generated configuration has a
+// postCreateCommand to chown them, so a project-owned container is claimed here
+// on every up. The writability test skips a recursive chown over existing agent
+// history.
 func (p *Provider) claimStateDir(ctx context.Context, c model.Container) error {
 	if !c.PersistState || c.GeneratedConfig != "" {
 		return nil
 	}
 
-	// Through sh -c because the ids are only known inside the container, and
-	// Exec hands argv straight to the CLI without a shell to expand them. The
-	// path is a constant, so there is nothing here to quote.
+	// sh -c: the ids are only known inside the container, and Exec passes argv
+	// without a shell to expand them.
 	var errBuf bytes.Buffer
 	err := p.Exec(ctx, c,
 		[]string{"sh", "-c", "[ -w " + dcgen.StateDir + " ] || " +
@@ -256,23 +217,18 @@ func (p *Provider) Exec(ctx context.Context, c model.Container, command []string
 	return cmd.Run()
 }
 
-// execArgs builds the argument list for `devcontainer exec`.
-//
-// Shared with the agent relay, which starts a long-running exec of its own and
-// must reach the same container: the id labels are what decide that, and a
-// second copy of this list would be a second chance to get them wrong.
+// execArgs builds the argument list for `devcontainer exec`. The agent relay
+// shares it so that it reaches the same container.
 func (p *Provider) execArgs(c model.Container, command []string, env ...provider.EnvVar) []string {
 	args := []string{"exec", "--workspace-folder", c.Source}
 	args = append(args, idLabelArgs(c)...)
-	// The config path is passed rather than inferred. A generated one lives in
-	// a temporary directory the CLI's own lookup would never reach, and for a
-	// project-owned one this is the path dcconfig already resolved.
+	// Passed explicitly, as in up: a generated config lives in a temporary
+	// directory.
 	if c.ConfigPath != "" {
 		args = append(args, "--config", c.ConfigPath)
 	}
-	// The same merged document up was given. A container started with the state
-	// volume and exec'd without it would see an empty /var/dev-state, with
-	// nothing reporting an error.
+	// Must match up's document, or exec sees an empty /var/dev-state with no
+	// error.
 	if c.OverrideConfigPath != "" {
 		args = append(args, "--override-config", c.OverrideConfigPath)
 	}
@@ -286,7 +242,7 @@ func (p *Provider) Stop(ctx context.Context, c model.Container) error {
 		return err
 	}
 	if id == "" {
-		return nil // already gone; the caller wanted it not running
+		return nil
 	}
 	return runDocker(ctx, "stop", id)
 }
@@ -302,25 +258,18 @@ func (p *Provider) Remove(ctx context.Context, c model.Container) error {
 		}
 	}
 
-	// The volume is named in workspaceMount rather than created by the
-	// container, so `docker rm` leaves it behind. Removing it here is what
-	// makes `container remove` mean the container is gone, and matches the k8s
-	// provider deleting its PVC. Last, because the volume cannot be removed
-	// while a container still references it.
+	// docker rm leaves named volumes behind, so they are removed here. Last,
+	// because a volume still referenced by a container cannot be removed.
 	var volumes []string
 	if c.SourceKind == model.SourceNone || c.Mode == model.ModeIsolated {
 		volumes = append(volumes, VolumeName(c.WorkspaceName, c.Name))
 	}
-	// Removed with the container, like the workspace volume: the operator asked
-	// for the container to be gone, and a volume nothing references is a disk
-	// nobody remembers filling.
 	if c.PersistState {
 		volumes = append(volumes, StateVolumeName(c.WorkspaceName, c.Name))
 	}
 	for _, name := range volumes {
 		fmt.Fprintf(os.Stderr, "dev: removing volume %s\n", name)
-		// --force: a container that was never started has no volume, and "no
-		// such volume" is not a failure to report.
+		// --force: a never-started container has no volume to report missing.
 		if err := runDocker(ctx, "volume", "rm", "--force", name); err != nil {
 			return err
 		}
@@ -344,8 +293,7 @@ func (p *Provider) Status(ctx context.Context, c model.Container) (model.Status,
 	case "running":
 		return model.StatusRunning, nil
 	default:
-		// created, exited, paused, restarting, dead: none of them can take an
-		// exec, so they are all "stopped" as far as a caller is concerned.
+		// Every other state cannot take an exec, so it reads as stopped.
 		return model.StatusStopped, nil
 	}
 }
@@ -366,8 +314,8 @@ func (p *Provider) Logs(ctx context.Context, c model.Container, follow bool, out
 	args = append(args, id)
 
 	cmd := exec.CommandContext(ctx, dockerBin, args...)
-	// Container logs arrive on both streams; keep them apart rather than
-	// merging, so a `| grep` over stdout still behaves.
+	// Keep the container's stderr off stdout, so a pipe over stdout still
+	// works.
 	cmd.Stdout = out
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -387,8 +335,7 @@ func (p *Provider) Mounts(ctx context.Context, c model.Container) ([]provider.Mo
 		Destination string
 		RW          bool
 	}
-	// Empty output is a container with no mounts as far as the caller is
-	// concerned; an engine that answers in some other shape is not.
+	// Empty or null output means no mounts.
 	if line := first(out); line != "" && line != "null" {
 		if err := json.Unmarshal([]byte(line), &raw); err != nil {
 			return nil, true, fmt.Errorf("reading the mounts of container %s: %w", c.Name, err)
@@ -401,8 +348,8 @@ func (p *Provider) Mounts(ctx context.Context, c model.Container) ([]provider.Mo
 	return mounts, true, nil
 }
 
-// containerID returns the engine's id for a container, or "" when there is
-// none. Includes stopped containers: stop and remove both need to find one.
+// containerID returns the id of the container, stopped or running, or "" if
+// none.
 func (p *Provider) containerID(ctx context.Context, c model.Container) (string, error) {
 	if err := requireBinary(dockerBin); err != nil {
 		return "", err
@@ -418,12 +365,8 @@ func (p *Provider) containerID(ctx context.Context, c model.Container) (string, 
 // --- helpers -----------------------------------------------------------------
 
 // remoteEnvArgs renders environment variables as devcontainer CLI arguments.
-//
-// --remote-env puts the value in this process's argv, where it is visible to
-// anyone who can read the host's process list for the length of the call. The
-// CLI's --secrets-file would avoid that, but it exists only on `up`, not on
-// `exec`, so a split would make the two paths behave differently for no gain on
-// the one that runs most often.
+// --remote-env values are visible in the host process list for the length of
+// the call. --secrets-file would avoid that, but exists only on up, not exec.
 func remoteEnvArgs(env []provider.EnvVar) []string {
 	var args []string
 	for _, e := range env {
@@ -449,8 +392,7 @@ func runDocker(ctx context.Context, args ...string) error {
 	return nil
 }
 
-// output runs a command and returns its stdout, quoting stderr on failure:
-// docker reports why it refused there, and dropping it leaves only "exit 1".
+// output returns stdout, and on failure folds in stderr, where docker says why.
 func output(ctx context.Context, name string, args ...string) (string, error) {
 	var stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, name, args...)
@@ -467,9 +409,8 @@ func output(ctx context.Context, name string, args ...string) (string, error) {
 	return string(out), nil
 }
 
-// first returns the first non-empty line, which is what every docker query here
-// wants: the filters match one container, and a trailing newline is always
-// present.
+// first returns the first non-empty line of a docker query, which matches one
+// container.
 func first(s string) string {
 	for _, line := range strings.Split(s, "\n") {
 		if t := strings.TrimSpace(line); t != "" {

@@ -15,11 +15,8 @@ import (
 
 const herdrBin = "herdr"
 
-// Available reports whether Herdr can be asked to do anything.
-//
-// Two checks, not one. The binary being on PATH says nothing about the daemon:
-// an installed Herdr whose server is not running would turn every call into a
-// hang or a failure, on a path where neither is the operator's problem.
+// Available reports whether Herdr can be asked to do anything. The binary on
+// PATH says nothing about the daemon, and a stopped one hangs every call.
 func Available(ctx context.Context) bool {
 	if _, err := exec.LookPath(herdrBin); err != nil {
 		return false
@@ -28,14 +25,8 @@ func Available(ctx context.Context) bool {
 }
 
 // Open registers an existing checkout as a Herdr workspace and returns its ID.
-//
-// The checkout is made by git first and handed over afterwards, rather than
-// letting `herdr worktree create` do both: the git work must not depend on an
-// optional tool.
-//
-// An unparsable answer is not an error. The ID is only needed to close the
-// workspace later, and a missing one costs a stale entry in a sidebar — far
-// less than failing a command whose real work already succeeded.
+// An unparsable answer is not an error: a missing ID only leaves a stale
+// sidebar entry.
 func Open(ctx context.Context, path string) (string, error) {
 	out, err := exec.CommandContext(ctx, herdrBin,
 		"worktree", "open", "--path", path).Output()
@@ -52,11 +43,8 @@ func Open(ctx context.Context, path string) (string, error) {
 	return res.WorkspaceID, nil
 }
 
-// Close removes the Herdr workspace. Herdr state only: the checkout is deleted
-// by git, which is the division Herdr's own commands draw.
-//
-// --force because the checkout is being deleted regardless, so a prompt about
-// it would be a question with one answer.
+// Close removes the Herdr workspace. It does not touch the checkout, which git
+// deletes.
 func Close(ctx context.Context, workspaceID string) error {
 	if workspaceID == "" {
 		return nil // herdr was absent or declined when this was created
@@ -69,8 +57,8 @@ func Close(ctx context.Context, workspaceID string) error {
 	return nil
 }
 
-// firstJSONLine returns the first line that looks like a JSON object, so a
-// progress line printed before the result does not break the decode.
+// firstJSONLine returns the first line that looks like a JSON object, skipping
+// any progress output.
 func firstJSONLine(s string) string {
 	for line := range strings.SplitSeq(s, "\n") {
 		if line = strings.TrimSpace(line); strings.HasPrefix(line, "{") {

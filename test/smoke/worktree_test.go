@@ -12,10 +12,9 @@ import (
 	"github.com/duy0611/dev-cli/internal/xpath"
 )
 
-// TestSmokeWorktree is the only test that can prove the point of this
-// feature. The unit tests prove the mount arguments are built correctly,
-// which is a different claim: git resolving two absolute host paths from
-// inside a container is not something a stub can answer.
+// TestSmokeWorktree checks git works inside a worktree container. Only a real
+// container can show git resolving the two absolute host paths; unit tests
+// check the mount arguments alone.
 func TestSmokeWorktree(t *testing.T) {
 	requireBinaries(t, "devcontainer", "docker", "git")
 
@@ -45,9 +44,8 @@ func TestSmokeWorktree(t *testing.T) {
 	}
 	gitRun(t, repo, "add", "f", ".gitignore")
 	gitRun(t, repo, "commit", "-qm", "init")
-	// An ignored file the manifest asks for, so the copy is proven to land
-	// somewhere the container can read — the checkout is a bind mount, and a
-	// file written to it on the host has to be what the container sees.
+	// An ignored file the manifest carries, to show a host write reaches the
+	// bind-mounted checkout.
 	if err := os.WriteFile(filepath.Join(repo, ".env"), []byte("SMOKE=carried\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +54,7 @@ func TestSmokeWorktree(t *testing.T) {
 	}
 
 	path := filepath.Join(t.TempDir(), "wt")
-	// The container first: worktree remove refuses while one is on the
+	// The container goes first; worktree remove refuses while one is on the
 	// checkout.
 	t.Cleanup(func() {
 		_ = exec.Command(bin, "container", "remove", name, "--workspace", ws, "--force").Run()
@@ -72,22 +70,15 @@ func TestSmokeWorktree(t *testing.T) {
 	dev("container", "create", name, "--workspace", ws, "--folder", path,
 		"--generate", "--tools", "yq")
 
-	// dev bind-mounts the checkout at its *resolved* path (invariant 2 and the
-	// gitdir invariant both turn on this): xpath.Resolve runs after the add and
-	// stores the real directory, given a symlinked one. On macOS /var is a
-	// symlink to /private/var and t.TempDir() answers under /var, so asserting
-	// against the path as typed would cd into a directory that exists only via
-	// a symlink the container does not have — this is the same class of bug
-	// invariant 2 exists to catch, here in the test rather than in dev.
+	// Resolve the path before comparing: on macOS /var is a symlink to
+	// /private/var, and the container has no such symlink.
 	resolved, err := xpath.Resolve(path)
 	if err != nil {
 		t.Fatalf("resolving the checkout path: %v", err)
 	}
 
-	// The claim: git works inside, read-only. The container is guarded by
-	// default, so it reads the repository through the worktree's .git file and
-	// the repository mounted at its own path — and a commit fails, because the
-	// worktree's index lives under the read-only common directory.
+	// Git reads inside but cannot commit: the worktree's index lives under the
+	// read-only common directory.
 	if out := dev("container", "exec", name, "--workspace", ws, "--",
 		"sh", "-c", "cd "+resolved+" && git log --oneline -1"); strings.TrimSpace(out) == "" {
 		t.Error("git log inside the worktree container printed nothing")
@@ -106,8 +97,7 @@ func TestSmokeWorktree(t *testing.T) {
 		t.Errorf("the carried .env is not readable inside the container: %q", env)
 	}
 
-	// A commit made on the host is one the container reads at once, through
-	// the same read-only mount.
+	// A host commit is visible inside at once, through the same mount.
 	gitIn := func(dir string, args ...string) {
 		t.Helper()
 		cmd := exec.Command("git", append([]string{"-c", "user.email=h@example.com", "-c", "user.name=host"}, args...)...)
@@ -122,26 +112,21 @@ func TestSmokeWorktree(t *testing.T) {
 		t.Errorf("the container does not see the host's commit: %q", out)
 	}
 
-	// And the registration survived. `git gc --auto` runs `worktree prune`,
-	// which deletes a worktree whose backlink does not resolve — so a container
-	// missing the second bind mount would destroy this from the inside.
-	//
-	// Checked against the resolved path: git's own listing reports what it
-	// wrote to the backlink, which is the resolved directory, not the string
-	// --path was given.
+	// The registration must survive: `git gc --auto` prunes a worktree whose
+	// backlink does not resolve, which the second bind mount prevents. Compare
+	// against the resolved path, which is what git wrote to the backlink.
 	list := gitOut(t, repo, "worktree", "list")
 	if !strings.Contains(list, resolved) {
 		t.Errorf("the worktree registration was pruned away:\n%s", list)
 	}
 
-	// Refused while the container is on it, then removed once it is not.
+	// Refused while the container is on it, allowed once it is removed.
 	if out, err := exec.Command(bin, "worktree", "remove", name, "--workspace", ws).CombinedOutput(); err == nil {
 		t.Errorf("worktree remove succeeded with a container still on it:\n%s", out)
 	}
 	dev("container", "remove", name, "--workspace", ws)
-	// No --force, deliberately: everything carried over is ignored, and git
-	// removes ignored files with the checkout. A copy that blocked removal
-	// would turn every seeded worktree into one that needs forcing.
+	// No --force: carried files are ignored, so git removes them with the
+	// checkout.
 	dev("worktree", "remove", name, "--workspace", ws)
 
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -151,7 +136,7 @@ func TestSmokeWorktree(t *testing.T) {
 	if strings.Contains(list, resolved) {
 		t.Errorf("worktree remove did not deregister the checkout:\n%s", list)
 	}
-	// The branch stays: it is the work, not the scaffolding.
+	// The branch is kept; it holds the work.
 	branches := gitOut(t, repo, "branch", "--list", "feat")
 	if !strings.Contains(branches, "feat") {
 		t.Error("worktree remove deleted the branch")

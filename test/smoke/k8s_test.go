@@ -13,23 +13,19 @@ import (
 	"testing"
 )
 
-// The k8s smoke test needs a cluster and somewhere to push images, so it is
-// gated on being told where both are. `make smoke` on a laptop with neither
-// still runs the local one.
+// The k8s smoke test needs a cluster and a registry, named by env vars; without
+// both it skips.
 const (
 	envContext   = "DEV_SMOKE_K8S_CONTEXT"
 	envRegistry  = "DEV_SMOKE_REGISTRY"
 	envNamespace = "DEV_SMOKE_K8S_NAMESPACE" // optional; defaults to "default"
-	// Optional, and only needed when the pushed image is private. Without it
-	// the nodes cannot pull and the pod sits in ImagePullBackOff until create
-	// gives up.
+	// Optional; needed only for a private pushed image, else pods sit in
+	// ImagePullBackOff.
 	envPullSecret = "DEV_SMOKE_K8S_PULL_SECRET"
 )
 
-// postCreate writes a file the test looks for, which is how "the lifecycle
-// commands ran" is checked rather than assumed. It writes into the home
-// directory on purpose: that is the half of the volume whose persistence is
-// easy to get wrong.
+// postCreate writes into the home directory, the half of the PVC whose
+// persistence is easy to get wrong.
 const k8sFixtureConfig = `{
   "name": "dev-smoke-k8s",
   "image": "docker.io/library/alpine:3.20",
@@ -52,8 +48,7 @@ func TestK8sSmoke(t *testing.T) {
 	if namespace == "" {
 		namespace = "default"
 	}
-	// The image is still built on the host, by docker or podman; kubectl does
-	// everything after that.
+	// The image is built on the host; kubectl does the rest.
 	requireBinaries(t, "devcontainer", "kubectl")
 	requireAnyBinary(t, "docker", "podman")
 
@@ -75,7 +70,8 @@ func TestK8sSmoke(t *testing.T) {
 		return string(out)
 	}
 
-	// Even a failed assertion must not leave a Deployment and a volume behind.
+	// Runs even on assertion failure, so no Deployment or volume is left
+	// behind.
 	t.Cleanup(func() {
 		_ = exec.Command(bin, "container", "remove", k8sContainer, "--force").Run()
 	})
@@ -86,8 +82,7 @@ func TestK8sSmoke(t *testing.T) {
 		"--namespace", namespace,
 		"--registry", registry,
 	}
-	// Passed only when set: an empty --image-pull-secret would put a reference
-	// to a secret named "" in the pod spec.
+	// Passed only when set; an empty value would reference a secret named "".
 	if pullSecret := os.Getenv(envPullSecret); pullSecret != "" {
 		configure = append(configure, "--image-pull-secret", pullSecret)
 	}
@@ -98,7 +93,7 @@ func TestK8sSmoke(t *testing.T) {
 	t.Log("creating; this builds an image, pushes it, and waits for a pod")
 	dev("container", "create", k8sContainer, "--folder", project)
 
-	// All three objects, found by the labels every lookup relies on.
+	// All three objects must carry the dev.container label.
 	for _, kind := range []string{"deployment", "persistentvolumeclaim", "secret"} {
 		out := kubectl("get", kind, "-l", "dev.container="+slugOf(k8sContainer), "-o", "name")
 		if strings.TrimSpace(out) == "" {
@@ -106,34 +101,31 @@ func TestK8sSmoke(t *testing.T) {
 		}
 	}
 
-	// Reaches the pod through the Secret's envFrom.
+	// Reaches the pod via the Secret's envFrom.
 	if got := strings.TrimSpace(dev("container", "exec", k8sContainer, "--", "printenv", "GREETING")); got != "hello" {
 		t.Errorf("GREETING = %q, want %q", got, "hello")
 	}
 
-	// The host folder was streamed into the volume on create.
+	// The host folder was copied into the volume on create.
 	if out := dev("container", "exec", k8sContainer, "--", "ls"); !strings.Contains(out, "hello.txt") {
 		t.Errorf("the seeded file is missing from the workspace:\n%s", out)
 	}
 
-	// sync makes the cluster's copy current. Read back from the Secret rather
-	// than through `exec printenv`, which injects the value per invocation and
-	// would answer correctly whether or not sync did anything at all — the
-	// cluster's copy is the whole subject.
+	// Read the Secret directly: `exec printenv` injects the value per
+	// invocation and would pass even if sync did nothing.
 	podBefore := kubectl("get", "pods", "-l", "dev.container="+slugOf(k8sContainer), "-o", "name")
 	dev("workspace", "set", "GREETING", "literal:rotated")
 	dev("container", "sync", k8sContainer)
 	if got := secretValue(t, kubectl, "GREETING"); got != "rotated" {
 		t.Errorf("the Secret carries GREETING = %q after a sync, want %q", got, "rotated")
 	}
-	// The same pod, not a replacement. A sync that restarts the pod destroys
-	// whatever an agent had half-done in it, which is the thing this command is
-	// built to avoid. The name changes if the ReplicaSet made a new one.
+	// The same pod must survive sync; a restart would destroy an agent's
+	// in-progress work.
 	if podAfter := kubectl("get", "pods", "-l", "dev.container="+slugOf(k8sContainer), "-o", "name"); podAfter != podBefore {
 		t.Errorf("sync replaced the pod: %q became %q", strings.TrimSpace(podBefore), strings.TrimSpace(podAfter))
 	}
 
-	// postCreate ran, and wrote into the home half of the volume.
+	// postCreate ran and wrote into the home subPath.
 	dev("container", "exec", k8sContainer, "--", "test", "-f", "/root/post-create-ran")
 
 	dev("container", "stop", k8sContainer)
@@ -142,8 +134,7 @@ func TestK8sSmoke(t *testing.T) {
 	}
 
 	dev("container", "start", k8sContainer)
-	// The volume outlived the pod: this is what the second subPath buys, and
-	// what makes "postCreate runs once" true rather than a claim.
+	// The volume outlived the pod, so postCreate is not re-run on start.
 	dev("container", "exec", k8sContainer, "--", "test", "-f", "/root/post-create-ran")
 	dev("container", "exec", k8sContainer, "--", "test", "-f", "hello.txt")
 
@@ -166,18 +157,14 @@ func k8sFixtureProject(t *testing.T) string {
 		[]byte(k8sFixtureConfig), 0o600); err != nil {
 		t.Fatalf("writing the fixture config: %v", err)
 	}
-	// Something recognisable to look for on the other side of the seed.
+	// A file to find after the seed.
 	if err := os.WriteFile(filepath.Join(dir, "hello.txt"), []byte("hi\n"), 0o600); err != nil {
 		t.Fatalf("writing the fixture file: %v", err)
 	}
 	return dir
 }
 
-// secretValue reads one key out of the container's Secret, decoded.
-//
-// jsonpath over `-o json` piped through a decoder: `kubectl get -o
-// go-template` would need the same base64 step anyway, and jsonpath keeps the
-// key name in one readable place.
+// secretValue returns one decoded key from the container's Secret.
 func secretValue(t *testing.T, kubectl func(...string) string, key string) string {
 	t.Helper()
 	out := kubectl("get", "secret", "-l", "dev.container="+slugOf(k8sContainer),
@@ -189,16 +176,9 @@ func secretValue(t *testing.T, kubectl func(...string) string, key string) strin
 	return string(decoded)
 }
 
-// slugOf mirrors the provider's label value for a container name.
-//
-// Reimplemented rather than imported: this test drives the built binary from
-// outside, and importing the package would let a wrong slug agree with itself.
-// Both names used here are already lowercase and hyphenated, so only the hash
-// matters.
-//
-// Computed in Go rather than shelled out to sha256sum, which macOS does not
-// have — that spells the label wrong, finds no objects, and reports it as the
-// provider having failed to label them.
+// slugOf mirrors the provider's label value for a container name. It is
+// reimplemented, not imported, so a wrong slug cannot agree with itself. It is
+// computed in Go, since macOS has no sha256sum.
 func slugOf(name string) string {
 	sum := sha256.Sum256([]byte(name))
 	return name + "-" + hex.EncodeToString(sum[:])[:6]

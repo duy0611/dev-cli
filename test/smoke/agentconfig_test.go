@@ -10,9 +10,8 @@ import (
 	"testing"
 )
 
-// The declaration end to end: a generated container with Claude Code, a
-// project that ships only an agents.yaml, and a rebuild that has to re-apply
-// over what the first apply left on the state volume.
+// Declared agent config applies to a generated container, and survives a
+// rebuild that re-applies over the first apply's state.
 func TestSmokeAgentConfig(t *testing.T) {
 	requireBinaries(t, "devcontainer", "docker")
 
@@ -32,8 +31,8 @@ func TestSmokeAgentConfig(t *testing.T) {
 		_ = exec.Command("docker", "volume", "rm", "--force", "dev-"+ws+"-"+name+"-state").Run()
 	})
 
-	// No devcontainer.json, so --generate applies; the agents.yaml beside
-	// where one would be is found by default.
+	// No devcontainer.json, so --generate applies; agents.yaml is found beside
+	// where one would be.
 	project := t.TempDir()
 	for rel, body := range map[string]string{
 		".devcontainer/agents.yaml": `version: 1

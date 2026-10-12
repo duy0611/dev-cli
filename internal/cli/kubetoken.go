@@ -17,22 +17,15 @@ import (
 	"github.com/duy0611/dev-cli/internal/provider"
 )
 
-// kubeconfigKey is the variable kubectl reads to find its kubeconfig.
+// kubeconfigKey is the variable kubectl reads for its kubeconfig.
 const kubeconfigKey = "KUBECONFIG"
 
-// kubeconfigPath is where the minted kubeconfig lands in the container.
-//
-// Under /tmp, not /var/dev-state: that volume outlives a rebuild and holds no
-// credentials (invariant 10), and a token has no business outliving the
-// container's own filesystem.
+// kubeconfigPath is under /tmp: a token must not outlive the container's own
+// filesystem.
 const kubeconfigPath = "/tmp/dev-kube/config"
 
-// writeKubeconfig puts stdin at kubeconfigPath.
-//
-// umask 077 so the directory and the file are the remote user's alone. Written
-// then renamed because kubectl in a running session reads the file on every
-// call, and a rename is atomic: a read during a refresh sees the old kubeconfig
-// or the new one, never half of either.
+// writeKubeconfig puts stdin at kubeconfigPath. Written then renamed, since
+// kubectl rereads the file on each call and a rename is atomic.
 var writeKubeconfig = []string{"sh", "-c",
 	"umask 077 && mkdir -p /tmp/dev-kube && cat > " + kubeconfigPath + ".tmp && " +
 		"mv " + kubeconfigPath + ".tmp " + kubeconfigPath}
@@ -44,8 +37,8 @@ func addKubeTokenFlag(cmd *cobra.Command, v *bool) {
 		"mint a short-lived service account token on the host and point KUBECONFIG at it")
 }
 
-// askKubeTokenIf asks only when the flag is given. A nil request means no
-// token was asked for, so every caller can pass the result on unconditionally.
+// askKubeTokenIf asks only when wanted. A nil request means no token, so
+// callers can pass it on unconditionally.
 func askKubeTokenIf(ctx context.Context, want bool) (*kubetoken.Request, error) {
 	if !want {
 		return nil, nil
@@ -57,11 +50,9 @@ func askKubeTokenIf(ctx context.Context, want bool) (*kubetoken.Request, error) 
 	return &req, nil
 }
 
-// applyKubeToken mints and writes the token when one was asked for, and
-// returns environ with KUBECONFIG pointing at it. Without a request, environ
-// comes back unchanged: a plain shell never gets KUBECONFIG, even with a file
-// left there, so it stays on whatever credentials it had — the pod's own
-// in-cluster ones on k8s — rather than quietly taking the last token minted.
+// applyKubeToken mints and writes the token when one was asked for. Without a
+// request, environ is returned unchanged, so a plain shell never gets
+// KUBECONFIG.
 func (a *app) applyKubeToken(ctx context.Context, t *target, req *kubetoken.Request,
 	environ []provider.EnvVar) ([]provider.EnvVar, error) {
 	if req == nil {
@@ -74,16 +65,11 @@ func (a *app) applyKubeToken(ctx context.Context, t *target, req *kubetoken.Requ
 	return withEnv(environ, kv), nil
 }
 
-// askKubeToken asks which token --kube-token should mint.
-//
-// Called before anything that needs a running container, so nobody answers a
-// question after waiting through a slow up — and so a host-side failure (no
-// kubectl, no contexts, a cancelled pick) stops start-agent before it starts a
-// container for nothing.
+// askKubeToken asks which token to mint. Called before the container starts, so
+// a host-side failure starts nothing.
 func askKubeToken(ctx context.Context) (kubetoken.Request, error) {
-	// Refused rather than skipped: the operator asked for a token, and a
-	// scripted run that silently went without one would fail later inside the
-	// container with an error that names nothing dev did.
+	// Refused rather than skipped: a silently missing token fails later with an
+	// error that names nothing dev did.
 	if !isTerminal(os.Stdin) {
 		return kubetoken.Request{}, usageErrorf(
 			"--kube-token asks which context, namespace and service account to use, and needs a terminal")
@@ -95,17 +81,14 @@ func askKubeToken(ctx context.Context) (kubetoken.Request, error) {
 	return req, err
 }
 
-// chooser asks the four questions.
-//
-// Its streams are the prompter's, so the free-text half is testable over a
-// pipe; fzf draws on /dev/tty by itself.
+// chooser asks the four questions. Its streams are the prompter's, so the
+// free-text half is testable.
 type chooser struct {
 	prompt *prompter
 	out    io.Writer
 }
 
-// newChooser asks on stderr, so a question never lands in an exec's captured
-// stdout.
+// newChooser asks on stderr, so a question never lands in a captured stdout.
 func newChooser() chooser {
 	return chooser{prompt: newPrompter(os.Stdin, os.Stderr), out: os.Stderr}
 }
@@ -150,17 +133,14 @@ func (c chooser) ask(ctx context.Context) (kubetoken.Request, error) {
 	}, nil
 }
 
-// listFailed warns and lets the question fall back to free text. RBAC commonly
-// forbids listing namespaces or service accounts to someone who may still use
-// one by name.
+// listFailed warns and falls back to free text. RBAC often forbids listing what
+// one may still use by name.
 func (c chooser) listFailed(what string, err error) {
 	fmt.Fprintf(c.out, "dev: cannot list %s (%v); type the name instead\n", what, err)
 }
 
-// choose picks one of items, with def offered first.
-//
-// fzf when the host has it, a free-text prompt otherwise. An empty list goes
-// straight to free text: there is nothing for fzf to show.
+// choose picks one of items, with def first: fzf when present, free text
+// otherwise.
 func (c chooser) choose(ctx context.Context, label string, items []string, def string) (string, error) {
 	items = defaultFirst(items, def)
 	if len(items) > 0 {
@@ -174,15 +154,14 @@ func (c chooser) choose(ctx context.Context, label string, items []string, def s
 		return "", err
 	}
 	if answer == "" {
-		// EOF with nothing typed and no default. There is no way to go on
-		// without a name, so this is the terminal going away, not an answer.
+		// EOF with no default means the terminal went away, not an answer.
 		return "", errPickCancelled
 	}
 	return answer, nil
 }
 
-// fzf runs one pick. The choices go in on stdin and the pick comes back on
-// stdout; fzf draws on /dev/tty itself, so neither stream is the terminal.
+// fzf takes the choices on stdin and returns the pick on stdout; it draws on
+// /dev/tty itself.
 func fzf(ctx context.Context, label string, items []string) (string, error) {
 	var out bytes.Buffer
 	cmd := exec.CommandContext(ctx, "fzf", "--prompt", label+"> ", "--height", "40%", "--reverse")
@@ -191,8 +170,7 @@ func fzf(ctx context.Context, label string, items []string) (string, error) {
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		var exit *exec.ExitError
-		// 130 is Esc or ^C; 1 is no match, which with no free-text fallback
-		// inside fzf is also the operator walking away.
+		// 130 is Esc or ^C, 1 is no match. Both mean the operator walked away.
 		if errors.As(err, &exit) && (exit.ExitCode() == 130 || exit.ExitCode() == 1) {
 			return "", errPickCancelled
 		}
@@ -219,10 +197,7 @@ func defaultFirst(items []string, def string) []string {
 	return out
 }
 
-// askDuration asks how long the token should live, again until it parses.
-//
-// Empty is zero, which passes no --duration at all: the API server's default
-// then applies, rather than dev's belief about what that default is.
+// askDuration asks how long the token lives, until it parses.
 func (c chooser) askDuration() (time.Duration, error) {
 	label := "duration, empty for kubectl's default (1h)"
 	for {
@@ -242,13 +217,13 @@ func (c chooser) askDuration() (time.Duration, error) {
 }
 
 // injectKubeToken mints the token and writes it into the running container,
-// returning the variable that points the launched command at it.
+// returning the variable that points at it.
 func (a *app) injectKubeToken(ctx context.Context, t *target, req kubetoken.Request) (provider.EnvVar, error) {
 	return a.injectKubeTokenWith(ctx, t, req, kubetoken.Mint)
 }
 
-// injectKubeTokenWith is injectKubeToken with the mint supplied, so the write
-// can be tested without a cluster.
+// injectKubeTokenWith takes the mint as an argument so the write can be tested
+// without a cluster.
 func (a *app) injectKubeTokenWith(ctx context.Context, t *target, req kubetoken.Request,
 	mint func(context.Context, kubetoken.Request) (kubetoken.Token, error)) (provider.EnvVar, error) {
 	tok, err := mint(ctx, req)
@@ -256,7 +231,7 @@ func (a *app) injectKubeTokenWith(ctx context.Context, t *target, req kubetoken.
 		return provider.EnvVar{}, err
 	}
 	reportExpiry(a, req, tok, time.Now())
-	// Which identity went into the container and until when — never the token.
+	// Identity and expiry only, never the token.
 	fields := map[string]any{
 		"context":         req.Context,
 		"namespace":       req.Namespace,
@@ -270,14 +245,13 @@ func (a *app) injectKubeTokenWith(ctx context.Context, t *target, req kubetoken.
 	}
 	a.record("kube-token", t.workspace.Name, t.container.Name, fields)
 
-	// On stdin, never as an argument: an argument shows in the process list on
-	// the host and in the container.
+	// On stdin, never as an argument: arguments show in the host's process
+	// list.
 	var stderr bytes.Buffer
 	if err := t.provider.Exec(ctx, t.container, writeKubeconfig, provider.ExecOpts{
 		Stdin: bytes.NewReader(tok.Kubeconfig), Stdout: io.Discard, Stderr: &stderr,
 	}); err != nil {
-		// Fail before the command runs: a session without the token it asked
-		// for fails later, naming nothing dev did.
+		// Fail before the command runs, so the failure names what dev did.
 		return provider.EnvVar{}, fmt.Errorf("writing the kubeconfig into container %s: %w%s",
 			t.container.Name, err, indentStderr(stderr.String()))
 	}
@@ -293,9 +267,9 @@ func (a *app) injectKubeTokenWith(ctx context.Context, t *target, req kubetoken.
 	return provider.EnvVar{Key: kubeconfigKey, Value: kubeconfigPath}, nil
 }
 
-// reportExpiry says when the token stops working, and warns when the cluster
-// issued less than was asked for — it does that without refusing, so this is
-// the only place the operator finds out before kubectl says Unauthorized.
+// reportExpiry says when the token stops working, and warns if the cluster
+// issued less than asked. That is the only place the operator learns it before
+// kubectl says Unauthorized.
 func reportExpiry(a *app, req kubetoken.Request, tok kubetoken.Token, now time.Time) {
 	who := fmt.Sprintf("%s/%s on %s", req.Namespace, req.ServiceAccount, req.Context)
 	if tok.Expiry.IsZero() {
@@ -309,9 +283,8 @@ func reportExpiry(a *app, req kubetoken.Request, tok kubetoken.Token, now time.T
 	}
 }
 
-// withEnv appends v, dropping any earlier entry of the same key. Last, so the
-// flag on this command wins over a workspace setting of the same name: it is
-// the more specific request.
+// withEnv replaces any earlier entry of the same key. Appended last, so this
+// command's flag beats a workspace setting.
 func withEnv(environ []provider.EnvVar, v provider.EnvVar) []provider.EnvVar {
 	out := make([]provider.EnvVar, 0, len(environ)+1)
 	for _, e := range environ {

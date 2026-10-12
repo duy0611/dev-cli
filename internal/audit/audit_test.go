@@ -49,7 +49,6 @@ func TestRecordIsOneFlatLineWithTheCommonFields(t *testing.T) {
 			t.Errorf("%s = %v, want %v", k, r[k], want)
 		}
 	}
-	// Flat: the event's own fields sit beside the common ones.
 	if r["exit_code"] != float64(0) {
 		t.Errorf("exit_code = %v, want 0 at the top level", r["exit_code"])
 	}
@@ -58,8 +57,7 @@ func TestRecordIsOneFlatLineWithTheCommonFields(t *testing.T) {
 	}
 }
 
-// An event field named like a common one must not be able to forge it — a
-// record claiming another workspace would make the log lie.
+// An event field cannot forge a common field.
 func TestEventFieldsCannotOverwriteCommonFields(t *testing.T) {
 	dir := t.TempDir()
 	l := Open(dir, "1", nil)
@@ -71,8 +69,7 @@ func TestEventFieldsCannotOverwriteCommonFields(t *testing.T) {
 	}
 }
 
-// The log lives beside the database and says as much about the operator's
-// work as the database does, so it gets the same permissions.
+// The log is as private as the database.
 func TestFileIsPrivate(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "state")
 	l := Open(dir, "1", nil)
@@ -91,8 +88,7 @@ func TestFileIsPrivate(t *testing.T) {
 	}
 }
 
-// Several dev processes may write at once — an agent session in one terminal,
-// a rebuild in another. Every line must still be one whole record.
+// Concurrent writers must not interleave lines.
 func TestConcurrentWritersProduceWholeLines(t *testing.T) {
 	dir := t.TempDir()
 	const writers, each = 8, 50
@@ -135,7 +131,7 @@ func TestOversizedRecordDropsArgvAndSaysSo(t *testing.T) {
 	}
 }
 
-// A failed write warns once, however many records fail, and never panics.
+// A failed write warns once, however many records fail.
 func TestFailedWriteWarnsOnce(t *testing.T) {
 	// A file where the directory should be makes every write fail.
 	parent := t.TempDir()
@@ -199,8 +195,7 @@ func TestReadMissingFileIsEmpty(t *testing.T) {
 	}
 }
 
-// A damaged line — a disk that filled mid-write — is skipped and reported,
-// and does not hide the records after it.
+// A damaged line is skipped and reported; the records after it still read.
 func TestReadSkipsADamagedLine(t *testing.T) {
 	path := filepath.Join(t.TempDir(), FileName)
 	content := `{"time":"2026-10-08T10:00:00Z","event":"create","dev":"1"}

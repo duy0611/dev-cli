@@ -10,12 +10,9 @@ import (
 	"github.com/duy0611/dev-cli/internal/model"
 )
 
-// seedRaw builds a database at an older schema and records the migrations that
-// produced it as already applied, so Open runs only the ones after them.
-//
-// Written out rather than replayed from the embedded files: the point is to
-// start from the schema as it was, and the files on disk are the schema as it
-// is now.
+// seedRaw builds a database at an older schema, marking the migrations that
+// produced it as applied. The schema is written out, not replayed from the
+// embedded files, which describe the current schema.
 func seedRaw(t *testing.T, path, schema string, applied ...string) {
 	t.Helper()
 
@@ -44,12 +41,8 @@ func seedRaw(t *testing.T, path, schema string, applied ...string) {
 	}
 }
 
-// TestMigrationDropsGPGForward covers upgrading a database created before
-// gpg_forward was dropped.
-//
-// The column was NOT NULL with a default, so an INSERT that no longer names it
-// still works — which means a broken migration would not fail loudly. It would
-// fail on the SELECT instead, on the next command the operator ran.
+// TestMigrationDropsGPGForward covers upgrading past the dropped gpg_forward
+// column.
 func TestMigrationDropsGPGForward(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dev.db")
 
@@ -115,12 +108,7 @@ CREATE TABLE containers (
 	}
 }
 
-// TestMigrationAddsPersistState covers upgrading a database created before
-// containers could persist their agents' state.
-//
-// The column is NOT NULL with a default, so an INSERT that does not name it
-// still works and a broken migration would not fail loudly — it would fail on
-// the SELECT, on the next command the operator ran.
+// TestMigrationAddsPersistState covers upgrading past the persist_state column.
 func TestMigrationAddsPersistState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dev.db")
 
@@ -173,12 +161,8 @@ VALUES ('legacy', 'ws', 'folder', '/projects/legacy', '', '{}', '2026-09-01T00:0
 	}
 }
 
-// TestMigrationAddsWorktrees covers upgrading a database created before the
-// worktrees table existed.
-//
-// The cascade is the part worth testing across a migration: a FOREIGN KEY
-// declared in a table created later still has to fire, and SQLite only honours
-// it with PRAGMA foreign_keys = ON, which Open sets.
+// TestMigrationAddsWorktrees covers upgrading past the worktrees table. The
+// cascade must still fire, which needs PRAGMA foreign_keys = ON.
 func TestMigrationAddsWorktrees(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dev.db")
 
@@ -234,13 +218,9 @@ CREATE TABLE app_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);`
 	}
 }
 
-// TestMigrationAddsContainerModes covers upgrading a database created before
-// container modes.
-//
-// Every row that exists is legacy — created under the single-file git guard —
-// except a folderless one, which has no checkout for a mode to describe. A
-// worktree's common directory moves onto its container, and the worktree row
-// survives under its own name with no tie to the container left.
+// TestMigrationAddsContainerModes covers upgrading past the mode column.
+// Existing rows become legacy, except folderless ones, and a worktree's common
+// directory moves onto its container.
 func TestMigrationAddsContainerModes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dev.db")
 

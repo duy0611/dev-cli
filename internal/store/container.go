@@ -8,9 +8,8 @@ import (
 	"github.com/duy0611/dev-cli/internal/model"
 )
 
-// CreateContainer records a container. The name has to be free within the
-// workspace; the same name in another workspace is fine, and is the point of
-// workspaces.
+// CreateContainer records a container. The name must be free within its
+// workspace.
 func (s *Store) CreateContainer(c model.Container) error {
 	_, err := s.db.Exec(
 		`INSERT INTO containers
@@ -84,10 +83,8 @@ func (s *Store) DeleteContainer(workspace, name string) error {
 	return requireOneRow(res, ErrNotFound)
 }
 
-// modeOrLegacy is the mode a row is written with: legacy when the caller set
-// none, so a container value built without one — every one built before modes
-// existed — is recorded as what it is rather than as an empty string no reader
-// recognises.
+// modeOrLegacy returns the mode a row is written with. A container built before
+// modes existed has none, and must not be stored as an empty string.
 func modeOrLegacy(m model.Mode) model.Mode {
 	if m == "" {
 		return model.ModeLegacy
@@ -141,9 +138,8 @@ func (s *Store) UpdateContainerConfig(workspace, name, config string) error {
 	return requireOneRow(res, ErrNotFound)
 }
 
-// SetAgentConfigPending records whether applying a container's agents.yaml is
-// still owed. Set before the first step of an apply and cleared after the last,
-// so an apply that fails or is interrupted leaves it set for the next start.
+// SetAgentConfigPending records whether applying the container's agents.yaml is
+// still owed.
 func (s *Store) SetAgentConfigPending(workspace, name string, pending bool) error {
 	res, err := s.db.Exec(
 		`UPDATE containers SET agent_config_pending = ?
@@ -155,8 +151,7 @@ func (s *Store) SetAgentConfigPending(workspace, name string, pending bool) erro
 }
 
 // SetConfigDigest records the digest of the configuration a container was just
-// built from. Written by create, and by a rebuild that found it changed and was
-// told to accept that, or that had none recorded yet.
+// built from.
 func (s *Store) SetConfigDigest(workspace, name, digest, fields string) error {
 	res, err := s.db.Exec(
 		`UPDATE containers SET config_digest = ?, config_digest_fields = ?

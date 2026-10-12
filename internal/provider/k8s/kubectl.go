@@ -14,10 +14,6 @@ import (
 const kubectlBin = "kubectl"
 
 // kubectl runs commands against one context and namespace.
-//
-// Every call goes through args(), which prepends both. Done by construction
-// rather than by remembering: a call that reaches the wrong cluster does not
-// fail, it succeeds somewhere else.
 type kubectl struct {
 	context   string
 	namespace string
@@ -27,10 +23,12 @@ func newKubectl(c Config) kubectl {
 	return kubectl{context: c.Context, namespace: c.Namespace}
 }
 
+// args prepends both: a call on the wrong cluster does not fail, it succeeds
+// elsewhere.
 func (k kubectl) args(extra ...string) []string {
 	args := make([]string, 0, 4+len(extra))
-	// An empty context means "whatever kubeconfig has selected", which is
-	// allowed; passing --context "" would instead select a context named "".
+	// Empty means the kubeconfig's selection, since --context "" would name a
+	// context "".
 	if k.context != "" {
 		args = append(args, "--context", k.context)
 	}
@@ -82,9 +80,8 @@ type streamOpts struct {
 	Stderr io.Writer
 }
 
-// stream executes a command with the caller's streams attached, and returns the
-// command's own exit error unwrapped, so `dev container exec … -- false` exits
-// the way the inner command did.
+// stream attaches the caller's streams and returns the exit error unwrapped, so
+// exec exits with the inner command's code.
 func (k kubectl) stream(ctx context.Context, opts streamOpts, extra ...string) error {
 	if err := requireBinary(kubectlBin); err != nil {
 		return err
@@ -97,11 +94,8 @@ func (k kubectl) stream(ctx context.Context, opts streamOpts, extra ...string) e
 	return cmd.Run()
 }
 
-// apply sends a manifest to the cluster on stdin.
-//
-// Server-side apply, so that a field this tool does not set — a mutating
-// webhook's sidecar, a defaulted resource limit — is left alone on update
-// rather than being stripped.
+// apply sends a manifest on stdin. Server-side, so a field this tool does not
+// set, such as a webhook's sidecar, survives an update.
 func (k kubectl) apply(ctx context.Context, manifest []byte) error {
 	if err := requireBinary(kubectlBin); err != nil {
 		return err
@@ -119,16 +113,14 @@ func (k kubectl) apply(ctx context.Context, manifest []byte) error {
 	return nil
 }
 
-// deleteIgnoringMissing removes an object, treating "already gone" as success:
-// the caller's goal is that it not exist.
+// deleteIgnoringMissing treats an object already gone as success.
 func (k kubectl) deleteIgnoringMissing(ctx context.Context, kind, name string) error {
 	return k.run(ctx, "delete", kind, name, "--ignore-not-found")
 }
 
-// pipeInto runs a command with stdin attached to a producer, used to stream a
-// tar into the pod. The producer runs while kubectl reads, and its error takes
-// precedence: a failed tar leaves kubectl reporting a truncated archive, which
-// says nothing about the real cause.
+// pipeInto streams produce's output into kubectl's stdin. The producer's error
+// takes precedence: a failed tar makes kubectl report a truncated archive, not
+// the real cause.
 func (k kubectl) pipeInto(ctx context.Context, produce func(io.Writer) error, extra ...string) error {
 	if err := requireBinary(kubectlBin); err != nil {
 		return err
@@ -140,11 +132,9 @@ func (k kubectl) pipeInto(ctx context.Context, produce func(io.Writer) error, ex
 	cmd.Stdout = io.Discard
 	cmd.Stderr = &stderr
 
-	// StdinPipe, not an io.Pipe handed to cmd.Stdin. os/exec drains an
-	// io.Reader from a goroutine of its own, and that goroutine gives up the
-	// moment the command exits — leaving the producer blocked on a pipe with no
-	// reader, forever. A real pipe fails the write with EPIPE instead, which is
-	// what a pod that died mid-sync should look like.
+	// StdinPipe, not an io.Reader on cmd.Stdin: os/exec abandons a plain
+	// reader's goroutine when the command exits, leaving the producer blocked
+	// forever. A real pipe fails with EPIPE.
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -156,14 +146,12 @@ func (k kubectl) pipeInto(ctx context.Context, produce func(io.Writer) error, ex
 	}
 
 	produceErr := produce(stdin)
-	// Closing is what tells kubectl the stream ended; without it the command
-	// waits forever.
+	// Closing ends the stream; kubectl waits forever without it.
 	closeErr := stdin.Close()
 	runErr := cmd.Wait()
 
-	// EPIPE is the one producer error that is not the cause of anything: it
-	// means kubectl had already stopped reading, so whatever made it stop is
-	// the thing worth reporting.
+	// EPIPE means kubectl stopped reading first, so its error is the one worth
+	// reporting.
 	if produceErr != nil && !errors.Is(produceErr, syscall.EPIPE) {
 		return produceErr
 	}
@@ -171,16 +159,15 @@ func (k kubectl) pipeInto(ctx context.Context, produce func(io.Writer) error, ex
 		return kubectlError(args, stderr.String(), runErr)
 	}
 	if produceErr != nil {
-		// Exited cleanly having taken none of the archive. Returning nil would
-		// claim a copy that never landed.
+		// Exit 0 with none of the archive taken is still a failed copy.
 		return fmt.Errorf("%s exited before the archive was sent: %s",
 			kubectlBin, lastLine(stderr.String()))
 	}
 	return closeErr
 }
 
-// kubectlError quotes kubectl's own stderr, which is where it explains a
-// refusal; without it the operator gets "exit status 1".
+// kubectlError quotes kubectl's stderr, where it explains a refusal, rather
+// than 'exit status 1'.
 func kubectlError(args []string, stderr string, err error) error {
 	if msg := strings.TrimSpace(stderr); msg != "" {
 		return fmt.Errorf("kubectl %s: %s", strings.Join(args, " "), msg)

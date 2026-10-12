@@ -8,20 +8,12 @@ import (
 	"path/filepath"
 )
 
-// ErrNoConfig means the folder ships no devcontainer configuration.
-//
-// Not a failure by itself: `container create --generate` renders one instead,
-// into dev's own database. What stays true is that dev never writes into the
-// project — a folder with a configuration owns it, and this package only ever
-// reads.
+// ErrNoConfig means the folder ships no devcontainer configuration. dev never
+// writes into a project, so this package only reads.
 var ErrNoConfig = errors.New("no devcontainer config")
 
-// Find returns the devcontainer config file inside folder.
-//
-// Both spellings the devcontainer CLI accepts are honoured, in its own order of
-// preference. The search deliberately does not walk up to parent directories:
-// the folder is an explicit argument here, so looking above it would be
-// guessing at which project the operator meant.
+// Find returns the devcontainer config inside folder, in the CLI's order of
+// preference. It does not search parent directories.
 func Find(folder string) (string, error) {
 	candidates := []string{
 		filepath.Join(folder, ".devcontainer", "devcontainer.json"),

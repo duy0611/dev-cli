@@ -7,18 +7,9 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// Compose returns everything in one compose file that gives any of its
-// services a way to the host — the same routes Escape looks for, in compose's
-// own spelling.
-//
-// A compose project gets no reliable --override-config (invariant 10), and its
-// privileges live in the compose file, not the devcontainer.json, so they have
-// to be read here. Every service is read rather than only the one the
-// configuration names: the others start too, and a privileged sidecar is as
-// much a way out as a privileged dev container.
-//
-// A file that does not parse is an error, never an empty answer — a check that
-// cannot read what it is checking has not passed.
+// Compose returns the host routes in a compose file, for every service. The
+// configuration names one service, but the others start too. A file that does
+// not parse is an error, not an empty result.
 func Compose(file string, content []byte, home string) ([]Finding, error) {
 	var doc struct {
 		Services map[string]struct {
@@ -63,12 +54,8 @@ func Compose(file string, content []byte, home string) ([]Finding, error) {
 	return out.list, nil
 }
 
-// composeVolume reads one entry of a service's volumes, in either of compose's
-// spellings: "host:container[:opts]" or {type, source, target}.
-//
-// A relative source ("./data") is resolved by compose against the project
-// directory, which is the project, not the host's root or home; only an
-// absolute source can name those.
+// composeVolume reads one volume entry in either compose spelling. A relative
+// source is resolved against the project, so it cannot name the host.
 func composeVolume(v any, home string) string {
 	switch e := v.(type) {
 	case string:

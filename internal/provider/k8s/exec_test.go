@@ -8,10 +8,8 @@ import (
 	"testing"
 )
 
-// The pod is root, so kubectl exec starts with HOME=/root, and su -p keeps it.
-// A command switched to remoteUser must see that user's home instead: tools
-// that write under ~ otherwise try /root and fail with permission denied, as
-// opencode did creating ~/.local/share/opencode.
+// kubectl exec starts as root with HOME=/root, and su -p keeps it. The switched
+// command must see the remote user's home instead.
 func TestAsRemoteUserSetsTheUsersHome(t *testing.T) {
 	sh, err := exec.LookPath("sh")
 	if err != nil {
@@ -23,10 +21,8 @@ func TestAsRemoteUserSetsTheUsersHome(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// A root pod: id reports uid 0 and user root.
 	stub("id", `if [ "$1" = -u ]; then echo 0; else echo root; fi`+"\n")
-	// su as root's environment reaches it, running its -c command the way
-	// the real one does: `su -p USER -c CMD`.
+	// $4 is CMD in `su -p USER -c CMD`.
 	stub("su", `exec `+sh+` -c "$4"`+"\n")
 	stub("whoami-env", `echo "$HOME $USER $LOGNAME"`+"\n")
 	if err := os.Symlink(sh, filepath.Join(dir, "sh")); err != nil {
@@ -45,11 +41,8 @@ func TestAsRemoteUserSetsTheUsersHome(t *testing.T) {
 	}
 }
 
-// su runs PAM, and pam_env replaces PATH with /etc/environment's even under -p.
-// The devcontainer CLI rewrites that file with the image's PATH when it starts
-// a container, which never happens on k8s — so the file keeps the distro
-// default and anything a feature put on PATH (npm's global bin under nvm)
-// vanishes for the switched command. The pod's PATH has to survive the switch.
+// pam_env resets PATH to /etc/environment even under su -p, dropping feature
+// bins such as nvm's. The pod's PATH must survive the switch.
 func TestAsRemoteUserKeepsThePodsPath(t *testing.T) {
 	sh, err := exec.LookPath("sh")
 	if err != nil {
@@ -62,10 +55,8 @@ func TestAsRemoteUserKeepsThePodsPath(t *testing.T) {
 		}
 	}
 	stub("id", `if [ "$1" = -u ]; then echo 0; else echo root; fi`+"\n")
-	// su as PAM leaves it: PATH reset to a default that lacks the stub
-	// directory. Called as `su -p USER -c CMD`.
+	// PAM resets PATH, dropping the stub directory.
 	stub("su", `PATH=/nonexistent; export PATH; exec `+sh+` -c "$4"`+"\n")
-	// Only findable if the pod's PATH was restored.
 	stub("showpath", `echo "$PATH"`+"\n")
 	if err := os.Symlink(sh, filepath.Join(dir, "sh")); err != nil {
 		t.Fatal(err)

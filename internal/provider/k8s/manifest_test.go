@@ -73,8 +73,8 @@ func TestDeploymentCarriesTheThingsThatFailSilently(t *testing.T) {
 		t.Errorf("replicas = %v, want 1", got)
 	}
 
-	// RollingUpdate would briefly run two pods against one ReadWriteOnce
-	// volume, and the new one would sit unschedulable.
+	// RollingUpdate would run two pods on one ReadWriteOnce volume; the new
+	// one would never schedule.
 	strategy, _ := spec["strategy"].(map[string]any)
 	if strategy["type"] != "Recreate" {
 		t.Errorf("strategy = %v, want Recreate", strategy["type"])
@@ -88,8 +88,7 @@ func TestDeploymentCarriesTheThingsThatFailSilently(t *testing.T) {
 	}
 	c0, _ := containers[0].(map[string]any)
 
-	// The tag never changes, so anything but Always serves a stale image after
-	// a rebuild.
+	// The tag is always :latest, so only Always pulls a rebuilt image.
 	if c0["imagePullPolicy"] != "Always" {
 		t.Errorf("imagePullPolicy = %v, want Always", c0["imagePullPolicy"])
 	}
@@ -100,8 +99,7 @@ func TestDeploymentCarriesTheThingsThatFailSilently(t *testing.T) {
 		t.Errorf("workingDir = %v, want the workspaceFolder", c0["workingDir"])
 	}
 
-	// busybox does not accept `sleep infinity`, so the keep-alive has to be a
-	// loop.
+	// busybox rejects `sleep infinity`, so the keep-alive is a loop.
 	cmd, _ := c0["command"].([]any)
 	joined := ""
 	for _, a := range cmd {
@@ -113,20 +111,19 @@ func TestDeploymentCarriesTheThingsThatFailSilently(t *testing.T) {
 	if !strings.Contains(joined, "sleep") {
 		t.Errorf("command %q does not keep the container alive", joined)
 	}
-	// PID 1 ignores signals it has no handler for, so without a trap every stop
-	// waits out the full termination grace period before the kubelet SIGKILLs.
+	// PID 1 ignores unhandled signals; without a TERM trap every stop waits out
+	// the grace period.
 	if !strings.Contains(joined, "trap") {
 		t.Errorf("command %q installs no TERM handler; stop would take the whole grace period", joined)
 	}
-	// A foreground sleep is not interrupted by the trap, so the handler would
-	// not run until the sleep finished.
+	// The sleep must be backgrounded and waited on, or the trap cannot run.
 	if !strings.Contains(joined, "wait") {
 		t.Errorf("command %q waits in the foreground, so the trap cannot run: ", joined)
 	}
 }
 
-// The seccomp profile is the runtime's default, which docker applies to a
-// local container without being asked and a pod does not get unless it is.
+// A pod gets no seccomp profile unless asked; docker applies RuntimeDefault
+// silently.
 func TestPodCarriesTheDefaultSeccompProfile(t *testing.T) {
 	objs := decode(t, testInput())
 	spec, _ := objs["Deployment"]["spec"].(map[string]any)
@@ -138,15 +135,12 @@ func TestPodCarriesTheDefaultSeccompProfile(t *testing.T) {
 	if profile["type"] != "RuntimeDefault" {
 		t.Errorf("seccompProfile = %v, want type RuntimeDefault", sc["seccompProfile"])
 	}
-	// The existing guarantee must survive the new field beside it.
 	if sc["fsGroup"] != float64(defaultFSGroup) {
 		t.Errorf("fsGroup = %v, want %d", sc["fsGroup"], defaultFSGroup)
 	}
 }
 
-// Two subPaths, not one. Without the home mount, anything postCreate writes to
-// the home directory is destroyed by the next stop, and "postCreate runs once"
-// stops being true.
+// Home needs its own subPath, or a stop destroys what postCreate wrote there.
 func TestBothSubPathsAreMounted(t *testing.T) {
 	objs := decode(t, testInput())
 	mounts := containerField(t, objs, "volumeMounts").([]any)
@@ -189,8 +183,7 @@ func TestEnvComesFromTheSecret(t *testing.T) {
 	}
 }
 
-// Same precedence the local provider gives: an explicit workspace setting beats
-// the project's own containerEnv.
+// Matches the local provider: workspace settings beat containerEnv.
 func TestWorkspaceSettingsBeatContainerEnv(t *testing.T) {
 	in := testInput()
 	in.Dev.ContainerEnv = map[string]string{"GREETING": "from-config"}
@@ -257,8 +250,7 @@ func TestOptionalConfigIsIncludedWhenSet(t *testing.T) {
 	}
 }
 
-// Without a changed pod template a rebuild produces no new ReplicaSet, and the
-// cluster goes on running the image it already pulled under the same tag.
+// The annotation changes the pod template, so a rebuild rolls a new ReplicaSet.
 func TestRebuildAnnotationChangesThePodTemplate(t *testing.T) {
 	in := testInput()
 	in.RebuiltAt = "2026-09-14T10:00:00Z"
@@ -282,8 +274,7 @@ func TestStoppedDeploymentHasZeroReplicas(t *testing.T) {
 	}
 }
 
-// A home inside the workspace would mount one subPath over the other, and which
-// wins is not worth leaving to chance.
+// A home nested in the workspace shadows one subPath with the other.
 func TestOverlappingMountsAreRefused(t *testing.T) {
 	in := testInput()
 	in.Dev.WorkspaceFolder = "/home/node/project"
@@ -307,13 +298,8 @@ func TestMissingInputsAreRefused(t *testing.T) {
 	}
 }
 
-// The real check on the hand-rolled structs: kubectl's own strict validation,
-// which catches a misspelled or mistyped field that JSON assertions above would
-// happily accept.
-//
-// It needs a reachable API server despite --dry-run=client, because strict
-// validation is done against the server's OpenAPI schema. So it skips without
-// one rather than failing — the assertions above still run everywhere.
+// kubectl's strict validation catches misspelled fields the JSON assertions
+// accept. It needs the server's schema, so the test skips without a cluster.
 func TestManifestPassesKubectlValidation(t *testing.T) {
 	if _, err := exec.LookPath("kubectl"); err != nil {
 		t.Skip("kubectl is not on PATH")
@@ -380,8 +366,8 @@ func mountPaths(t *testing.T, in manifestInput) []string {
 	return out
 }
 
-// A third subPath on the same claim, so the agents' configuration survives a
-// scale to zero exactly as the home directory does.
+// The agents' config gets its own subPath, kept across scale-to-zero as home
+// is.
 func TestStateGetsItsOwnSubPath(t *testing.T) {
 	in := testInput()
 	in.Container.PersistState = true
@@ -402,8 +388,8 @@ func TestStateGetsItsOwnSubPath(t *testing.T) {
 	}
 }
 
-// Without the column there is no third mount: an unused subPath would be a
-// directory on the claim that nothing writes to and nothing cleans up.
+// No state mount without persist_state: an unused subPath would linger on the
+// claim.
 func TestNoStateMountWhenOff(t *testing.T) {
 	got := mountPaths(t, testInput())
 	if len(got) != 2 {
@@ -416,9 +402,7 @@ func TestNoStateMountWhenOff(t *testing.T) {
 	}
 }
 
-// The guard covers every pair, not just workspace against home: a state mount
-// nested in either would shadow it, and which subPath wins is not something to
-// leave to chance.
+// The overlap guard covers every pair, state included.
 func TestStateMountNestedInTheWorkspaceIsRefused(t *testing.T) {
 	in := testInput()
 	in.Container.PersistState = true

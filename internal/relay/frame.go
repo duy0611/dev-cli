@@ -6,34 +6,23 @@ import (
 	"io"
 )
 
-// The exec channel is a single pair of pipes, but a container can hold several
-// agent connections at once — `git fetch --all` runs one ssh per remote, and
-// ssh keeps its connection open for the length of the handshake. So the stream
-// is framed and the connections are multiplexed over it, each with an id.
-//
-// Without this, a second connection's bytes would interleave with the first's
-// and both would see a corrupt agent protocol.
+// The exec channel is one pair of pipes, but a container can hold several agent
+// connections at once, so the stream is framed and multiplexed by channel id.
 
 // frameKind says what a frame carries.
 type frameKind uint8
 
 const (
-	// kindOpen announces a new connection. No payload.
-	kindOpen frameKind = 1
-	// kindData carries bytes belonging to one connection.
-	kindData frameKind = 2
-	// kindClose says one connection is finished. No payload.
+	kindOpen  frameKind = 1
+	kindData  frameKind = 2
 	kindClose frameKind = 3
 )
 
-// maxPayload bounds a single frame's payload.
-//
-// Agent messages are small — a signature request is a few hundred bytes — so
-// this is far above what is needed. It exists so that a corrupt or hostile
-// length field cannot make the reader allocate an arbitrary amount of memory.
+// maxPayload bounds a single frame's payload, so a corrupt length field cannot
+// make the reader allocate arbitrarily.
 const maxPayload = 1 << 20
 
-// header is the fixed part of every frame: kind, channel id, payload length.
+// headerLen is kind, channel id and payload length.
 const headerLen = 1 + 4 + 4
 
 type frame struct {
@@ -42,8 +31,7 @@ type frame struct {
 	payload []byte
 }
 
-// writeFrame writes one frame. Callers must serialise their own access: a
-// partial write interleaved with another goroutine's would corrupt the stream.
+// writeFrame writes one frame. Callers must serialise access to w.
 func writeFrame(w io.Writer, f frame) error {
 	if len(f.payload) > maxPayload {
 		return fmt.Errorf("frame payload %d exceeds %d", len(f.payload), maxPayload)
@@ -53,8 +41,7 @@ func writeFrame(w io.Writer, f frame) error {
 	binary.BigEndian.PutUint32(hdr[1:5], f.channel)
 	binary.BigEndian.PutUint32(hdr[5:9], uint32(len(f.payload)))
 
-	// Header and payload in one write where possible, so a reader on the other
-	// end is never handed a header whose payload has not been sent yet.
+	// One write, so the reader never sees a header without its payload.
 	buf := make([]byte, 0, headerLen+len(f.payload))
 	buf = append(buf, hdr[:]...)
 	buf = append(buf, f.payload...)
@@ -62,14 +49,11 @@ func writeFrame(w io.Writer, f frame) error {
 	return err
 }
 
-// readFrame reads one frame, returning io.EOF when the stream ends cleanly
-// between frames.
+// readFrame reads one frame, returning io.EOF when the stream ends between
+// frames.
 func readFrame(r io.Reader) (frame, error) {
 	var hdr [headerLen]byte
 	if _, err := io.ReadFull(r, hdr[:]); err != nil {
-		// A clean EOF on the header boundary is the stream ending, not an
-		// error: the far side closed between frames, which is how a session
-		// finishes.
 		return frame{}, err
 	}
 
@@ -84,8 +68,7 @@ func readFrame(r io.Reader) (frame, error) {
 	if n > 0 {
 		f.payload = make([]byte, n)
 		if _, err := io.ReadFull(r, f.payload); err != nil {
-			// Mid-frame EOF is a truncated stream, which is an error however
-			// the header read was treated.
+			// EOF mid-frame is a truncated stream, not a clean end.
 			if err == io.EOF {
 				err = io.ErrUnexpectedEOF
 			}

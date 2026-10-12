@@ -16,8 +16,7 @@ func TestParseCommandShapes(t *testing.T) {
 		want [][]string
 	}{
 		{
-			// A string is a shell command line, so it has to reach a shell or
-			// `npm i && npm test` runs as a single filename.
+			// A string is a shell line, so `npm i && npm test` needs sh.
 			name: "string",
 			raw:  `"npm install"`,
 			want: [][]string{{"sh", "-c", "npm install"}},
@@ -29,7 +28,7 @@ func TestParseCommandShapes(t *testing.T) {
 			want: [][]string{{"npm", "install"}},
 		},
 		{
-			// Named commands, sorted so a failure is reproducible.
+			// Object keys are sorted, so the order is stable.
 			name: "object",
 			raw:  `{"b":"make build","a":["npm","i"]}`,
 			want: [][]string{{"npm", "i"}, {"sh", "-c", "make build"}},
@@ -62,8 +61,7 @@ func TestParseCommandRejectsNonsense(t *testing.T) {
 	}
 }
 
-// Features contribute commands of their own, so a merged phase is an array of
-// entries and each may be any of the three shapes.
+// Each feature may contribute a command in any of the three shapes.
 func TestParseAllFlattensEveryContributor(t *testing.T) {
 	got, err := parseAll([]json.RawMessage{
 		json.RawMessage(`"echo one"`),
@@ -78,8 +76,8 @@ func TestParseAllFlattensEveryContributor(t *testing.T) {
 	}
 }
 
-// lifecycleStubs installs a kubectl whose `exec` behaviour depends on whether
-// the marker file is considered present, and records every command run.
+// lifecycleStubs fakes the marker file's presence and records the lifecycle
+// commands.
 func lifecycleStubs(t *testing.T, markerExists bool) *stubs {
 	t.Helper()
 	s := newStubs(t)
@@ -118,7 +116,7 @@ func TestLifecycleRunsCreateCommandsOnceAndPostStartAlways(t *testing.T) {
 				t.Errorf("%q did not run: %v", want, calls)
 			}
 		}
-		// Nothing attaches, so running postAttach would be inventing an event.
+		// postAttach runs on attach, which never happens here.
 		if anyCall(calls, "echo attach") {
 			t.Error("postAttachCommand ran")
 		}
@@ -127,7 +125,6 @@ func TestLifecycleRunsCreateCommandsOnceAndPostStartAlways(t *testing.T) {
 		}
 	})
 
-	// A stop and start must not reinstall everything.
 	t.Run("marker present", func(t *testing.T) {
 		s := lifecycleStubs(t, true)
 		c := k8sContainer(t)
@@ -139,14 +136,13 @@ func TestLifecycleRunsCreateCommandsOnceAndPostStartAlways(t *testing.T) {
 		if anyCall(calls, "echo on") || anyCall(calls, "echo post") {
 			t.Errorf("create-time commands re-ran: %v", calls)
 		}
-		// postStart is per start, by definition.
 		if !anyCall(calls, "echo start") {
 			t.Errorf("postStartCommand did not run: %v", calls)
 		}
 	})
 }
 
-// A rebuild is a new image, so whatever postCreate installed is gone with it.
+// A rebuild is a new image, so the marker must be cleared.
 func TestRebuildClearsTheMarkerAndReRuns(t *testing.T) {
 	s := lifecycleStubs(t, true)
 	c := k8sContainer(t)
@@ -160,8 +156,7 @@ func TestRebuildClearsTheMarkerAndReRuns(t *testing.T) {
 	}
 }
 
-// Carrying on into a container missing its dependencies produces a confusing
-// failure much later.
+// Stop at the first failing phase; later phases assume it succeeded.
 func TestLifecycleStopsAtTheFirstFailure(t *testing.T) {
 	s := newStubs(t)
 	s.installKubectl(t, `case "$*" in
@@ -189,14 +184,13 @@ esac`)
 	if anyCall(calls, "echo post") {
 		t.Errorf("postCreate ran after onCreate failed: %v", calls)
 	}
-	// A marker over a failed install makes the next start skip the fix.
+	// A marker over a failed install would skip the fix on the next start.
 	if anyCall(calls, "touch") {
 		t.Errorf("the marker was written despite the failure: %v", calls)
 	}
 }
 
-// The create path has to put the files in before postCreate tries to build
-// them.
+// Files must arrive before postCreate runs.
 func TestFirstCreateSyncsBeforeLifecycle(t *testing.T) {
 	s := newStubs(t)
 	s.installKubectl(t, `case "$*" in
@@ -243,7 +237,6 @@ esac`)
 	}
 }
 
-// A start must not overwrite what the container has been doing.
 func TestStartDoesNotSync(t *testing.T) {
 	s := lifecycleStubs(t, true)
 

@@ -1,11 +1,6 @@
-// Package agentcfg reads the agents.yaml a project declares its agents' skills,
-// MCP servers and plugins in.
-//
-// It parses and validates and nothing else: no exec, no cobra, no container.
-// Turning a declaration into commands is internal/agent's job. The only
-// filesystem access is reading the file and the local skills it names, which
-// happens here so that a missing skill is a usage error at create rather than a
-// failure halfway through an apply.
+// Package agentcfg reads and validates the agents.yaml a project declares its
+// agents' skills, MCP servers and plugins in. Turning it into commands is
+// internal/agent's job.
 package agentcfg
 
 import (
@@ -28,22 +23,20 @@ import (
 // FileName is where a project declares its agents, relative to its folder.
 const FileName = ".devcontainer/agents.yaml"
 
-// agents are the ids this file has a section for. Codex is in the agent
-// registry but deliberately not here, so a codex: section is an unknown key
-// rather than a declaration nothing applies.
+// agents are the ids this file has a section for. codex is absent on purpose:
+// a codex: section is an unknown key.
 var agents = []string{"claude", "hermes", "opencode"}
 
 // Skill is one SKILL.md directory to place in an agent's skills directory.
 type Skill struct {
-	// Name is the directory it lands in, validated as a plain name.
+	// Name is the directory the skill is placed in.
 	Name string
-	// Git, Ref and Path describe a skill cloned inside the container. Path is
-	// the subdirectory holding SKILL.md, "." for the repository root.
+	// Git, Ref and Path locate a skill cloned inside the container. Path is "."
+	// for the repository root.
 	Git  string
 	Ref  string
 	Path string
-	// Archive is a local skill as a tar, read on the host at load. Non-nil
-	// exactly when the skill is local.
+	// Archive is a local skill as a tar, read on the host at load; nil for git.
 	Archive []byte
 }
 
@@ -81,15 +74,13 @@ type section struct {
 	marketplaces map[string]string
 }
 
-// The raw shapes, decoded with KnownFields so that a key an agent does not have
-// — hermes.plugins, opencode.marketplaces, codex — is rejected rather than
-// ignored. A typo caught at create beats a plugin that silently never arrives.
+// The raw shapes. Load decodes with KnownFields, so a key an agent lacks (such
+// as hermes.plugins) is an error rather than ignored.
 type rawSkill struct {
 	Git  string `yaml:"git"`
 	Ref  string `yaml:"ref"`
 	Path string `yaml:"path"`
-	// Paths names several skills in one repository. Nil when absent, which
-	// is how an empty list is told apart from none given.
+	// Nil when absent, so an empty list is told apart from none given.
 	Paths []string `yaml:"paths"`
 }
 
@@ -143,9 +134,7 @@ func Load(file string) (*Spec, error) {
 		return nil, fmt.Errorf("%s: version %d is not one this dev reads (version: 1)", file, *raw.Version)
 	}
 
-	// Local skill paths are relative to the file, not to the working
-	// directory, so --agent-config ~/dotfiles/agents.yaml carries skills that
-	// sit next to it.
+	// Local skill paths resolve against the file, not the working directory.
 	base := filepath.Dir(file)
 	s := &Spec{sections: map[string]*section{}}
 	if s.shared, err = buildSection(file, base, "", raw.Skills, raw.MCP); err != nil {
@@ -180,8 +169,7 @@ func Load(file string) (*Spec, error) {
 		s.sections["hermes"] = &sec
 	}
 
-	// Checked per agent, across both layers: two skills with one name would
-	// land in one directory, and whichever ran second would silently win.
+	// Per agent, across both layers: they share one skills directory.
 	for _, id := range agents {
 		v, ok := s.View(id)
 		if !ok {
@@ -217,8 +205,7 @@ func buildSection(file, base, prefix string, skills []rawSkill, mcp map[string]M
 }
 
 // buildSkills expands one entry into the skills it names: several for a git
-// entry with paths, one otherwise. Each is a Skill of its own, so the
-// duplicate-name check in Load sees every name however the entries group them.
+// entry with paths, one otherwise.
 func buildSkills(base string, r rawSkill) ([]Skill, error) {
 	if r.Paths == nil {
 		sk, err := buildSkill(base, r)
@@ -229,8 +216,6 @@ func buildSkills(base string, r rawSkill) ([]Skill, error) {
 	}
 	switch {
 	case r.Git == "":
-		// A local entry already names one directory; a list of them is a
-		// list of entries.
 		return nil, errors.New("paths only applies to a git skill; give each local skill its own entry")
 	case r.Path != "":
 		return nil, errors.New("give path or paths, not both")
@@ -261,8 +246,7 @@ func buildSkill(base string, r rawSkill) (Skill, error) {
 		if !filepath.IsAbs(p) {
 			p = filepath.Join(base, p)
 		}
-		// Named from the path as written, not as resolved: a symlinked
-		// skills/foo is still "foo" to the operator who wrote it.
+		// From the path as written: a symlinked skills/foo is still "foo".
 		name := filepath.Base(filepath.Clean(p))
 		if err := validSkillName(name); err != nil {
 			return Skill{}, err
@@ -292,9 +276,8 @@ func gitSkill(git, ref, p string) (Skill, error) {
 	if p == "" {
 		p = "."
 	}
-	// IsLocal refuses an absolute path and anything climbing out with "..":
-	// the path is spliced into a copy inside the container, and a skill must
-	// not be able to name a directory outside its clone.
+	// IsLocal refuses absolute paths and ".." escapes: the path is spliced into
+	// the container's copy of the clone.
 	if !filepath.IsLocal(p) {
 		return Skill{}, fmt.Errorf("path %q must stay inside the repository", written)
 	}
@@ -309,9 +292,8 @@ func gitSkill(git, ref, p string) (Skill, error) {
 	return Skill{Name: name, Git: git, Ref: ref, Path: p}, nil
 }
 
-// validSkillName is xpath.ValidateName minus the two names it accepts that
-// would be catastrophic here: the name becomes a directory dev deletes and
-// replaces, and "." or ".." there is the skills directory or its parent.
+// validSkillName is xpath.ValidateName minus "." and "..": as a directory dev
+// deletes and replaces, those would be the skills directory or its parent.
 func validSkillName(name string) error {
 	if name == "." || name == ".." {
 		return fmt.Errorf("skill name %q is not a directory name; give a path ending in one", name)
@@ -337,8 +319,7 @@ func validateMCP(name string, m MCPServer) error {
 }
 
 // View projects the file onto one agent. False when nothing in it reaches that
-// agent, which is what spares a container a probe for an agent the file never
-// mentions.
+// agent.
 func (s *Spec) View(agent string) (View, bool) {
 	if !slices.Contains(agents, agent) {
 		return View{}, false
@@ -352,8 +333,7 @@ func (s *Spec) View(agent string) (View, bool) {
 	maps.Copy(v.MCP, s.shared.mcp)
 	if sec != nil {
 		v.Skills = append(v.Skills, sec.skills...)
-		// After the shared layer: a per-agent server of the same name
-		// replaces it for this agent, the one override the format allows.
+		// Copied after the shared layer, so a per-agent server wins.
 		maps.Copy(v.MCP, sec.mcp)
 		v.Plugins = sec.plugins
 		v.Marketplaces = sec.marketplaces
@@ -361,10 +341,8 @@ func (s *Spec) View(agent string) (View, bool) {
 	return v, true
 }
 
-// refPattern is a ${NAME} reference: an environment variable name in braces
-// and nothing else. $NAME, ${1} and ${A:-b} are deliberately not matched —
-// each agent resolves only the plain form, so rewriting anything more would
-// promise a default no agent implements.
+// refPattern matches ${NAME} only. No agent resolves $NAME or defaults such as
+// ${A:-b}, so those are left alone.
 var refPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
 // Refs lists the variables the file's MCP servers reference, for warning about
@@ -397,10 +375,9 @@ func (s *Spec) Refs() []string {
 	return slices.Sorted(maps.Keys(seen))
 }
 
-// RewriteRefs replaces every ${NAME} in s with to(NAME). Adapters use it to
-// spell a reference the way their agent resolves one; dev never substitutes a
-// value, which is what keeps tokens out of the file, the database and the
-// state volume.
+// RewriteRefs replaces every ${NAME} in s with to(NAME). Values are never
+// substituted: tokens must not reach the file, the database or the state
+// volume.
 func RewriteRefs(s string, to func(name string) string) string {
 	return refPattern.ReplaceAllStringFunc(s, func(m string) string {
 		return to(refPattern.FindStringSubmatch(m)[1])

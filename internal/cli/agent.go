@@ -74,17 +74,13 @@ func runContainerStartAgent(ctx context.Context, a *app, workspace, name, agentI
 		return err
 	}
 
-	// Asked before Up, so a host-side failure — no kubectl, no contexts, a
-	// cancelled pick — does not start a container for nothing. Minted after it,
-	// below, so the token's lifetime starts with the session rather than before
-	// an image pull.
+	// Asked before Up, so a host-side failure starts no container. Minted
+	// later, so the token does not age through an image pull.
 	kubeReq, err := askKubeTokenIf(ctx, kubeToken)
 	if err != nil {
 		return err
 	}
 
-	// The command starts the container rather than refusing: asking for an
-	// agent is asking for a working container.
 	status, err := t.provider.Status(ctx, t.container)
 	if err != nil {
 		return err
@@ -95,9 +91,6 @@ func runContainerStartAgent(ctx context.Context, a *app, workspace, name, agentI
 		}
 	}
 
-	// start-agent can be the first thing to start a container created with
-	// --no-start, and the agent it is about to launch is what the file
-	// configures — so it honours an owed apply exactly as start does.
 	if t.container.AgentConfigPending {
 		spec, err := loadAgentConfig(t.container)
 		if err != nil {
@@ -112,27 +105,23 @@ func runContainerStartAgent(ctx context.Context, a *app, workspace, name, agentI
 		return err
 	}
 
-	// After ensureAgentPresent, which may rebuild: a kubeconfig written into
-	// the old container would go with it.
+	// After ensureAgentPresent, which may rebuild and discard a written
+	// kubeconfig.
 	environ, err = a.applyKubeToken(ctx, t, kubeReq, environ)
 	if err != nil {
 		return err
 	}
 
-	// After the container is up and after any rebuild: the relay runs inside
-	// the container, so it has nothing to attach to before the first, and a
-	// rebuild would take the running relay down with the old container.
+	// After the container is up: the relay runs inside it, and a rebuild would
+	// stop it.
 	environ, stopAgent, err := a.forwardAgent(ctx, t, sshOverride, environ)
 	if err != nil {
 		return err
 	}
 	defer stopAgent()
 
-	// Herdr classifies a pane by inspecting the foreground process it can see
-	// on the host, not anything inside the container — its own docs say so
-	// plainly: "Herdr cannot see it if you set it only inside a VM or
-	// container." `dev` is the process sitting in the pane, so this is the
-	// only copy of the variable that can reach it.
+	// Herdr reads the pane's process on the host and cannot see variables set
+	// only in the container.
 	if err := os.Setenv("HERDR_AGENT", ag.ID); err != nil {
 		return err
 	}
@@ -166,9 +155,7 @@ func (a *app) ensureAgentPresent(ctx context.Context, t *target, ag agent.Agent,
 
 	a.printf("agent %q is not installed in %s's image.\n", ag.ID, t.container.Name)
 	if !confirm(os.Stdin, a.out, "rebuild the container and look again?") {
-		// The rebuild only helps if the agent is already declared in the
-		// project's own devcontainer.json, so say where the fix lives rather
-		// than implying this tool can apply it.
+		// The fix lives in the project's devcontainer.json, not with this tool.
 		return fmt.Errorf("add %s to %s and rebuild", ag.Binary, t.container.ConfigPath)
 	}
 
@@ -186,9 +173,7 @@ func (a *app) ensureAgentPresent(ctx context.Context, t *target, ag agent.Agent,
 }
 
 // agentInstalled reports whether the binary is on PATH inside the container.
-//
-// `command -v`, not `which`: it is a shell builtin, so it works in the many
-// images that ship no which(1) at all.
+// Uses `command -v`, since many images ship no which(1).
 func agentInstalled(ctx context.Context, t *target, ag agent.Agent) bool {
 	err := t.provider.Exec(ctx, t.container,
 		[]string{"sh", "-c", "command -v " + ag.Binary},
@@ -196,10 +181,8 @@ func agentInstalled(ctx context.Context, t *target, ag agent.Agent) bool {
 	return err == nil
 }
 
-// confirm asks a yes/no question.
-//
-// Returns false without asking when stdin is not a terminal, so a scripted run
-// fails with the explanation rather than hanging on a prompt nobody will see.
+// confirm asks a yes/no question, and answers no without asking when stdin is
+// not a terminal.
 func confirm(in *os.File, out io.Writer, question string) bool {
 	if !isTerminal(in) {
 		return false
@@ -218,11 +201,8 @@ func confirm(in *os.File, out io.Writer, question string) bool {
 	}
 }
 
-// isTerminal reports whether f is an interactive terminal.
-//
-// Not a ModeCharDevice check: /dev/null is a character device too, so
-// `dev container start-agent ... < /dev/null` would read as interactive and print a
-// prompt into a run that can never answer it.
+// isTerminal reports whether f is an interactive terminal. It is not a
+// ModeCharDevice check, since /dev/null is a character device too.
 func isTerminal(f *os.File) bool {
 	return term.IsTerminal(int(f.Fd()))
 }

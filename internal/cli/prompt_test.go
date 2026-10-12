@@ -17,7 +17,6 @@ func TestAskUsesTheDefaultOnAnEmptyAnswer(t *testing.T) {
 	if got != "default" {
 		t.Errorf("ask = %q, want the default", got)
 	}
-	// The default has to be visible, or pressing return is a guess.
 	if !strings.Contains(out.String(), "[default]") {
 		t.Errorf("prompt %q does not show the default", out.String())
 	}
@@ -35,8 +34,7 @@ func TestAskTakesTheAnswer(t *testing.T) {
 	}
 }
 
-// A piped answer often has no trailing newline; treating that as a failure
-// would break every scripted use.
+// A piped answer often has no trailing newline.
 func TestAskAcceptsEOFWithoutANewline(t *testing.T) {
 	p := newPrompter(strings.NewReader("sandboxes"), &bytes.Buffer{})
 
@@ -61,8 +59,7 @@ func TestAskOnEOFTakesTheDefault(t *testing.T) {
 	}
 }
 
-// Some settings have no workable default, and accepting an empty answer would
-// store a provider that cannot work.
+// An empty answer would store a provider that cannot work.
 func TestAskRequiredRepeatsUntilAnswered(t *testing.T) {
 	var out bytes.Buffer
 	p := newPrompter(strings.NewReader("\n\nreg.example/dev\n"), &out)

@@ -1,5 +1,4 @@
-// Package model holds the persisted domain types. They are plain data: every
-// behaviour that needs them lives in the package that acts on them.
+// Package model holds the persisted domain types, as plain data.
 package model
 
 import "time"
@@ -11,8 +10,7 @@ const (
 	// KindLocal runs devcontainers through the devcontainer CLI against a
 	// Docker-compatible engine.
 	KindLocal ProviderKind = "local"
-	// KindK8s will run them in a Kubernetes cluster. Not implemented yet; the
-	// constant exists so the stored value has one spelling from the start.
+	// KindK8s runs them in a Kubernetes cluster.
 	KindK8s ProviderKind = "k8s"
 )
 
@@ -20,7 +18,7 @@ const (
 type Provider struct {
 	Name      string
 	Kind      ProviderKind
-	Config    string // provider-specific JSON, "{}" when there is nothing to say
+	Config    string // provider-specific JSON, "{}" when empty
 	CreatedAt time.Time
 }
 
@@ -28,15 +26,15 @@ type Provider struct {
 type Workspace struct {
 	Name         string
 	ProviderName string
-	// SSHForward carries the host's SSH agent into this workspace's
-	// containers, for the length of one dev command. See internal/relay.
+	// SSHForward forwards the host's SSH agent into the containers for the
+	// length of one dev command.
 	SSHForward bool
 	CreatedAt  time.Time
 }
 
 // Setting is one environment variable a workspace contributes to its
-// containers. Spec is a value specification, not a value: see internal/secret.
-// The resolved value is never stored.
+// containers. Spec is a value specification such as keychain:NAME, never the
+// resolved value.
 type Setting struct {
 	Key  string
 	Spec string
@@ -46,38 +44,31 @@ type Setting struct {
 type SourceKind string
 
 const (
-	// SourceFolder is a directory on the host that ships its own
-	// .devcontainer configuration.
+	// SourceFolder is a directory on the host.
 	SourceFolder SourceKind = "folder"
-	// SourceNone is a container with no host folder at all. Its work lives in
-	// a volume the provider owns — a docker named volume on local, the PVC on
-	// k8s — because there is no host directory to bind-mount.
+	// SourceNone is a container with no host folder; its work lives in a volume
+	// the provider owns.
 	SourceNone SourceKind = "none"
 )
 
 // Mode is how much of the operator's checkout a container can reach. Fixed at
-// create and kept by rebuild: what a container is mounted on must not change
-// under it.
+// create.
 type Mode string
 
 const (
-	// ModeGuarded mounts the folder live with its .git read-only, so the agent
-	// can read history but not change what host git runs.
+	// ModeGuarded mounts the folder live with its .git read-only.
 	ModeGuarded Mode = "guarded"
-	// ModeIsolated copies the folder into a volume dev owns and never mounts
-	// it, so nothing the agent does reaches host git.
+	// ModeIsolated copies the folder into a volume and never mounts it.
 	ModeIsolated Mode = "isolated"
-	// ModeLegacy is a container created before modes, under the single-file
-	// git guard. It keeps behaving as it did.
+	// ModeLegacy is a container created before modes existed.
 	ModeLegacy Mode = "legacy"
-	// ModeNone is a folderless container: no checkout for a mode to describe.
+	// ModeNone is a folderless container.
 	ModeNone Mode = "none"
 )
 
 // Container is a devcontainer this tool knows about. It records what the
-// container was made from, never whether it is currently running: live status
-// is read from the engine, because a stored copy goes stale the moment anything
-// happens outside dev.
+// container was made from, never whether it is running: live status comes from
+// the engine.
 type Container struct {
 	Name          string
 	WorkspaceName string
@@ -85,73 +76,41 @@ type Container struct {
 	Source        string // absolute physical host path when SourceKind is folder, empty when none
 	ConfigPath    string // the resolved .devcontainer config file
 	// GeneratedConfig is the devcontainer.json dev wrote for this container,
-	// empty when the project ships its own. It lives here rather than on disk
-	// so that deleting the workspace takes it too, and so a cloud provider
-	// inherits it with the row. The devcontainer CLI only accepts a path, so
-	// it is materialised to a temporary file per invocation.
+	// empty when the project ships its own.
 	GeneratedConfig string
-	// PersistState says whether this container keeps its agents' configuration
-	// on a volume of its own, so that plugins, marketplaces and MCP definitions
-	// outlive a rebuild. Fixed at create: a rebuild must not be able to change
-	// what a container is mounted on.
-	//
-	// Credentials are not part of it. Agents authenticate from environment
-	// variables resolved per invocation, so nothing worth stealing rests here.
+	// PersistState says whether agent configuration lives on a volume of its
+	// own. Fixed at create.
 	PersistState bool
 	// AgentConfig says which agents.yaml this container applies: "" for the
-	// project's own .devcontainer/agents.yaml when it has one, "none" when
-	// create was given --no-agent-config, otherwise the physical path
-	// --agent-config named. The choice and never the contents, so an edit to
-	// the file takes effect at the next rebuild. Fixed at create, like
-	// PersistState, so rebuild reads the same file without the flag.
+	// project's own, "none" for --no-agent-config, otherwise a physical path.
 	AgentConfig string
-	// AgentConfigPending says applying that file is still owed: set at create
-	// when there is one, cleared once an apply finishes. It is what lets
-	// `create --no-start` hand the job to the first start, and a failed apply
-	// be retried by the next. Work dev owes, not live container status.
+	// AgentConfigPending says applying AgentConfig is still owed.
 	AgentConfigPending bool
 	// Mode is how much of the checkout this container reaches. Fixed at create.
 	Mode Mode
-	// GitGuard says host git is shielded from what this container writes under
-	// .git: its config is mounted read-only and its hooks are a container-only
-	// copy. Fixed at create, for PersistState's reason. Meaningful for legacy
-	// containers only; a container with a mode says it all with Mode.
+	// GitGuard says host git is shielded from writes under .git. Meaningful for
+	// legacy containers only.
 	GitGuard bool
-	// AllowPrivileged says the operator let this container ask its engine for
-	// access to the host — privileged mode, the engine socket, host namespaces,
-	// a mount of the host's root or home. Fixed at create, by flag only: a
-	// project file the agent can edit must not be able to grant it.
+	// AllowPrivileged says the operator allowed host access (privileged mode,
+	// the engine socket, host namespaces, host mounts). Set by create's flag
+	// only, never by a project file an agent can edit.
 	AllowPrivileged bool
-	// ConfigDigest is the digest of the project configuration this container
-	// was last built from, so a rebuild can refuse one that changed unseen.
-	// Empty for a generated configuration, which is dev's own, and for a row
-	// created before the digest existed, until its first rebuild records one.
+	// ConfigDigest is the digest of the project configuration last built from,
+	// so a rebuild can refuse one that changed unseen. Empty for generated
+	// configurations.
 	ConfigDigest string
-	// ConfigDigestFields is a hash per field and per referenced file of that
-	// same configuration, so a rebuild that finds the digest changed can say
-	// which fields did. Hashes only: dev keeps no copy of the document.
+	// ConfigDigestFields holds a hash per field of that configuration, so a
+	// changed digest can name the fields that changed.
 	ConfigDigestFields string
-	// OverrideConfigPath is a merged devcontainer.json built for the length of
-	// one invocation: the project's own document with dev's state mount in it.
-	//
-	// Not persisted, and so needing no migration. A stored merge would freeze a
-	// snapshot of a file dev does not own — add a feature to the project's
-	// devcontainer.json and a rebuild would silently use the document as it
-	// stood at create. That is invariant 4's reasoning applied to a file on the
-	// other side of the fence. Set by materialise, read by the local provider.
+	// OverrideConfigPath is the merged devcontainer.json for one invocation. It
+	// is not persisted: a stored merge would freeze a snapshot of a file dev
+	// does not own.
 	OverrideConfigPath string
-	// WorktreeRepo is git's common directory when the container's folder is a
-	// git worktree, empty otherwise. Read from git at create, so a worktree
-	// made outside dev is mounted correctly too, and fixed then like the
-	// workspace mount. materialise merges the two bind mounts invariant 11
-	// requires into a project's own devcontainer.json from it; a generated
-	// document has them baked in at render time.
+	// WorktreeRepo is git's common directory when the folder is a git worktree,
+	// empty otherwise.
 	WorktreeRepo string
-	// GitGuardMounts are the mounts entries that keep host git from running
-	// what this container writes under .git, for the length of one invocation.
-	// Not persisted, for WorktreeRepo's reason: they depend on where the
-	// project's .git is today, so they are derived per invocation by whatever
-	// resolves the container and merged in by materialise.
+	// GitGuardMounts are the mount entries that shield host git, derived per
+	// invocation and not persisted.
 	GitGuardMounts []string
 	CreatedAt      time.Time
 }
@@ -162,31 +121,25 @@ type Status string
 const (
 	StatusRunning Status = "running"
 	StatusStopped Status = "stopped"
-	// StatusAbsent means no container exists for this record yet, which is the
-	// normal state between `container create --no-start` and the first start.
+	// StatusAbsent means no container exists yet for this record.
 	StatusAbsent Status = "absent"
 )
 
-// Worktree is a git worktree checkout `dev worktree create` made.
-//
-// It belongs to a workspace, not to a container: any number of containers may
-// run on it, made separately with `dev container create`, and none of them
-// takes it away. Recording it is what lets `dev worktree remove` find the
-// checkout again, so it is removed only by that command.
+// Worktree is a git worktree checkout made by `dev worktree create`. It belongs
+// to a workspace, not to any container, and is removed only by `dev worktree
+// remove`.
 type Worktree struct {
 	WorkspaceName string
 	Name          string
-	// Repo is git's common directory — the directory holding the object store
-	// and the worktree administration. Not the repository root: the two differ
+	// Repo is git's common directory, not the repository root: the two differ
 	// for a bare repository, and this is the path the checkout's .git file
-	// points into, so it is what gets bind-mounted into the container.
+	// points into.
 	Repo   string
 	Branch string
-	// Path is the checkout, resolved. Equal to the container's Source today,
-	// and kept separately because the two answer different questions.
+	// Path is the checkout, resolved.
 	Path string
-	// HerdrWorkspace is the id Herdr gave this checkout, empty when Herdr was
-	// not running or declined. Only used to close that workspace on removal.
+	// HerdrWorkspace is the id of this checkout's Herdr workspace, empty when
+	// Herdr was not running.
 	HerdrWorkspace string
 	CreatedAt      time.Time
 }

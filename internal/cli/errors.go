@@ -14,9 +14,8 @@ const (
 	exitNotFound = 3 // a named provider, workspace or container does not exist
 )
 
-// codedError carries an exit code alongside the message. Commands return these
-// instead of exiting, so that cobra unwinds normally and the message is printed
-// in exactly one place.
+// codedError carries an exit code with the message. Commands return it rather
+// than exiting, so deferred cleanup runs and the message prints once.
 type codedError struct {
 	code int
 	err  error
@@ -49,16 +48,10 @@ func exitCodeOf(err error) int {
 	return exitError
 }
 
-// overlayError is a failure to build the merged devcontainer.json.
-//
-// Distinguishable from any other failure because it is deferrable: materialise
-// runs for every container command, but stop, remove, logs and status find
-// their container through docker label filters and never read a config at all.
-// Failing those too would leave a syntax error in a project's file holding a
-// container hostage in the engine, with dev refusing to clean up after itself.
-//
-// Exit 1, like any other runtime failure: the request was well-formed and the
-// container exists.
+// overlayError is a failure to build the merged devcontainer.json. It is
+// deferrable: stop, remove, logs and status find containers by label and never
+// read the config, so failing them too would strand a container behind a syntax
+// error.
 type overlayError struct{ err error }
 
 func (e *overlayError) Error() string { return e.err.Error() }

@@ -11,8 +11,8 @@ import (
 	"time"
 )
 
-// runExpectFail runs dev and returns its combined output, failing the test if
-// the command succeeded.
+// runExpectFail returns dev's combined output, failing the test if dev
+// succeeded.
 func runExpectFail(t *testing.T, bin string, args ...string) string {
 	t.Helper()
 	out, err := exec.Command(bin, args...).CombinedOutput()
@@ -22,8 +22,7 @@ func runExpectFail(t *testing.T, bin string, args ...string) string {
 	return string(out)
 }
 
-// gitFixture is the alpine fixture project, made a git repository with one
-// hook, so the git guard has something to guard.
+// gitFixture is the alpine fixture as a git repository with one hook to guard.
 func gitFixture(t *testing.T) string {
 	t.Helper()
 	requireBinaries(t, "git")
@@ -47,15 +46,11 @@ func gitFixture(t *testing.T) string {
 	return dir
 }
 
-// TestSmokeGitGuard drives guarded mode against a real engine and the real
-// devcontainer CLI: .git is read-only whole, by any name, before and after host
-// git writes its config, and host git keeps working beside the container.
-//
-// The host writes are the point. The single-file guard this replaced held until
-// host git renamed a new config over the old one, which detaches a file mount
-// on Linux at once and on a macOS podman machine about 1.5s later; a directory
-// mount is never renamed over. Each check after a host write is therefore
-// watched for a few seconds rather than made once.
+// TestSmokeGitGuard checks .git stays read-only inside the container, before
+// and after host git writes to it. Host writes are watched for seconds, not
+// read once: host git renames a new config over the old, which detaches a
+// single-file mount a moment later (at once on Linux, about 1.5s on a macOS
+// podman machine).
 func TestSmokeGitGuard(t *testing.T) {
 	requireBinaries(t, "devcontainer", "docker", "git")
 	t.Setenv("DEV_STATE", t.TempDir())
@@ -92,15 +87,13 @@ func TestSmokeGitGuard(t *testing.T) {
 		return string(out), err
 	}
 
-	// The cost of the mode: reading works, writing to the repository does not.
-	// alpine has no git, so the read side is checked with a plain read; git's
-	// own refusal is the same EROFS any writer gets.
+	// Reads work; alpine has no git, so a plain read stands in for it.
 	if out, err := sh("cat " + gitdir + "/HEAD"); err != nil {
 		t.Errorf("reading .git inside failed: %v\n%s", err, out)
 	}
 
-	// Every route into .git, by any spelling: the exact names, a new file, and
-	// the case variants that got past single-file mounts on macOS.
+	// Every route into .git, including case variants that got past single-file
+	// mounts on macOS.
 	probes := map[string]string{
 		"config":           gitdir + "/config",
 		"info/attributes":  gitdir + "/info/attributes",
@@ -132,13 +125,13 @@ func TestSmokeGitGuard(t *testing.T) {
 	}
 	tryAll("before any host write")
 
-	// .git cannot be renamed away from under the guard.
+	// .git must not be renameable out from under the guard.
 	if out, err := sh("mv " + gitdir + " " + gitdir + ".old"); err == nil {
 		t.Errorf("renaming .git inside succeeded: %s", out)
 	}
 
-	// What broke the single-file guard: host git rewriting its config, setting
-	// an upstream, committing. Each must succeed, and the guard must hold.
+	// Host git writes that break a single-file mount; each must succeed and the
+	// guard must hold.
 	for _, args := range [][]string{
 		{"config", "smoke.host", "1"},
 		{"branch", "smoke-side"},
@@ -158,9 +151,9 @@ func TestSmokeGitGuard(t *testing.T) {
 		tryAll(label)
 	}
 
-	// A core.hooksPath set on the host after create — `make hooks`, husky —
-	// points host git into the workspace. The running container predates it,
-	// so it is refused until a rebuild gives it the read-only mount.
+	// A core.hooksPath set after create points host git into the workspace; the
+	// running container predates the read-only mount, so it is refused until
+	// rebuilt.
 	hooksDir := filepath.Join(project, ".githooks")
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -181,14 +174,14 @@ func TestSmokeGitGuard(t *testing.T) {
 		t.Errorf("renaming the tree hooks succeeded: %s", out)
 	}
 
-	// The audit log holds the run, and no setting value.
+	// The audit log records the run without setting values.
 	if out := dev("audit", "--container", name); !strings.Contains(out, "create") || !strings.Contains(out, "exec") {
 		t.Errorf("audit log incomplete:\n%s", out)
 	}
 }
 
-// TestSmokeEscapeGuardAndDrift checks the escape guard and the drift check
-// against the real CLI's merged configuration.
+// TestSmokeEscapeGuardAndDrift checks the escape guard and drift check against
+// the real CLI's merged config.
 func TestSmokeEscapeGuardAndDrift(t *testing.T) {
 	requireBinaries(t, "devcontainer", "docker")
 	t.Setenv("DEV_STATE", t.TempDir())
@@ -213,7 +206,7 @@ func TestSmokeEscapeGuardAndDrift(t *testing.T) {
 		t.Errorf("a refused create left a row:\n%s", out)
 	}
 
-	// Back to the plain fixture, created; then an edit makes rebuild refuse.
+	// Edit the config after create; rebuild must refuse.
 	if err := os.WriteFile(config, []byte(fixtureConfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -229,18 +222,16 @@ func TestSmokeEscapeGuardAndDrift(t *testing.T) {
 	dev("container", "rebuild", name, "--accept-config")
 }
 
-// TestSmokeIsolated drives isolated mode against a real engine: the folder is
-// copied into a volume — uncommitted and untracked files included, the
-// repository rebuilt from a bundle — the agent commits there, the host's folder
-// never changes, and fetch brings the branch home. remove refuses until it has.
+// TestSmokeIsolated checks isolated mode: the folder is copied into a volume
+// with uncommitted and untracked files, the agent's commits stay in the
+// container until fetched, and remove refuses until then.
 func TestSmokeIsolated(t *testing.T) {
 	requireBinaries(t, "devcontainer", "docker", "git")
 	t.Setenv("DEV_STATE", t.TempDir())
 	bin := buildBinary(t)
 	project := gitFixture(t)
-	// The fixture ships an alpine config with no git, which the seed needs
-	// inside; without it, --generate below renders the Ubuntu base, which has
-	// git. Removed before the first commit, so it is not in the history either.
+	// The alpine fixture has no git, which the seed needs; removed before the
+	// first commit.
 	if err := os.RemoveAll(filepath.Join(project, ".devcontainer")); err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +250,7 @@ func TestSmokeIsolated(t *testing.T) {
 	}
 	hostGit("add", "f.txt")
 	hostGit("commit", "-q", "-m", "init")
-	// Uncommitted and untracked, so the copy is seen to carry both.
+	// Uncommitted and untracked, to show the copy carries both.
 	if err := os.WriteFile(filepath.Join(project, "f.txt"), []byte("one\nwip\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -273,8 +264,8 @@ func TestSmokeIsolated(t *testing.T) {
 
 	dev("provider", "configure", providerName, "--kind", "local")
 	dev("workspace", "init", workspaceName, "--provider", providerName)
-	// A generated configuration with git in it: the fixture's alpine has none,
-	// and the seed script needs it inside.
+	// The generated config (Ubuntu base) provides the git the seed script
+	// needs.
 	t.Log("creating an isolated container; the first run pulls a base image")
 	dev("container", "create", name, "--folder", project, "--mode", "isolated", "--generate", "--tools", "yq")
 
@@ -290,11 +281,11 @@ func TestSmokeIsolated(t *testing.T) {
 		t.Errorf("the copy's .git is not a directory: %q", got)
 	}
 
-	// The agent commits on a branch of its own, inside.
+	// The agent commits on its own branch, inside the container.
 	sh("git switch -q -c agent-work && git add -A && " +
 		"git -c user.email=a@example.com -c user.name=agent commit -qm 'from the agent'")
 
-	// Nothing reached the folder: its tree and its history are as they were.
+	// The host folder is unchanged.
 	if got := hostGit("status", "--porcelain"); !strings.Contains(got, "M f.txt") {
 		t.Errorf("the host folder changed: %q", got)
 	}
@@ -302,7 +293,7 @@ func TestSmokeIsolated(t *testing.T) {
 		t.Error("the agent's commit reached the host before any fetch")
 	}
 
-	// remove refuses while the branch is only in the container.
+	// remove refuses while the branch exists only in the container.
 	if out := runExpectFail(t, bin, "container", "remove", name); !strings.Contains(out, "fetch") {
 		t.Errorf("remove did not refuse unfetched work:\n%s", out)
 	}
