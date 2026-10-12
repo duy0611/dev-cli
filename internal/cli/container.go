@@ -665,10 +665,10 @@ func runContainerList(ctx context.Context, a *app, workspace string, all bool, t
 	// and invisible otherwise, so the list is the only place to find out
 	// without reading the generated document.
 	return a.table(func(w io.Writer) {
-		header(w, "WORKSPACE", "NAME", "STATUS", "SOURCE", "CONFIG", "STATE", "HOST", "GIT")
+		header(w, "WORKSPACE", "NAME", "STATUS", "SOURCE", "CONFIG", "STATE", "HOST", "MODE")
 		for _, c := range containers {
 			row(w, c.WorkspaceName, c.Name, statusOf(c), sourceOf(c), configOf(c), onOff(c.PersistState),
-				hostAccessOf(c), gitGuardOf(c))
+				hostAccessOf(c), modeOf(c))
 		}
 	})
 }
@@ -724,6 +724,7 @@ func newContainerStartCmd(a *app) *cobra.Command {
 
 // start is shared by `create` and `start`.
 func (a *app) start(ctx context.Context, workspace string, c model.Container) error {
+	warnLegacy(a, c)
 	st, err := a.store()
 	if err != nil {
 		return err

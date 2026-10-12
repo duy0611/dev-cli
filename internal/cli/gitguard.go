@@ -404,6 +404,7 @@ func removeHooksCopy(workspace, container string) {
 // error wins when both fail — it is the one the operator was waiting for — and
 // the git finding is still recorded in the audit log either way.
 func (a *app) guardedRun(ctx context.Context, t *target, run func() error) error {
+	warnLegacy(a, t.container)
 	if err := a.checkTreeMounts(ctx, t.provider, t.container, t.gitGuard); err != nil {
 		return err
 	}
@@ -527,17 +528,24 @@ func isGitCheckout(folder string) bool {
 	return ok
 }
 
-// gitGuardOf is what container list shows under GIT: "guarded" for a container
-// whose .git host git is shielded from, "-" for one with no host .git (a
-// folderless container, or a folder that was not a repository at create), and
-// "off" for a repository folder created before the guard existed.
-func gitGuardOf(c model.Container) string {
-	switch {
-	case c.GitGuard:
-		return "guarded"
-	case c.SourceKind == model.SourceFolder && isGitCheckout(c.Source):
-		return "off"
-	default:
+// modeOf is what container list shows under MODE: the container's mode, and
+// "-" for a folderless one, which has no checkout for a mode to describe.
+// legacy is a container from before modes; the warning beside it is
+// warnLegacy's.
+func modeOf(c model.Container) string {
+	if c.Mode == model.ModeNone || c.SourceKind == model.SourceNone {
 		return "-"
 	}
+	return string(c.Mode)
+}
+
+// warnLegacy tells the operator, once per command, that a container from
+// before modes runs the single-file guard, whose gaps the modes exist to close.
+// Only one that was guarded: one that never was has no guard to lapse.
+func warnLegacy(a *app, c model.Container) {
+	if c.Mode != model.ModeLegacy || !c.GitGuard {
+		return
+	}
+	warnf(a, "%s predates container modes; its git guard can lapse after a git command on your machine "+
+		"writes repository configuration — recreate it with --mode guarded or --mode isolated", c.Name)
 }

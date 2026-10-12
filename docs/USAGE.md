@@ -1150,11 +1150,12 @@ is `generated` when `dev` rendered the configuration (`--generate` or
 `--no-folder`) and `project` when the folder ships its own, STATE says
 whether its agents' configuration is on a volume, and HOST says whether the
 container may ask its engine for the host — `allowed` for one created with
-`--allow-privileged` or before that check existed, `refused` otherwise. GIT is
-`guarded` when host git is shielded from what the container writes under
-`.git` (see [What a container can do to your git](#what-a-container-can-do-to-your-git)),
-`off` for a repository folder created before that existed, and `-` when there
-is no host `.git`.
+`--allow-privileged` or before that check existed, `refused` otherwise. MODE is
+`guarded` or `isolated` (see
+[What a container can do to your git](#what-a-container-can-do-to-your-git)),
+`legacy` for a container created before modes, and `-` for a folderless one.
+A legacy container that was guarded prints a warning on every `start`, `exec`,
+`shell` and `start-agent`, since its guard can lapse; recreate it in a mode.
 
 **`start`** creates the container if the engine has none, which is what makes
 `create --no-start` followed by `start` work.

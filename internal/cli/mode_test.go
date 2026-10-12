@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/duy0611/dev-cli/internal/model"
 	"github.com/duy0611/dev-cli/internal/provider/k8s"
@@ -383,4 +384,68 @@ func documentUsedForUp(t *testing.T, calls, captured string) string {
 		}
 	}
 	return best
+}
+
+// The list says each container's mode, and legacy for one from before modes.
+func TestListShowsTheMode(t *testing.T) {
+	a, out := newTestApp(t)
+	seedWorkspace(t, a)
+	st, _ := a.store()
+	for _, c := range []model.Container{
+		{Name: "g", WorkspaceName: "ws", SourceKind: model.SourceFolder, Source: "/src/g", Mode: model.ModeGuarded},
+		{Name: "i", WorkspaceName: "ws", SourceKind: model.SourceFolder, Source: "/src/i", Mode: model.ModeIsolated},
+		{Name: "l", WorkspaceName: "ws", SourceKind: model.SourceFolder, Source: "/src/l", Mode: model.ModeLegacy},
+		{Name: "n", WorkspaceName: "ws", SourceKind: model.SourceNone, Mode: model.ModeNone},
+	} {
+		if err := st.CreateContainer(c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := runContainerList(t.Context(), a, "", false, time.Second); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	lines := strings.Split(out.String(), "\n")
+	headerLine := ""
+	for _, l := range lines {
+		if strings.HasPrefix(l, "WORKSPACE") {
+			headerLine = l
+		}
+	}
+	if !strings.Contains(headerLine, "MODE") || strings.Contains(headerLine, " GIT") {
+		t.Errorf("header = %q, want MODE in place of GIT", headerLine)
+	}
+	for name, want := range map[string]string{"g": "guarded", "i": "isolated", "l": "legacy", "n": "-"} {
+		found := false
+		for _, l := range lines[1:] {
+			f := strings.Fields(l)
+			if len(f) > 1 && f[1] == name {
+				found = true
+				if f[len(f)-1] != want {
+					t.Errorf("%s: mode column = %q, want %q (%q)", name, f[len(f)-1], want, l)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("%s is not listed:\n%s", name, out)
+		}
+	}
+}
+
+// A legacy container that was guarded is told, once per command, that its
+// guard can lapse and how to replace it.
+func TestLegacyGuardedContainerIsWarned(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	stubCapturingDevcontainer(t)
+	stubEngineDocker(t)
+	root := gitRepoWithConfig(t, `{"image":"ubuntu"}`)
+	if err := runContainerCreate(t.Context(), a, "", "old", root, createOpts{legacy: true, noStart: true}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	warnings := captureStderr(t, func() {
+		_ = runContainerExec(t.Context(), a, "", "old", []string{"true"}, false, nil)
+	})
+	if !strings.Contains(warnings, "predates container modes") || !strings.Contains(warnings, "--mode") {
+		t.Errorf("no legacy warning: %q", warnings)
+	}
 }
