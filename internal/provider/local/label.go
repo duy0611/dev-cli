@@ -64,6 +64,14 @@ func VolumeName(workspace, container string) string {
 	return fmt.Sprintf("dev-%s-%s", workspace, container)
 }
 
+// WorkspaceFolder is where a container's workspace volume is mounted: a
+// folderless container's, and an isolated one's. Here beside VolumeName so the
+// configuration dev renders and the seed the provider streams name the same
+// path.
+func WorkspaceFolder(container string) string {
+	return "/workspaces/" + container
+}
+
 // StateVolumeName is the docker volume a container keeps its agents'
 // configuration on.
 //

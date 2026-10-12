@@ -73,6 +73,33 @@ func OverlayWorktree(projectConfig []byte, repo, path string) ([]byte, error) {
 	return marshalConfig(doc)
 }
 
+// OverlayIsolatedWorkspace points a project's own devcontainer.json at a
+// volume for its workspace, for an isolated container: the folder is copied in
+// once and never mounted.
+//
+// Both workspaceMount and workspaceFolder, for the folderless case's reason —
+// with only the first, the CLI derives the in-container path from the host
+// folder it was given — and both replaced outright: a project that named its
+// own bind of ${localWorkspaceFolder} would otherwise mount the operator's
+// folder live, which is exactly what isolated promises not to do.
+func OverlayIsolatedWorkspace(projectConfig []byte, mount Mount) ([]byte, error) {
+	doc, err := parseConfig(projectConfig)
+	if err != nil {
+		return nil, err
+	}
+	for key, value := range map[string]string{
+		"workspaceMount":  fmt.Sprintf("source=%s,target=%s,type=volume", mount.Volume, mount.Folder),
+		"workspaceFolder": mount.Folder,
+	} {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("rendering %s: %w", key, err)
+		}
+		doc[key] = raw
+	}
+	return marshalConfig(doc)
+}
+
 // OverlayMounts merges mounts entries dev owns into a project's own
 // devcontainer.json, each in the string form. Used for the git guard's mounts,
 // which arrive the same way the state and worktree mounts do: merged at

@@ -500,8 +500,30 @@ What guarded does not cover:
   (lefthook's `lefthook.yml`, pre-commit's `.pre-commit-config.yaml`). The agent
   edits those like any other file. Review before running workspace code.
 
-Isolated mode covers all of these, since your folder is never shared with the
-container.
+**Isolated** (`--mode isolated`) never shares your folder with the container.
+On first create, `dev` copies it into a volume the container owns: the working
+tree as it is — uncommitted changes, untracked and ignored files, so `.env` and
+`node_modules` come along — and the repository rebuilt from a git bundle, with
+the branch you have checked out and your `origin` URL. Nothing of your `.git`
+itself is copied, so neither its config nor its hooks reach the container. The
+project's lifecycle commands (`postCreateCommand` and the rest) run after the
+copy, so an install step finds the project there. The image needs git for this.
+
+The agent then commits, branches and rebases as it would anywhere, and pushes
+and signs through the ssh relay. Bring its work home with
+[`dev container fetch`](#container):
+
+```sh
+dev container fetch api
+git log --oneline main..api/agent-work   # review before you merge
+```
+
+Nothing the container does reaches your folder or your git, so isolated mode
+covers everything guarded does not. What it costs: you do not see the agent's
+edits on your machine until you fetch, and the volume is the only copy of its
+work until then. `dev container remove` refuses while the container holds
+commits your folder lacks or changes nobody committed; `--force` removes it
+anyway. `rebuild` keeps the volume.
 
 **Containers created before modes** keep the guard they were created with:
 `.git` writable, with `.git/config` read-only as a single file and `.git/hooks`
@@ -1040,6 +1062,7 @@ dev container shell NAME [--kube-token] [--ssh-agent|--no-ssh-agent]
 dev container exec NAME [--kube-token] [--ssh-agent|--no-ssh-agent] -- CMD [ARGS...]
 dev container start-agent NAME [--agent claude|codex|hermes|opencode] [--kube-token] [--ssh-agent|--no-ssh-agent] [-- ARGS...]
 dev container sync NAME
+dev container fetch NAME
 dev container tools
 dev container config show NAME
 ```
@@ -1065,8 +1088,7 @@ mount everything under it.
 The mode is fixed when the container is created and kept by `rebuild`; see
 [What a container can do to your git](#what-a-container-can-do-to-your-git). A
 `--no-folder` container takes no mode. `--mode guarded` on a k8s workspace is
-exit 2, since a pod cannot mount your folder live; isolated on the local
-provider is not available yet.
+exit 2, since a pod cannot mount your folder live.
 
 With `--from`, `--generate` is implied and `--tools` takes only `+`/`-` changes.
 A source that does not exist is exit 3. A source built from a project's own
@@ -1189,6 +1211,17 @@ your files. On k8s it refreshes the Secret the pod is built from, leaving the
 running pod alone; on local it exits 0 having done nothing, because every
 command already resolves the settings afresh. The container has to be running
 either way.
+
+**`fetch`** brings an isolated container's branches into the folder it was
+created from, as `NAME/<branch>` remote-tracking refs — nothing local changes,
+and you decide what to merge. They travel as a git bundle, so only commit data
+crosses, checked as it arrives. Uncommitted work stays in the container. A
+guarded or folderless container has nothing to fetch (exit 2), and a folder that
+has gone is exit 1.
+
+**`remove`** on an isolated container first asks it what it holds: commits on
+any branch your folder lacks, or uncommitted changes. Either refuses the
+removal (exit 2), naming them; `fetch` and commit inside first, or `--force`.
 
 **`tools`** lists the catalog, marking each entry official or community.
 **`config show`** prints the configuration a container is built from: the

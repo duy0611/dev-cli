@@ -35,7 +35,7 @@ func parseToolList(s string) []string {
 func folderlessMount(workspace, container string) dcgen.Mount {
 	return dcgen.Mount{
 		Volume: local.VolumeName(workspace, container),
-		Folder: "/workspaces/" + container,
+		Folder: local.WorkspaceFolder(container),
 	}
 }
 
@@ -271,14 +271,18 @@ func rewriteGeneratedTools(ctx context.Context, a *app, workspace, name string, 
 	case model.SourceNone:
 		mount = folderlessMount(t.workspace.Name, name)
 	default:
-		// A folder container renders the zero Mount unless it is
+		// An isolated container's workspace is its volume, as a folderless
+		// one's is. A folder container renders the zero Mount unless it is
 		// worktree-backed, which is the CLI's own bind mount either way.
 		//
 		// From the stored column, not re-derived from the checkout on disk:
 		// one the operator has already deleted by hand would answer nothing,
 		// and the rebuild would then quietly produce a container whose git
 		// does not work.
-		if t.container.WorktreeRepo != "" {
+		switch {
+		case t.container.Mode == model.ModeIsolated:
+			mount = folderlessMount(t.workspace.Name, name)
+		case t.container.WorktreeRepo != "":
 			mount = worktreeMount(t.container.WorktreeRepo, t.container.Source)
 		}
 	}

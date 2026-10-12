@@ -24,20 +24,6 @@ func TestCreateDefaultsToGuardedOnLocal(t *testing.T) {
 	}
 }
 
-// Until isolated seeding exists on local, asking for it there is refused: a
-// row that says isolated while the folder is bind-mounted live would promise
-// what the container does not do.
-func TestCreateRefusesIsolatedOnLocalForNow(t *testing.T) {
-	a, _ := newTestApp(t)
-	seedWorkspace(t, a)
-
-	err := runContainerCreate(t.Context(), a, "", "api", projectWithConfig(t),
-		createOpts{noStart: true, mode: model.ModeIsolated})
-	if got := exitCodeOf(err); got != exitUsage {
-		t.Errorf("exit code = %d (%v), want %d", got, err, exitUsage)
-	}
-}
-
 // A folderless container has no checkout for a mode to describe.
 func TestCreateFolderlessHasNoMode(t *testing.T) {
 	a, _ := newTestApp(t)
@@ -334,4 +320,67 @@ func stubProbeRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// An isolated container's workspace is a volume, never the folder: a generated
+// document mounts the volume and names the folder only as where to seed from.
+func TestIsolatedGeneratedConfigMountsAVolume(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	folder := t.TempDir()
+
+	if err := runContainerCreate(t.Context(), a, "", "api", folder,
+		createOpts{generate: true, tools: []string{"yq"}, noStart: true, mode: model.ModeIsolated}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	c := containerRow(t, a, "api")
+	if !strings.Contains(c.GeneratedConfig, "source=dev-ws-api,target=/workspaces/api,type=volume") {
+		t.Errorf("the generated document does not mount the workspace volume:\n%s", c.GeneratedConfig)
+	}
+}
+
+// A project-owned isolated container gets the volume merged into its own
+// document, replacing whatever workspace mount the project named.
+func TestIsolatedProjectConfigGetsTheVolume(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	calls, captured := stubCapturingDevcontainer(t)
+	project := t.TempDir()
+	writeProjectConfigIn(t, project, `{"image":"ubuntu","workspaceMount":"source=${localWorkspaceFolder},target=/src,type=bind","workspaceFolder":"/src"}`)
+	stubEngineWithMounts(t, "")
+
+	if err := runContainerCreate(t.Context(), a, "", "api", project, createOpts{mode: model.ModeIsolated}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	doc := documentUsedForUp(t, calls, captured)
+	if !strings.Contains(doc, "source=dev-ws-api,target=/workspaces/api,type=volume") {
+		t.Errorf("the merged document does not mount the volume:\n%s", doc)
+	}
+	if strings.Contains(doc, "localWorkspaceFolder") {
+		t.Errorf("the project's bind of the folder survived the merge:\n%s", doc)
+	}
+}
+
+// documentUsedForUp returns the merged document the last up received.
+func documentUsedForUp(t *testing.T, calls, captured string) string {
+	t.Helper()
+	lines := strings.Split(strings.TrimSpace(callsIn(t, calls)), "\n")
+	upLine := 0
+	for i, l := range lines {
+		if strings.HasPrefix(l, "up ") {
+			upLine = i + 1
+		}
+	}
+	files, _ := filepath.Glob(filepath.Join(captured, itoa(upLine)+"-*"))
+	var best string
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(b) > len(best) {
+			best = string(b)
+		}
+	}
+	return best
 }

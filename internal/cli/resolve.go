@@ -200,7 +200,8 @@ func materialise(c model.Container, overrides bool) (model.Container, func(), er
 func overlayProjectConfig(c model.Container, overrides bool) (model.Container, func(), error) {
 	needsWorktree := c.WorktreeRepo != ""
 	needsGuard := len(c.GitGuardMounts) > 0
-	if !overrides || c.ConfigPath == "" || (!c.PersistState && !needsWorktree && !needsGuard) {
+	isolated := c.Mode == model.ModeIsolated
+	if !overrides || c.ConfigPath == "" || (!c.PersistState && !needsWorktree && !needsGuard && !isolated) {
 		return c, func() {}, nil
 	}
 
@@ -209,6 +210,18 @@ func overlayProjectConfig(c model.Container, overrides bool) (model.Container, f
 		return c, func() {}, &overlayError{fmt.Errorf("reading %s: %w", c.ConfigPath, err)}
 	}
 
+	// An isolated container's workspace is a volume, whatever the project's
+	// own document says: a project that binds ${localWorkspaceFolder} would
+	// otherwise mount the operator's folder live.
+	if isolated {
+		merged, err = dcgen.OverlayIsolatedWorkspace(merged, dcgen.Mount{
+			Volume: local.VolumeName(c.WorkspaceName, c.Name),
+			Folder: local.WorkspaceFolder(c.Name),
+		})
+		if err != nil {
+			return c, func() {}, &overlayError{fmt.Errorf("merging %s: %w", c.ConfigPath, err)}
+		}
+	}
 	// Applied before the state mount so both end up in one document: a
 	// worktree container that also persists state needs all three bind mounts,
 	// and each merge round-trips whatever the previous one produced.

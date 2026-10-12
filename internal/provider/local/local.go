@@ -15,6 +15,7 @@ import (
 	"github.com/duy0611/dev-cli/internal/dcgen"
 	"github.com/duy0611/dev-cli/internal/model"
 	"github.com/duy0611/dev-cli/internal/provider"
+	"github.com/duy0611/dev-cli/internal/seed"
 )
 
 // The two binaries this provider drives.
@@ -59,6 +60,23 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 		return err
 	}
 
+	// An isolated container's workspace is a volume that starts empty, and the
+	// project's lifecycle hooks — postCreate is usually "install what this
+	// needs" — need the project in it. So on first create the hooks are held
+	// back until the folder is seeded. The CLI writes no marker for a hook
+	// skipped this way, so run-user-commands then runs each of them once.
+	// A recreate keeps the volume, and the work in it, so it is never seeded
+	// again: seeding unpacks over the workspace and would destroy what an
+	// agent had half-done.
+	seeding := false
+	if c.Mode == model.ModeIsolated && !recreate {
+		id, err := p.containerID(ctx, c)
+		if err != nil {
+			return err
+		}
+		seeding = id == ""
+	}
+
 	args := []string{"up", "--workspace-folder", c.Source}
 	args = append(args, idLabelArgs(c)...)
 	// The config path is passed rather than inferred. A generated one lives in
@@ -86,6 +104,9 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 	if noCache {
 		args = append(args, "--build-no-cache")
 	}
+	if seeding {
+		args = append(args, "--skip-post-create")
+	}
 	args = append(args, remoteEnvArgs(env)...)
 
 	cmd := exec.CommandContext(ctx, devcontainerBin, args...)
@@ -97,7 +118,71 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("starting container %s: %w", c.Name, err)
 	}
-	return p.claimStateDir(ctx, c)
+	if err := p.claimStateDir(ctx, c); err != nil {
+		return err
+	}
+	if !seeding {
+		return nil
+	}
+	if err := p.seedWorkspace(ctx, c); err != nil {
+		return err
+	}
+	return p.runUserCommands(ctx, c, env)
+}
+
+// seedWorkspace copies an isolated container's folder into its workspace
+// volume: the working tree as it is on the host, and the repository rebuilt
+// from a bundle so that nothing of the host's .git — its config, its hooks —
+// comes along. See internal/seed.
+//
+// Reachable only from up, and only on first create, for the k8s provider's
+// reason: it unpacks over the workspace.
+func (p *Provider) seedWorkspace(ctx context.Context, c model.Container) error {
+	folder := WorkspaceFolder(c.Name)
+	pr, pw := io.Pipe()
+	var plan seed.Plan
+	go func() {
+		var err error
+		plan, err = seed.Archive(ctx, c.Source, pw)
+		_ = pw.CloseWithError(err)
+	}()
+	// -p keeps the modes the archive carries; without it the container's umask
+	// strips the executable bit off every script.
+	var stderr bytes.Buffer
+	if err := p.Exec(ctx, c, []string{"tar", "-x", "-p", "-C", folder},
+		provider.ExecOpts{Stdin: pr, Stdout: io.Discard, Stderr: &stderr}); err != nil {
+		_ = pr.CloseWithError(err)
+		return fmt.Errorf("copying %s into container %s: %w: %s",
+			c.Source, c.Name, err, strings.TrimSpace(stderr.String()))
+	}
+	stderr.Reset()
+	if err := p.Exec(ctx, c, append([]string{"sh", "-c", seed.Script}, plan.ScriptArgs(folder)...),
+		provider.ExecOpts{Stdout: io.Discard, Stderr: &stderr}); err != nil {
+		return fmt.Errorf("building the repository in container %s: %w: %s",
+			c.Name, err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
+// runUserCommands runs the lifecycle hooks the seeding up held back, with the
+// same id labels and documents as every other call (invariant 1).
+func (p *Provider) runUserCommands(ctx context.Context, c model.Container, env []provider.EnvVar) error {
+	args := []string{"run-user-commands", "--workspace-folder", c.Source}
+	args = append(args, idLabelArgs(c)...)
+	if c.ConfigPath != "" {
+		args = append(args, "--config", c.ConfigPath)
+	}
+	if c.OverrideConfigPath != "" {
+		args = append(args, "--override-config", c.OverrideConfigPath)
+	}
+	args = append(args, remoteEnvArgs(env)...)
+	cmd := exec.CommandContext(ctx, devcontainerBin, args...)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("running the lifecycle commands in container %s: %w", c.Name, err)
+	}
+	return nil
 }
 
 // claimStateDir hands the state volume to the user the container runs as.
@@ -208,7 +293,7 @@ func (p *Provider) Remove(ctx context.Context, c model.Container) error {
 	// provider deleting its PVC. Last, because the volume cannot be removed
 	// while a container still references it.
 	var volumes []string
-	if c.SourceKind == model.SourceNone {
+	if c.SourceKind == model.SourceNone || c.Mode == model.ModeIsolated {
 		volumes = append(volumes, VolumeName(c.WorkspaceName, c.Name))
 	}
 	// Removed with the container, like the workspace volume: the operator asked

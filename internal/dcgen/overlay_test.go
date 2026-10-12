@@ -346,3 +346,31 @@ func TestNamesWorkspaceMount(t *testing.T) {
 		}
 	}
 }
+
+// An isolated container's workspace is a volume, never the operator's folder:
+// both workspaceMount and workspaceFolder are set, so the CLI neither binds
+// the host folder nor derives the in-container path from it.
+func TestOverlayIsolatedWorkspaceSetsBoth(t *testing.T) {
+	out, err := OverlayIsolatedWorkspace([]byte(`{"image":"x","workspaceMount":"source=${localWorkspaceFolder},target=/src,type=bind","workspaceFolder":"/src"}`),
+		Mount{Volume: "dev-ws-api", Folder: "/workspaces/api"})
+	if err != nil {
+		t.Fatalf("OverlayIsolatedWorkspace: %v", err)
+	}
+	var doc struct {
+		WorkspaceMount  string `json:"workspaceMount"`
+		WorkspaceFolder string `json:"workspaceFolder"`
+		Image           string `json:"image"`
+	}
+	if err := json.Unmarshal(out, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.WorkspaceMount != "source=dev-ws-api,target=/workspaces/api,type=volume" {
+		t.Errorf("workspaceMount = %q, want the volume", doc.WorkspaceMount)
+	}
+	if doc.WorkspaceFolder != "/workspaces/api" {
+		t.Errorf("workspaceFolder = %q, want /workspaces/api", doc.WorkspaceFolder)
+	}
+	if doc.Image != "x" {
+		t.Errorf("the project's other fields did not round-trip: %s", out)
+	}
+}

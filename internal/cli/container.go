@@ -44,6 +44,7 @@ func newContainerCmd(a *app) *cobra.Command {
 		newContainerExecCmd(a),
 		newContainerStartAgentCmd(a),
 		newContainerSyncCmd(a),
+		newContainerFetchCmd(a),
 		newContainerToolsCmd(a),
 		newContainerConfigCmd(a),
 	)
@@ -230,7 +231,7 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 			}
 		}
 	} else {
-		source, configPath, generated, worktreeRepo, err = folderSource(ctx, wsName, name, folder, opts, a)
+		source, configPath, generated, worktreeRepo, err = folderSource(ctx, wsName, name, folder, mode, opts, a)
 		if err != nil {
 			return err
 		}
@@ -361,11 +362,6 @@ func (a *app) modeFor(wsName string, opts createOpts) (model.Mode, error) {
 		}
 		return model.ModeGuarded, nil
 	case model.ModeIsolated:
-		if kind != model.KindK8s {
-			// Until the local provider can seed a volume, an isolated row
-			// would bind-mount the folder live while saying it does not.
-			return "", usageErrorf("--mode isolated is not available on the local provider yet")
-		}
 		return model.ModeIsolated, nil
 	default:
 		return "", usageErrorf("unknown mode %q; use guarded or isolated", opts.mode)
@@ -453,7 +449,7 @@ func refuseBroadFolder(folder string) error {
 // folderSource works out what a --folder container is built from: the resolved
 // path, the project's own config if it has one, and a generated document if it
 // does not.
-func folderSource(ctx context.Context, wsName, name, folder string, opts createOpts, a *app) (source, configPath, generated, worktreeRepo string, err error) {
+func folderSource(ctx context.Context, wsName, name, folder string, mode model.Mode, opts createOpts, a *app) (source, configPath, generated, worktreeRepo string, err error) {
 	// Physical path, before anything stores or mounts it: the engine resolves
 	// the string inside its VM on macOS, where /tmp is a real directory rather
 	// than a symlink to /private/tmp, so an unresolved path mounts an empty
@@ -468,7 +464,20 @@ func folderSource(ctx context.Context, wsName, name, folder string, opts createO
 	// a worktree row, so one made by `git worktree add` or by Herdr is mounted
 	// as correctly as one dev made.
 	mount := dcgen.Mount{}
-	if repo, ok := gitwt.WorktreeRepo(ctx, source); ok {
+	repo, isWorktree := gitwt.WorktreeRepo(ctx, source)
+	if mode == model.ModeIsolated {
+		// The folder is copied into a volume on first create and never
+		// mounted, so neither its path nor a worktree's repository is any of
+		// the container's business. The seed reads both on the host.
+		mount = folderlessMount(wsName, name)
+		// Still refused on k8s, whose seed copies .git as files: a worktree's
+		// is a file naming a host path the pod does not have.
+		if isWorktree {
+			if err := a.requireLocalProvider(wsName); err != nil {
+				return "", "", "", "", err
+			}
+		}
+	} else if isWorktree {
 		worktreeRepo = repo
 		mount = worktreeMount(repo, source)
 	}
@@ -857,6 +866,22 @@ func runContainerRemove(ctx context.Context, a *app, workspace, name string, for
 		return err
 	}
 	defer t.release()
+
+	// An isolated container's volume is the only copy of its work, and
+	// removing the container takes it. So it is asked first, and anything the
+	// folder lacks refuses the removal: --force is the only way past.
+	if t.container.Mode == model.ModeIsolated && !force {
+		found, err := unexported(ctx, t)
+		if err != nil {
+			return fmt.Errorf("%w; --force removes it without checking", err)
+		}
+		if len(found) > 0 {
+			return usageErrorf("container %s holds work its folder does not:\n  %s\n"+
+				"bring the branches home with dev container fetch %s, commit inside first for "+
+				"uncommitted changes, or pass --force to remove it and lose them",
+				name, strings.Join(found, "\n  "), name)
+		}
+	}
 
 	if err := t.provider.Remove(ctx, t.container); err != nil {
 		if !force {

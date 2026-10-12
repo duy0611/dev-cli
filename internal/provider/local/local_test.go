@@ -641,3 +641,88 @@ func TestLocalProviderOverridesConfig(t *testing.T) {
 		t.Error("local provider does not implement provider.ConfigOverrider")
 	}
 }
+
+// isolatedContainer is a container whose folder is copied into a volume rather
+// than mounted.
+func isolatedContainer(t *testing.T) model.Container {
+	t.Helper()
+	c := testContainer()
+	c.Mode = model.ModeIsolated
+	c.Source = t.TempDir()
+	if err := os.WriteFile(filepath.Join(c.Source, "f.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// On first create the lifecycle hooks wait until the folder is in the volume:
+// a postCreateCommand that installs dependencies needs the project there. So
+// up skips them, the folder is streamed in through exec, and run-user-commands
+// runs them once, on the seeded workspace.
+func TestUpSeedsAnIsolatedContainerBeforeItsLifecycleHooks(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, devcontainerBin, "", 0)
+	// No container yet, so this up creates it.
+	f.install(t, dockerBin, "", 0)
+
+	c := isolatedContainer(t)
+	if err := (&Provider{}).Up(context.Background(), c, nil); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	calls := f.argvAll(t, devcontainerBin)
+	var verbs []string
+	for _, argv := range calls {
+		verbs = append(verbs, argv[0])
+	}
+	want := []string{"up", "exec", "exec", "run-user-commands"}
+	if strings.Join(verbs, " ") != strings.Join(want, " ") {
+		t.Fatalf("devcontainer calls = %v, want %v", verbs, want)
+	}
+	if !contains(calls[0], []string{"--skip-post-create"}) {
+		t.Errorf("up did not skip the lifecycle hooks: %v", calls[0])
+	}
+	if !contains(calls[1], []string{"tar", "-x", "-p"}) {
+		t.Errorf("the second call does not unpack the folder: %v", calls[1])
+	}
+	if !contains(calls[2], []string{"sh", "-c"}) {
+		t.Errorf("the third call does not run the seed script: %v", calls[2])
+	}
+	for _, argv := range calls {
+		for _, label := range [][]string{{"--id-label", "dev.workspace=ws"}, {"--id-label", "dev.container=demo"}} {
+			if !contains(argv, label) {
+				t.Errorf("%s is missing %v: invariant 1", argv[0], label)
+			}
+		}
+	}
+}
+
+// Once the container exists, up is an ordinary up: the volume already holds
+// the agent's work, and seeding over it would destroy what is half-done.
+func TestUpDoesNotReseedAnExistingIsolatedContainer(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, devcontainerBin, "", 0)
+	f.install(t, dockerBin, "abc123\n", 0)
+
+	if err := (&Provider{}).Up(context.Background(), isolatedContainer(t), nil); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	for _, argv := range f.argvAll(t, devcontainerBin) {
+		if argv[0] != "up" || contains(argv, []string{"--skip-post-create"}) {
+			t.Errorf("an existing isolated container was seeded again: %v", argv)
+		}
+	}
+}
+
+// The workspace volume is the container's only copy of the work, so it goes
+// with the container, as a folderless container's does.
+func TestRemoveDeletesTheVolumeOfAnIsolatedContainer(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, dockerBin, "abc123\n", 0)
+
+	if err := (&Provider{}).Remove(context.Background(), isolatedContainer(t)); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if !f.calledWith(t, dockerBin, []string{"volume", "rm", "--force", "dev-ws-demo"}) {
+		t.Errorf("Remove did not delete the volume; docker calls were %v", f.argvAll(t, dockerBin))
+	}
+}

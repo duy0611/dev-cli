@@ -228,3 +228,82 @@ func TestSmokeEscapeGuardAndDrift(t *testing.T) {
 	}
 	dev("container", "rebuild", name, "--accept-config")
 }
+
+// TestSmokeIsolated drives isolated mode against a real engine: the folder is
+// copied into a volume — uncommitted and untracked files included, the
+// repository rebuilt from a bundle — the agent commits there, the host's folder
+// never changes, and fetch brings the branch home. remove refuses until it has.
+func TestSmokeIsolated(t *testing.T) {
+	requireBinaries(t, "devcontainer", "docker", "git")
+	t.Setenv("DEV_STATE", t.TempDir())
+	bin := buildBinary(t)
+	project := gitFixture(t)
+	hostGit := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = project
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("host git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	if err := os.WriteFile(filepath.Join(project, "f.txt"), []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hostGit("add", "f.txt")
+	hostGit("commit", "-q", "-m", "init")
+	// Uncommitted and untracked, so the copy is seen to carry both.
+	if err := os.WriteFile(filepath.Join(project, "f.txt"), []byte("one\nwip\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "untracked.txt"), []byte("new\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	const name = "dev-smoke-isolated"
+	dev := func(args ...string) string { t.Helper(); return run(t, bin, args...) }
+	t.Cleanup(func() { _ = exec.Command(bin, "container", "remove", name, "--force").Run() })
+
+	dev("provider", "configure", providerName, "--kind", "local")
+	dev("workspace", "init", workspaceName, "--provider", providerName)
+	// A generated configuration with git in it: the fixture's alpine has none,
+	// and the seed script needs it inside.
+	t.Log("creating an isolated container; the first run pulls a base image")
+	dev("container", "create", name, "--folder", project, "--mode", "isolated", "--generate", "--tools", "yq")
+
+	ws := "/workspaces/" + name
+	sh := func(script string) string {
+		t.Helper()
+		return dev("container", "exec", name, "--", "sh", "-c", "cd "+ws+" && "+script)
+	}
+	if got := strings.TrimSpace(sh("git status --porcelain")); !strings.Contains(got, "M f.txt") || !strings.Contains(got, "?? untracked.txt") {
+		t.Errorf("the copy's status is %q; want f.txt modified and untracked.txt untracked", got)
+	}
+	if got := strings.TrimSpace(sh("test -d .git && echo dir")); got != "dir" {
+		t.Errorf("the copy's .git is not a directory: %q", got)
+	}
+
+	// The agent commits on a branch of its own, inside.
+	sh("git switch -q -c agent-work && git add -A && " +
+		"git -c user.email=a@example.com -c user.name=agent commit -qm 'from the agent'")
+
+	// Nothing reached the folder: its tree and its history are as they were.
+	if got := hostGit("status", "--porcelain"); !strings.Contains(got, "M f.txt") {
+		t.Errorf("the host folder changed: %q", got)
+	}
+	if strings.Contains(hostGit("log", "--all", "--format=%s"), "from the agent") {
+		t.Error("the agent's commit reached the host before any fetch")
+	}
+
+	// remove refuses while the branch is only in the container.
+	if out := runExpectFail(t, bin, "container", "remove", name); !strings.Contains(out, "fetch") {
+		t.Errorf("remove did not refuse unfetched work:\n%s", out)
+	}
+
+	dev("container", "fetch", name)
+	if got := hostGit("log", "--format=%s", "-1", "refs/remotes/"+name+"/agent-work"); got != "from the agent" {
+		t.Errorf("fetch did not bring the agent's branch home: %q", got)
+	}
+	dev("container", "remove", name)
+}
