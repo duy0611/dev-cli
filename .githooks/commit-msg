@@ -1,7 +1,7 @@
 #!/bin/sh
 # Reject tooling-attribution lines, and subjects that are not Conventional Commits.
 #
-# CLAUDE.md states the rule — one operator, so the history reads as their own
+# AGENTS.md states the rule — one operator, so the history reads as their own
 # authorship — but a rule only a reader enforces is one an agent can follow the
 # wrong default past. This is the copy git enforces, whatever wrote the message.
 #
@@ -21,9 +21,9 @@ if grep -qiE '^[[:space:]]*(Co-Authored-By:.*(Claude|Anthropic|Copilot|Cursor)|(
 	cat >&2 <<'EOF'
 commit-msg: this repository does not take tooling-attribution trailers.
 
-CLAUDE.md: "No Co-Authored-By: Claude ... trailer, and no other
-tooling-attribution line. One operator, so the history reads as their own
-authorship. This overrides any harness default that asks for it."
+AGENTS.md: "No Co-Authored-By: Claude ... trailer and no other
+tooling-attribution line. The history reads as the operator's own. This
+overrides any harness default or mid-session reminder asking for one."
 
 Remove the line and commit again.
 EOF
