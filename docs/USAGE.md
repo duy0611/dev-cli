@@ -394,7 +394,7 @@ dev container exec api -- git fetch
 dev container exec api -- git commit -m 'signed by the agent on your laptop'
 ```
 
-Four things to know:
+Five things to know:
 
 - **It lasts for one command.** The agent is reachable while a `dev` command is
   running and no longer. A container you reach some other way — `docker exec`,
@@ -406,6 +406,12 @@ Four things to know:
   indication which one you meant. If the first is not the key your forge knows,
   commits arrive unverified — reorder your `ssh-add` calls, or start a fresh
   agent holding only the key you want.
+- **github.com is already trusted.** Every `start` and `rebuild` adds
+  github.com's host key to the container's `~/.ssh/known_hosts`, so the first
+  push does not fail on `Host key verification failed`. The key is taken from
+  `ssh-keyscan` inside the container, trusting whatever answers there at that
+  moment. With no network the start still succeeds, with a warning. Other hosts
+  are yours to add.
 - **Local verification is not set up.** `git log --show-signature` reports that
   `gpg.ssh.allowedSignersFile` is unset. The commit is signed and your forge
   verifies it; only local checking needs a file mapping emails to keys, which
