@@ -703,6 +703,7 @@ func (a *app) start(ctx context.Context, workspace string, c model.Container) er
 	if err := trustMountedRepository(ctx, p, c); err != nil {
 		return err
 	}
+	trustGitHub(ctx, a, p, c)
 	// A row with no digest takes the one just started from. Never overwritten
 	// here: rebuild is what catches an edited document.
 	if cc != nil && c.ConfigDigest == "" {
@@ -892,6 +893,7 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 			if err := trustMountedRepository(cmd.Context(), t.provider, t.container); err != nil {
 				return err
 			}
+			trustGitHub(cmd.Context(), a, t.provider, t.container)
 			// After a successful rebuild only: the digest must describe the
 			// configuration the container has.
 			if cc != nil && digest.Sum != t.container.ConfigDigest {

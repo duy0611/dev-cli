@@ -492,3 +492,41 @@ func TestStartTrustsNothingForAnIsolatedContainer(t *testing.T) {
 		t.Errorf("an isolated container was given safe.directory entries:\n%s", callsIn(t, calls))
 	}
 }
+
+// ~/.ssh lives on the container filesystem, so a rebuild loses what create
+// wrote; both must add github.com's key.
+func TestCreateAndRebuildTrustGitHub(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	calls, _ := stubCapturingDevcontainer(t)
+	stubEngineWithMounts(t, "")
+	if err := runContainerCreate(t.Context(), a, "", "api", projectWithConfig(t), createOpts{}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	ran := func() int { return strings.Count(callsIn(t, calls), githubFingerprints[0]) }
+	if n := ran(); n != 1 {
+		t.Errorf("create ran ssh-keyscan %d times, want 1:\n%s", n, callsIn(t, calls))
+	}
+
+	if err := runIn(t, a, "container", "rebuild", "api"); err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+	log := callsIn(t, calls)
+	if n := ran(); n != 2 {
+		t.Errorf("rebuild did not run ssh-keyscan again:\n%s", log)
+	}
+	if !strings.Contains(log, "ssh-keyscan github.com") || !strings.Contains(log, ".ssh/known_hosts") {
+		t.Errorf("github.com was not added to ~/.ssh/known_hosts:\n%s", log)
+	}
+}
+
+// A container with no network, or no ssh-keyscan, still starts.
+func TestStartSurvivesAFailedKeyscan(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	stubDevcontainer(t, "ssh-keyscan")
+	stubEngineWithMounts(t, "")
+	if err := runContainerCreate(t.Context(), a, "", "api", projectWithConfig(t), createOpts{}); err != nil {
+		t.Fatalf("create failed on a failed keyscan: %v", err)
+	}
+}

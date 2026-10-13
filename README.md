@@ -90,7 +90,8 @@ experiment.
 
 Specs are resolved on every launch, so rotating a secret needs no restart and no
 rebuild. `dev workspace show` prints the specs and never the values. Your git
-`user.name` and `user.email` are passed through automatically, so the first
+`user.name` and `user.email` are passed through as `GIT_AUTHOR_NAME`,
+`GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL`, so the first
 commit inside a container works; an explicit setting of the same name wins.
 
 ## The k8s provider (experimental)

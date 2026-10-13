@@ -323,9 +323,12 @@ dev workspace show personal
 dev workspace unset API_URL
 ```
 
-Your git `user.name` and `user.email` are passed through automatically, so the
-first commit inside a container works. An explicit setting of the same name
-wins.
+Your git `user.name` and `user.email` are passed through as `GIT_AUTHOR_NAME`,
+`GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL`, so the first
+commit inside a container works with no gitconfig there. They take precedence
+over a `git config user.name` set inside the container; to commit as someone
+else, set those variables on the workspace, since an explicit setting of the
+same name wins.
 
 ### Which credentials to give a container
 
@@ -391,7 +394,7 @@ dev container exec api -- git fetch
 dev container exec api -- git commit -m 'signed by the agent on your laptop'
 ```
 
-Four things to know:
+Five things to know:
 
 - **It lasts for one command.** The agent is reachable while a `dev` command is
   running and no longer. A container you reach some other way — `docker exec`,
@@ -403,6 +406,14 @@ Four things to know:
   indication which one you meant. If the first is not the key your forge knows,
   commits arrive unverified — reorder your `ssh-add` calls, or start a fresh
   agent holding only the key you want.
+- **github.com is already trusted.** Every `start` and `rebuild` adds
+  github.com's host key to the container's `~/.ssh/known_hosts`, so the first
+  push does not fail on `Host key verification failed`. The keys come from
+  `ssh-keyscan` inside the container, and only those matching
+  [GitHub's published fingerprints](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints)
+  are written; a scan that matches none writes nothing. A failure — no network,
+  no `ssh-keyscan` or `ssh-keygen` in the image, an unrecognised key — is a
+  warning, and the container starts anyway. Other hosts are yours to add.
 - **Local verification is not set up.** `git log --show-signature` reports that
   `gpg.ssh.allowedSignersFile` is unset. The commit is signed and your forge
   verifies it; only local checking needs a file mapping emails to keys, which

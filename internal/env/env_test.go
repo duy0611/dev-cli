@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/duy0611/dev-cli/internal/model"
@@ -43,11 +44,21 @@ func TestAssembleAddsGitIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Assemble: %v", err)
 	}
-	if v, ok := find(got, gitNameKey); !ok || v != "Ada" {
-		t.Errorf("%s = %q (present=%v), want %q", gitNameKey, v, ok, "Ada")
+	want := map[string]string{
+		"GIT_AUTHOR_NAME":     "Ada",
+		"GIT_AUTHOR_EMAIL":    "ada@example.invalid",
+		"GIT_COMMITTER_NAME":  "Ada",
+		"GIT_COMMITTER_EMAIL": "ada@example.invalid",
 	}
-	if v, ok := find(got, gitEmailKey); !ok || v != "ada@example.invalid" {
-		t.Errorf("%s = %q (present=%v), want %q", gitEmailKey, v, ok, "ada@example.invalid")
+	for key, w := range want {
+		if v, ok := find(got, key); !ok || v != w {
+			t.Errorf("%s = %q (present=%v), want %q", key, v, ok, w)
+		}
+	}
+	for _, e := range got {
+		if strings.HasPrefix(e.Key, "DEVCONTAINER_GIT_") {
+			t.Errorf("%s is set; git does not read it", e.Key)
+		}
 	}
 }
 
@@ -70,7 +81,7 @@ func TestWorkspaceSettingOverridesGitIdentity(t *testing.T) {
 	fakeGit(t, "Ada", "ada@example.invalid")
 
 	got, err := Assemble(context.Background(), secret.NewResolver(), []model.Setting{
-		{Key: gitEmailKey, Spec: "literal:bot@example.invalid"},
+		{Key: "GIT_AUTHOR_EMAIL", Spec: "literal:bot@example.invalid"},
 	})
 	if err != nil {
 		t.Fatalf("Assemble: %v", err)
@@ -78,15 +89,15 @@ func TestWorkspaceSettingOverridesGitIdentity(t *testing.T) {
 
 	seen := 0
 	for _, e := range got {
-		if e.Key == gitEmailKey {
+		if e.Key == "GIT_AUTHOR_EMAIL" {
 			seen++
 			if e.Value != "bot@example.invalid" {
-				t.Errorf("%s = %q, want the workspace's value", gitEmailKey, e.Value)
+				t.Errorf("GIT_AUTHOR_EMAIL = %q, want the workspace's value", e.Value)
 			}
 		}
 	}
 	if seen != 1 {
-		t.Errorf("%s appears %d times, want exactly 1", gitEmailKey, seen)
+		t.Errorf("GIT_AUTHOR_EMAIL appears %d times, want exactly 1", seen)
 	}
 }
 
@@ -100,8 +111,8 @@ func TestAssembleWithoutGit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Assemble: %v", err)
 	}
-	if _, ok := find(got, gitNameKey); ok {
-		t.Errorf("%s was set with no git on PATH", gitNameKey)
+	if _, ok := find(got, "GIT_AUTHOR_NAME"); ok {
+		t.Error("GIT_AUTHOR_NAME was set with no git on PATH")
 	}
 	if v, _ := find(got, "BASE_URL"); v != "x" {
 		t.Errorf("BASE_URL = %q, want %q", v, "x")

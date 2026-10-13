@@ -258,6 +258,13 @@ func TestSmokeIsolated(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The identity dev passes into the container, distinct from the fixture's.
+	globalConfig := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(globalConfig, []byte("[user]\n\tname = agent\n\temail = a@example.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
+
 	const name = "dev-smoke-isolated"
 	dev := func(args ...string) string { t.Helper(); return run(t, bin, args...) }
 	t.Cleanup(func() { _ = exec.Command(bin, "container", "remove", name, "--force").Run() })
@@ -281,9 +288,12 @@ func TestSmokeIsolated(t *testing.T) {
 		t.Errorf("the copy's .git is not a directory: %q", got)
 	}
 
-	// The agent commits on its own branch, inside the container.
-	sh("git switch -q -c agent-work && git add -A && " +
-		"git -c user.email=a@example.com -c user.name=agent commit -qm 'from the agent'")
+	// The agent commits on its own branch, inside the container, as the host's
+	// identity and with no gitconfig of its own.
+	sh("git switch -q -c agent-work && git add -A && git commit -qm 'from the agent'")
+	if got := strings.TrimSpace(sh("git log -1 --format='%an <%ae> / %cn <%ce>'")); got != "agent <a@example.com> / agent <a@example.com>" {
+		t.Errorf("the container committed as %q; want the host's identity", got)
+	}
 
 	// The host folder is unchanged.
 	if got := hostGit("status", "--porcelain"); !strings.Contains(got, "M f.txt") {
