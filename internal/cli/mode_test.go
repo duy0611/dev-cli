@@ -503,7 +503,8 @@ func TestCreateAndRebuildTrustGitHub(t *testing.T) {
 	if err := runContainerCreate(t.Context(), a, "", "api", projectWithConfig(t), createOpts{}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if n := strings.Count(callsIn(t, calls), "ssh-keyscan"); n != 1 {
+	ran := func() int { return strings.Count(callsIn(t, calls), githubFingerprints[0]) }
+	if n := ran(); n != 1 {
 		t.Errorf("create ran ssh-keyscan %d times, want 1:\n%s", n, callsIn(t, calls))
 	}
 
@@ -511,10 +512,10 @@ func TestCreateAndRebuildTrustGitHub(t *testing.T) {
 		t.Fatalf("rebuild: %v", err)
 	}
 	log := callsIn(t, calls)
-	if n := strings.Count(log, "ssh-keyscan"); n != 2 {
+	if n := ran(); n != 2 {
 		t.Errorf("rebuild did not run ssh-keyscan again:\n%s", log)
 	}
-	if !strings.Contains(log, "github.com") || !strings.Contains(log, ".ssh/known_hosts") {
+	if !strings.Contains(log, "ssh-keyscan github.com") || !strings.Contains(log, ".ssh/known_hosts") {
 		t.Errorf("github.com was not added to ~/.ssh/known_hosts:\n%s", log)
 	}
 }

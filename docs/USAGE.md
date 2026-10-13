@@ -408,10 +408,12 @@ Five things to know:
   agent holding only the key you want.
 - **github.com is already trusted.** Every `start` and `rebuild` adds
   github.com's host key to the container's `~/.ssh/known_hosts`, so the first
-  push does not fail on `Host key verification failed`. The key is taken from
-  `ssh-keyscan` inside the container, trusting whatever answers there at that
-  moment. With no network the start still succeeds, with a warning. Other hosts
-  are yours to add.
+  push does not fail on `Host key verification failed`. The keys come from
+  `ssh-keyscan` inside the container, and only those matching
+  [GitHub's published fingerprints](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints)
+  are written; a scan that matches none writes nothing. A failure — no network,
+  no `ssh-keyscan` or `ssh-keygen` in the image, an unrecognised key — is a
+  warning, and the container starts anyway. Other hosts are yours to add.
 - **Local verification is not set up.** `git log --show-signature` reports that
   `gpg.ssh.allowedSignersFile` is unset. The commit is signed and your forge
   verifies it; only local checking needs a file mapping emails to keys, which
