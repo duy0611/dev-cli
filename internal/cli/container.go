@@ -783,15 +783,16 @@ func runContainerRemove(ctx context.Context, a *app, workspace, name string, for
 
 	// An isolated volume is the only copy of its work; anything the folder
 	// lacks refuses the removal unless --force is given.
-	if t.container.Mode == model.ModeIsolated && !force {
+	checked := t.container.Mode == model.ModeIsolated && !force
+	if checked {
 		found, err := unexported(ctx, t)
 		if err != nil {
 			return fmt.Errorf("%w; --force removes it without checking", err)
 		}
 		if len(found) > 0 {
-			return usageErrorf("container %s holds work its folder does not:\n  %s\n"+
-				"bring the branches home with dev container fetch %s, commit inside first for "+
-				"uncommitted changes, or pass --force to remove it and lose them",
+			return usageErrorf("container %s holds work its folder does not keep:\n  %s\n"+
+				"bring the branches home with dev container fetch %s and merge or push them, "+
+				"commit inside first for uncommitted changes, or pass --force to remove it and lose them",
 				name, strings.Join(found, "\n  "), name)
 		}
 	}
@@ -814,6 +815,13 @@ func runContainerRemove(ctx context.Context, a *app, workspace, name string, for
 		return err
 	}
 	removeHooksCopy(t.workspace.Name, name)
+	// Only once the check has shown every branch is kept by another ref: after
+	// --force, the fetched refs may be the last copy of the work.
+	if checked {
+		if err := dropFetchedRefs(ctx, t.container.Source, name); err != nil {
+			warnf(a, "leaving the refs dev container fetch wrote under %s: %v", fetchedRefs(name), err)
+		}
+	}
 	a.record("remove", t.workspace.Name, name, nil)
 	a.printf("container %s removed\n", name)
 	return nil

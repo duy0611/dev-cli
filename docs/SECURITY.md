@@ -87,9 +87,11 @@ git log --oneline main..NAME/branch   # review before you merge
 reads only commit data, so nothing from the container's configuration reaches
 your git.
 
-Your files exist only in the container's volume until you fetch them. `dev
-container remove` refuses while there is anything unfetched or uncommitted;
-`--force` removes it anyway. `podman machine reset` or deleting the volume by
+Your files exist only in the container's volume until you fetch them, and the
+fetched `NAME/<branch>` refs are the only copy on your machine until you merge
+or push them. `dev container remove` refuses while there is anything
+uncommitted, unfetched or unmerged, and deletes the `NAME/*` refs once it
+passes; `--force` removes it anyway and keeps them. `podman machine reset` or deleting the volume by
 hand loses it without asking.
 
 ## What neither mode covers

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 
 	"github.com/duy0611/dev-cli/internal/model"
@@ -55,6 +56,11 @@ func runContainerFetch(ctx context.Context, a *app, workspace, name string) erro
 			name, xpath.Shorten(t.container.Source), err)
 	}
 
+	if isRemote(ctx, t.container.Source, name) {
+		return usageErrorf("%s has a git remote named %s; fetching would overwrite its refs/remotes/%s/*",
+			xpath.Shorten(t.container.Source), name, name)
+	}
+
 	bundle, err := containerBundle(ctx, t)
 	if err != nil {
 		return err
@@ -81,7 +87,7 @@ func runContainerFetch(ctx context.Context, a *app, workspace, name string) erro
 	// fsckObjects rejects a malformed object from the container. Forced, since
 	// the agent may have rewritten a branch.
 	cmd := exec.CommandContext(ctx, "git", "-c", "transfer.fsckObjects=true",
-		"fetch", "--quiet", f.Name(), "+refs/heads/*:refs/remotes/"+name+"/*")
+		"fetch", "--quiet", f.Name(), "+refs/heads/*:"+fetchedRefs(name)+"*")
 	cmd.Dir = t.container.Source
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -90,7 +96,7 @@ func runContainerFetch(ctx context.Context, a *app, workspace, name string) erro
 			name, xpath.Shorten(t.container.Source), err, strings.TrimSpace(stderr.String()))
 	}
 
-	refs, err := gitLines(ctx, t.container.Source, "for-each-ref", "--format=%(refname:short)", "refs/remotes/"+name)
+	refs, err := gitLines(ctx, t.container.Source, "for-each-ref", "--format=%(refname:short)", fetchedRefs(name))
 	if err != nil {
 		return err
 	}
@@ -168,9 +174,63 @@ git for-each-ref --format='%(refname:short) %(objectname)' refs/heads`,
 		cmd.Dir = t.container.Source
 		if cmd.Run() != nil {
 			found = append(found, "branch "+branch+" has commits the folder does not")
+			continue
+		}
+		kept, err := keptElsewhere(ctx, t.container.Source, t.container.Name, tip)
+		if err != nil {
+			return nil, err
+		}
+		if !kept {
+			found = append(found, "branch "+branch+" is fetched but not merged into a branch or pushed to a remote")
 		}
 	}
 	return found, nil
+}
+
+// keptElsewhere reports whether tip is reachable from a ref other than the
+// ones fetch wrote for container, which remove deletes.
+func keptElsewhere(ctx context.Context, source, container, tip string) (bool, error) {
+	refs, err := gitLines(ctx, source, "for-each-ref", "--format=%(refname)", "--contains", tip, "refs/heads", "refs/remotes")
+	if err != nil {
+		return false, err
+	}
+	remote := isRemote(ctx, source, container)
+	for _, ref := range refs {
+		if remote || !strings.HasPrefix(ref, fetchedRefs(container)) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// fetchedRefs is the ref prefix fetch writes a container's branches under.
+func fetchedRefs(container string) string {
+	return "refs/remotes/" + container + "/"
+}
+
+// isRemote reports whether source has a git remote called name, whose
+// tracking refs share the prefix fetch writes under.
+func isRemote(ctx context.Context, source, name string) bool {
+	remotes, err := gitLines(ctx, source, "remote")
+	return err == nil && slices.Contains(remotes, name)
+}
+
+// dropFetchedRefs deletes the refs fetch wrote for container.
+func dropFetchedRefs(ctx context.Context, source, container string) error {
+	if isRemote(ctx, source, container) {
+		return nil
+	}
+	refs, err := gitLines(ctx, source, "for-each-ref", "--format=delete %(refname)", fetchedRefs(container))
+	if err != nil || len(refs) == 0 {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, "git", "update-ref", "--stdin")
+	cmd.Dir = source
+	cmd.Stdin = strings.NewReader(strings.Join(refs, "\n") + "\n")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git update-ref: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // workspaceFolderOf is where an isolated container's workspace is inside it.
