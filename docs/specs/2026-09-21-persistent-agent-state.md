@@ -29,7 +29,8 @@ what is true of the row.
 Two things are easy to misread as broken and are not.
 
 **Git identity survives.** `internal/env/env.go` reads the host's `user.name`
-and `user.email` and injects them as `DEVCONTAINER_GIT_*` on every invocation.
+and `user.email` and injects them as `GIT_AUTHOR_*` and `GIT_COMMITTER_*` on
+every invocation.
 Nothing can lose them, because nothing stores them. What does not survive is the
 rest of a `.gitconfig` — aliases, `pull.rebase`, anything the operator set inside
 the container.

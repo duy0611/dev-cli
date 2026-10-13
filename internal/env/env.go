@@ -13,12 +13,6 @@ import (
 	"github.com/duy0611/dev-cli/internal/secret"
 )
 
-// Git identity variables the devcontainer images conventionally read.
-const (
-	gitNameKey  = "DEVCONTAINER_GIT_NAME"
-	gitEmailKey = "DEVCONTAINER_GIT_EMAIL"
-)
-
 // Assemble resolves a workspace's settings into environment variables. The
 // host's git identity sits beneath them, so a setting of the same name wins.
 func Assemble(ctx context.Context, r *secret.Resolver, settings []model.Setting) ([]provider.EnvVar, error) {
@@ -44,15 +38,20 @@ func Assemble(ctx context.Context, r *secret.Resolver, settings []model.Setting)
 	return out, nil
 }
 
-// gitIdentity reads the host's name and email. Signing config is left out: the
-// container has no secret key, so every commit would fail.
+// gitIdentity reads the host's name and email as the variables git itself
+// reads, so a commit works with no gitconfig in the container. Signing config
+// is left out: the container has no secret key, so every commit would fail.
 func gitIdentity(ctx context.Context) []provider.EnvVar {
 	var out []provider.EnvVar
 	if v := gitConfig(ctx, "user.name"); v != "" {
-		out = append(out, provider.EnvVar{Key: gitNameKey, Value: v})
+		out = append(out,
+			provider.EnvVar{Key: "GIT_AUTHOR_NAME", Value: v},
+			provider.EnvVar{Key: "GIT_COMMITTER_NAME", Value: v})
 	}
 	if v := gitConfig(ctx, "user.email"); v != "" {
-		out = append(out, provider.EnvVar{Key: gitEmailKey, Value: v})
+		out = append(out,
+			provider.EnvVar{Key: "GIT_AUTHOR_EMAIL", Value: v},
+			provider.EnvVar{Key: "GIT_COMMITTER_EMAIL", Value: v})
 	}
 	return out
 }

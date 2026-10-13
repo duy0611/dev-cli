@@ -323,9 +323,12 @@ dev workspace show personal
 dev workspace unset API_URL
 ```
 
-Your git `user.name` and `user.email` are passed through automatically, so the
-first commit inside a container works. An explicit setting of the same name
-wins.
+Your git `user.name` and `user.email` are passed through as `GIT_AUTHOR_NAME`,
+`GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL`, so the first
+commit inside a container works with no gitconfig there. They take precedence
+over a `git config user.name` set inside the container; to commit as someone
+else, set those variables on the workspace, since an explicit setting of the
+same name wins.
 
 ### Which credentials to give a container
 
