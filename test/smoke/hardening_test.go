@@ -302,5 +302,16 @@ func TestSmokeIsolated(t *testing.T) {
 	if got := hostGit("log", "--format=%s", "-1", "refs/remotes/"+name+"/agent-work"); got != "from the agent" {
 		t.Errorf("fetch did not bring the agent's branch home: %q", got)
 	}
+
+	// Fetched is not kept: the remote-tracking ref is the only copy until
+	// the branch is merged or pushed.
+	if out := runExpectFail(t, bin, "container", "remove", name); !strings.Contains(out, "agent-work") {
+		t.Errorf("remove did not refuse the unmerged branch:\n%s", out)
+	}
+
+	hostGit("branch", "agent-work", name+"/agent-work")
 	dev("container", "remove", name)
+	if got := hostGit("for-each-ref", "refs/remotes/"+name+"/"); got != "" {
+		t.Errorf("remove left the fetched refs behind: %q", got)
+	}
 }

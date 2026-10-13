@@ -522,8 +522,11 @@ Nothing the container does reaches your folder or your git, so isolated mode
 covers everything guarded does not. What it costs: you do not see the agent's
 edits on your machine until you fetch, and the volume is the only copy of its
 work until then. `dev container remove` refuses while the container holds
-commits your folder lacks or changes nobody committed; `--force` removes it
-anyway. `rebuild` keeps the volume.
+changes nobody committed, or a branch that is not merged into one of your
+branches or pushed to a remote: a fetched `api/<branch>` alone does not count.
+Once the check passes, `remove` deletes the `api/*` refs `fetch` wrote.
+`--force` removes the container anyway and keeps those refs. `rebuild` keeps
+the volume.
 
 **Containers created before modes** keep the guard they were created with:
 `.git` writable, with `.git/config` read-only as a single file and `.git/hooks`
@@ -1160,8 +1163,10 @@ A legacy container that was guarded prints a warning on every `start`, `exec`,
 **`start`** creates the container if the engine has none, which is what makes
 `create --no-start` followed by `start` work.
 
-**`remove`** never touches the project folder. For a folderless container it
-also deletes the volume, matching the k8s provider deleting its PVC. If the
+**`remove`** never touches the project folder's files. For a folderless
+container it also deletes the volume, matching the k8s provider deleting its
+PVC. For an isolated one it first checks that nothing would be lost (see
+[What a container can do to your git](#what-a-container-can-do-to-your-git)), then deletes the `NAME/*` refs `fetch` wrote. If the
 engine refuses, the record is kept so the command can be retried; `--force`
 drops it anyway.
 

@@ -117,8 +117,68 @@ func TestRemoveRefusesUnfetchedIsolatedWork(t *testing.T) {
 	if err := runContainerFetch(t.Context(), a, "", "iso"); err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
+	err = runContainerRemove(t.Context(), a, "", "iso", false)
+	if got := exitCodeOf(err); got != exitUsage {
+		t.Fatalf("remove after fetch, before merge: exit code = %d (%v), want %d", got, err, exitUsage)
+	}
+	branch := gitOutput(t, inside, "branch", "--show-current")
+	if !strings.Contains(err.Error(), "branch "+branch) {
+		t.Errorf("error %q does not name the unmerged branch", err)
+	}
+
+	gitIn(t, folder, "merge", "-q", "--ff-only", "iso/"+branch)
 	if err := runContainerRemove(t.Context(), a, "", "iso", false); err != nil {
-		t.Errorf("remove after fetch: %v", err)
+		t.Fatalf("remove after merge: %v", err)
+	}
+	if refs := gitOutput(t, folder, "for-each-ref", "refs/remotes/iso/"); refs != "" {
+		t.Errorf("remove left the fetched refs behind:\n%s", refs)
+	}
+}
+
+func TestRemoveAcceptsWorkPushedToARemote(t *testing.T) {
+	requireGit(t)
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	folder := initRepo(t)
+	isolatedOn(t, a, "iso", folder)
+
+	upstream := t.TempDir()
+	gitIn(t, upstream, "init", "-q", "--bare")
+	gitIn(t, folder, "remote", "add", "upstream", upstream)
+
+	inside := t.TempDir()
+	gitIn(t, inside, "clone", "-q", folder, ".")
+	gitIn(t, inside, "switch", "-q", "-c", "agent-work")
+	gitIn(t, inside, "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "--allow-empty", "-m", "pushed")
+	gitIn(t, inside, "push", "-q", upstream, "agent-work")
+	stubContainerRepo(t, inside)
+
+	gitIn(t, folder, "fetch", "-q", "upstream")
+	if err := runContainerRemove(t.Context(), a, "", "iso", false); err != nil {
+		t.Errorf("remove with the branch on a remote: %v", err)
+	}
+}
+
+func TestRemoveForceKeepsTheFetchedRefs(t *testing.T) {
+	requireGit(t)
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	folder := initRepo(t)
+	isolatedOn(t, a, "iso", folder)
+
+	inside := t.TempDir()
+	gitIn(t, inside, "clone", "-q", folder, ".")
+	gitIn(t, inside, "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "--allow-empty", "-m", "unmerged")
+	stubContainerRepo(t, inside)
+
+	if err := runContainerFetch(t.Context(), a, "", "iso"); err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if err := runContainerRemove(t.Context(), a, "", "iso", true); err != nil {
+		t.Fatalf("remove --force: %v", err)
+	}
+	if refs := gitOutput(t, folder, "for-each-ref", "refs/remotes/iso/"); refs == "" {
+		t.Error("remove --force deleted the fetched refs, the only copy of unmerged work")
 	}
 }
 
@@ -156,4 +216,47 @@ func gitOutput(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %v: %v", args, err)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+func TestRemoveLeavesARealRemotesRefs(t *testing.T) {
+	requireGit(t)
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	folder := initRepo(t)
+	isolatedOn(t, a, "upstream", folder)
+
+	bare := t.TempDir()
+	gitIn(t, bare, "init", "-q", "--bare")
+	gitIn(t, folder, "remote", "add", "upstream", bare)
+	gitIn(t, folder, "push", "-q", "upstream", "HEAD:refs/heads/kept")
+	gitIn(t, folder, "fetch", "-q", "upstream")
+
+	inside := t.TempDir()
+	gitIn(t, inside, "clone", "-q", folder, ".")
+	stubContainerRepo(t, inside)
+
+	if err := runContainerRemove(t.Context(), a, "", "upstream", false); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if refs := gitOutput(t, folder, "for-each-ref", "refs/remotes/upstream/"); refs == "" {
+		t.Error("remove deleted the tracking refs of a git remote that shares the container's name")
+	}
+}
+
+func TestFetchRefusesANameAGitRemoteHas(t *testing.T) {
+	requireGit(t)
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	folder := initRepo(t)
+	isolatedOn(t, a, "upstream", folder)
+	gitIn(t, folder, "remote", "add", "upstream", t.TempDir())
+
+	inside := t.TempDir()
+	gitIn(t, inside, "clone", "-q", folder, ".")
+	stubContainerRepo(t, inside)
+
+	err := runContainerFetch(t.Context(), a, "", "upstream")
+	if got := exitCodeOf(err); got != exitUsage {
+		t.Errorf("exit code = %d (%v), want %d", got, err, exitUsage)
+	}
 }

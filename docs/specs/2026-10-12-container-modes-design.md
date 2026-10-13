@@ -265,11 +265,20 @@ repository two questions:
 
 - uncommitted changes: `git status --porcelain` is empty;
 - unfetched commits: every branch tip is present in the source folder
-  (`git cat-file -e <tip>^{commit}` on the host).
+  (`git cat-file -e <tip>^{commit}` on the host);
+- unmerged commits: every branch tip is reachable from a local branch or a
+  remote-tracking ref other than the `refs/remotes/<container>/*` that `fetch`
+  wrote (`git for-each-ref --contains <tip>`).
 
-Either one failing refuses the removal (exit 2), listing the branches and
+Any one failing refuses the removal (exit 2), listing the branches and
 whether there are uncommitted changes, and naming `dev container fetch`.
-`--force` removes anyway. A container that is not running is started for the
+A removal that passes deletes `refs/remotes/<container>/*`: the check has just
+shown every commit there is kept by another ref. `--force` removes anyway and
+leaves those refs, which may be the last copy of the work.
+
+A git remote with the container's name would share that prefix, so `fetch`
+refuses (exit 2) in a folder that has one, and `remove` neither counts nor
+deletes refs under it. A container that is not running is started for the
 check; one that cannot be reached — an engine gone — refuses unless `--force`,
 since the check could not be made.
 
