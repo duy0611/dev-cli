@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.14.0](https://github.com/duy0611/dev-cli/compare/v0.13.0...v0.14.0) (2026-10-13)
+
+
+### Features
+
+* **cli:** trust github.com's host key in every started container ([e1b488e](https://github.com/duy0611/dev-cli/commit/e1b488ea3296b293297f50f3227cc39d53993130))
+* **cli:** verify github.com's scanned host keys against its fingerprints ([0eb5ceb](https://github.com/duy0611/dev-cli/commit/0eb5ceb721abe25e13dfe831b9379ef2ee34c038))
+
+
+### Bug Fixes
+
+* **cli:** keep isolated work until it is merged or pushed ([cbc4d63](https://github.com/duy0611/dev-cli/commit/cbc4d63ff269234a5e2d0fe5b7556711e961a548))
+* **env:** pass the git identity as GIT_AUTHOR_* and GIT_COMMITTER_* ([fe92c35](https://github.com/duy0611/dev-cli/commit/fe92c35e2abda64e0e31289db04ba6e0b5bcf761))
+
 ## [0.13.0](https://github.com/duy0611/dev-cli/compare/v0.12.0...v0.13.0) (2026-10-12)
 
 
