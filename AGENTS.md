@@ -15,7 +15,7 @@ operator. Module `github.com/duy0611/dev-cli`; version in
 `.release-please-manifest.json`.
 
 - `docs/specs/` is the design record: read it for intent, the code for current
-  state.
+  state. `docs/research/` holds findings a spec may draw on; it decides nothing.
 - `docs/USAGE.md` is the operator reference. A change to a command's surface is
   not finished until that file matches it.
 - `docs/SECURITY.md` explains the guarded and isolated modes to a newcomer.
