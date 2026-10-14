@@ -114,6 +114,23 @@ func TestAgentName(t *testing.T) {
 	}
 }
 
+func TestValidAgentName(t *testing.T) {
+	for in, want := range map[string]bool{
+		"api":                               true,
+		"fix_header-2":                      true,
+		"Api":                               false,
+		"web.v2":                            false,
+		"2fa":                               false,
+		"":                                  false,
+		"a-name-that-is-exactly-33-chars-x": false,
+		"a-name-that-is-exactly-32-chars-":  true,
+	} {
+		if got := ValidAgentName(in); got != want {
+			t.Errorf("ValidAgentName(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
 // Herdr refuses the rename until it has detected the agent in the pane.
 func TestNameAgentRetriesUntilDetected(t *testing.T) {
 	t.Setenv("HERDR_PANE_ID", "w1:p2")
@@ -162,13 +179,13 @@ func TestNameAgentOutsideAPaneDoesNothing(t *testing.T) {
 	}
 }
 
-func TestNameAgentWithoutAFittingNameDoesNothing(t *testing.T) {
+func TestNameAgentWithoutANameDoesNothing(t *testing.T) {
 	t.Setenv("HERDR_PANE_ID", "w1:p2")
 	log := fakeHerdr(t, "exit 0\n")
 
-	NameAgent(t.Context(), "2fa")()
+	NameAgent(t.Context(), "")()
 
 	if _, err := os.Stat(log); err == nil {
-		t.Error("herdr was called with a name it would refuse")
+		t.Error("herdr was called with no name")
 	}
 }

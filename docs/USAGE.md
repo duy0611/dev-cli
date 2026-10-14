@@ -1074,7 +1074,7 @@ dev container rebuild NAME [--no-cache] [--tools LIST] [--accept-config]
 dev container logs NAME [-f]
 dev container shell NAME [--kube-token] [--ssh-agent|--no-ssh-agent]
 dev container exec NAME [--kube-token] [--ssh-agent|--no-ssh-agent] -- CMD [ARGS...]
-dev container start-agent NAME [--agent claude|codex|hermes|opencode] [--kube-token] [--ssh-agent|--no-ssh-agent] [-- ARGS...]
+dev container start-agent NAME [--agent claude|codex|hermes|opencode] [--agent-name NAME] [--kube-token] [--ssh-agent|--no-ssh-agent] [-- ARGS...]
 dev container sync NAME
 dev container fetch NAME
 dev container tools
@@ -1206,10 +1206,13 @@ never compared. The local provider only.
 not to `dev`.
 
 **`start-agent`** defaults to `--agent claude`. The agent must already be
-installed in the image. Run inside a Herdr pane, it names the agent after the
-container (`herdr agent rename`), lowercased with `.` turned into `-` and cut
-to 32 characters; a container name that does not start with a letter leaves
-the agent unnamed.
+installed in the image. Run inside a Herdr pane, it names the agent
+(`herdr agent rename`) with `--agent-name`, or else after the container,
+lowercased with `.` turned into `-` and cut to 32 characters; a container name
+that does not start with a letter leaves the agent unnamed. `--agent-name` must
+be what Herdr accepts — a lowercase letter, then up to 31 of `a-z`, `0-9`, `_`
+and `-` — or it is exit 2, before anything starts. Outside a Herdr pane it does
+nothing.
 
 **`--kube-token`**, on `shell`, `exec` and `start-agent`, asks for a context,
 namespace, ServiceAccount and duration, mints a token for that account on the
