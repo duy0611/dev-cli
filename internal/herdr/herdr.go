@@ -77,11 +77,26 @@ func AgentName(container string) string {
 	return name
 }
 
-// NameAgent names the agent about to run in the calling Herdr pane after its
-// container, in the background, and returns a func that stops trying. Outside
-// a Herdr pane it does nothing.
-func NameAgent(ctx context.Context, container string) (stop func()) {
-	pane, name := os.Getenv("HERDR_PANE_ID"), AgentName(container)
+// ValidAgentName reports whether Herdr accepts name as an agent name.
+func ValidAgentName(name string) bool {
+	if name == "" || len(name) > 32 || name[0] < 'a' || name[0] > 'z' {
+		return false
+	}
+	for _, c := range name {
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '_', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// NameAgent names the agent about to run in the calling Herdr pane, in the
+// background, and returns a func that stops trying. Outside a Herdr pane, or
+// with no name, it does nothing.
+func NameAgent(ctx context.Context, name string) (stop func()) {
+	pane := os.Getenv("HERDR_PANE_ID")
 	if pane == "" || name == "" {
 		return func() {}
 	}

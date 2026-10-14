@@ -21,6 +21,7 @@ func newContainerStartAgentCmd(a *app) *cobra.Command {
 	var (
 		workspace string
 		agentID   string
+		agentName string
 		kubeToken bool
 		sshAgent  sshAgentFlags
 	)
@@ -43,7 +44,7 @@ func newContainerStartAgentCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runContainerStartAgent(cmd.Context(), a, workspace, args[0], agentID, extra, kubeToken, sshOverride)
+			return runContainerStartAgent(cmd.Context(), a, workspace, args[0], agentID, agentName, extra, kubeToken, sshOverride)
 		},
 	}
 	addWorkspaceFlag(cmd, &workspace)
@@ -51,14 +52,20 @@ func newContainerStartAgentCmd(a *app) *cobra.Command {
 	addSSHAgentFlags(cmd, &sshAgent)
 	cmd.Flags().StringVar(&agentID, "agent", "claude",
 		"which agent to run ("+strings.Join(agent.IDs(), ", ")+")")
+	cmd.Flags().StringVar(&agentName, "agent-name", "",
+		"the agent's name in Herdr (default: the container name)")
 	return cmd
 }
 
-func runContainerStartAgent(ctx context.Context, a *app, workspace, name, agentID string, extra []string,
-	kubeToken bool, sshOverride *bool) error {
+func runContainerStartAgent(ctx context.Context, a *app, workspace, name, agentID, agentName string,
+	extra []string, kubeToken bool, sshOverride *bool) error {
 	ag, err := agent.Lookup(agentID)
 	if err != nil {
 		return usageError(err)
+	}
+	herdrName, err := herdrAgentName(name, agentName)
+	if err != nil {
+		return err
 	}
 
 	t, err := a.resolve(ctx, workspace, name)
@@ -126,7 +133,7 @@ func runContainerStartAgent(ctx context.Context, a *app, workspace, name, agentI
 	if err := os.Setenv("HERDR_AGENT", ag.ID); err != nil {
 		return err
 	}
-	defer herdr.NameAgent(ctx, t.container.Name)()
+	defer herdr.NameAgent(ctx, herdrName)()
 
 	argv := ag.Command(extra)
 	started := time.Now()
@@ -146,6 +153,19 @@ func runContainerStartAgent(ctx context.Context, a *app, workspace, name, agentI
 		"kube_token": kubeReq != nil,
 	}, err)
 	return err
+}
+
+// herdrAgentName is the name given with --agent-name, or one derived from the
+// container. A derived name that cannot fit leaves the agent unnamed; a given
+// one Herdr would refuse is an error.
+func herdrAgentName(container, flag string) (string, error) {
+	if flag == "" {
+		return herdr.AgentName(container), nil
+	}
+	if !herdr.ValidAgentName(flag) {
+		return "", usageErrorf("--agent-name %q: want a lowercase letter, then up to 31 of a-z, 0-9, _ and -", flag)
+	}
+	return flag, nil
 }
 
 // ensureAgentPresent checks the image actually has the agent, offering one

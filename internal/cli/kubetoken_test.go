@@ -345,7 +345,7 @@ func TestExecKubeTokenNoTerminal(t *testing.T) {
 func TestStartAgentAsksBeforeUp(t *testing.T) {
 	noTerminal(t)
 	a := seedFake(t, model.StatusStopped)
-	err := runContainerStartAgent(t.Context(), a, "", "api", "claude", nil, true, nil)
+	err := runContainerStartAgent(t.Context(), a, "", "api", "claude", "", nil, true, nil)
 	if exitCodeOf(err) != exitUsage {
 		t.Errorf("err = %v (exit %d)", err, exitCodeOf(err))
 	}
