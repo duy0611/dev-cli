@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.15.0](https://github.com/duy0611/dev-cli/compare/v0.14.0...v0.15.0) (2026-10-17)
+
+
+### Features
+
+* **cli:** name the Herdr agent with start-agent --agent-name ([f53d110](https://github.com/duy0611/dev-cli/commit/f53d1107f8aed8bdad37241844e42f5be4769e73))
+
+
+### Performance
+
+* **dcgen:** skip the go feature's tool builds ([6781068](https://github.com/duy0611/dev-cli/commit/6781068ffb6bd65f20e0c57c2832c1636d8cee1b))
+
 ## [0.14.0](https://github.com/duy0611/dev-cli/compare/v0.13.0...v0.14.0) (2026-10-13)
 
 
