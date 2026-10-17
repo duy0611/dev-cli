@@ -53,6 +53,20 @@ func TestOpencodeDependsOnNode(t *testing.T) {
 	}
 }
 
+// The go feature's default also compiles gopls, staticcheck, dlv and others
+// from source, which dominates the image build.
+func TestGoSkipsTheFeaturesTools(t *testing.T) {
+	got, err := Render("g", []string{"go"}, Mount{}, State{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if !strings.Contains(got, `"ghcr.io/devcontainers/features/go:1": {
+      "installGoTools": false
+    }`) {
+		t.Errorf("go feature does not switch its tools off:\n%s", got)
+	}
+}
+
 // The stored string must be byte-stable.
 func TestRenderIsExactAndStable(t *testing.T) {
 	got, err := Render("demo", []string{"node", "yq"}, Mount{}, State{})

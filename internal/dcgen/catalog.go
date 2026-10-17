@@ -58,8 +58,11 @@ var catalog = []Tool{
 		Feature: "ghcr.io/dhoeric/features/google-cloud-cli:1"},
 	{ID: "gh", Summary: "GitHub CLI", Official: true,
 		Feature: "ghcr.io/devcontainers/features/github-cli:1"},
+	// installGoTools, from feature 1.4.0, also gates golangci-lint. Older
+	// releases ignore the unknown option and build the tools anyway.
 	{ID: "go", Summary: "Go", Official: true,
-		Feature: "ghcr.io/devcontainers/features/go:1"},
+		Feature: "ghcr.io/devcontainers/features/go:1",
+		Options: map[string]any{"installGoTools": false}},
 	{ID: "helm", Summary: "Helm", Official: true, Feature: kubeFeature},
 	{ID: "hermes", Summary: "Hermes agent",
 		Feature: "ghcr.io/devcontainer-community/devcontainer-features/hermes-agent.nousresearch.com:1"},
