@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.15.0](https://github.com/duy0611/dev-cli/compare/v0.14.0...v0.15.0) (2026-10-18)
+
+
+### Features
+
+* **build:** switch from devcontainer features to mise for go and go tools ([8612609](https://github.com/duy0611/dev-cli/commit/8612609cd9b983c373048bbb1e4c7b97ad53dafc))
+* **cli:** create a container on several folders ([895b08b](https://github.com/duy0611/dev-cli/commit/895b08b0021b2793d7e6d11b326db200397cc42b))
+* **cli:** name the Herdr agent with start-agent --agent-name ([f53d110](https://github.com/duy0611/dev-cli/commit/f53d1107f8aed8bdad37241844e42f5be4769e73))
+
+
+### Performance
+
+* **dcgen:** skip the go feature's tool builds ([6781068](https://github.com/duy0611/dev-cli/commit/6781068ffb6bd65f20e0c57c2832c1636d8cee1b))
+
 ## [0.14.0](https://github.com/duy0611/dev-cli/compare/v0.13.0...v0.14.0) (2026-10-13)
 
 
