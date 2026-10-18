@@ -498,7 +498,26 @@ What works inside: `git status`, `diff`, `log`, `blame`, anything that only
 reads. What does not: `commit`, `add`, `stash`, creating a branch, `fetch` and
 `pull`, all of which write to `.git` and fail with `Read-only file system`. You
 review the agent's edits in your checkout and commit them yourself. Tell the
-agent so in your project's agent instructions, or it will keep trying.
+agent so in your project's agent instructions, or it will keep trying. The
+project's `AGENTS.md` or `CLAUDE.md` is in the container in both modes, so one
+passage can serve either by telling the agent how to recognise the guarded
+case:
+
+```markdown
+## Git in the dev container
+
+This container may be guarded, with `.git` mounted read-only:
+- `git status`, `diff` and `log` always work.
+- If `git commit` (or `add`, `stash`, `checkout -b`, `fetch`) fails with
+  `Read-only file system`, the container is guarded. Do not retry or work
+  around it: leave the changes uncommitted and say so in your summary.
+  The operator reviews and commits them from the host.
+- Otherwise the container is isolated: commit on a branch, and push
+  if asked. The operator brings the work home with `dev container fetch`.
+```
+
+Go by the error rather than a probe: in a worktree `.git` is a file, and
+`test -w` calls a read-only mount writable as root.
 
 A guarded container has no use for the ssh agent, so it gets none:
 `--ssh-agent` is refused, and a workspace created with `--ssh-forward` does not

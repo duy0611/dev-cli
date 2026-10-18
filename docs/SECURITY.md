@@ -66,7 +66,8 @@ Your own git is unaffected. You can commit, push, set upstreams and change
 configuration while the container runs.
 
 Tell the agent that committing is your job — in your project's agent
-instructions — or it will keep trying.
+instructions — or it will keep trying. [USAGE.md](USAGE.md#what-a-container-can-do-to-your-git)
+has a passage that works in either mode.
 
 A container can be given several folders (`--folder` repeated). The promise is
 per folder: each repository's `.git` is read-only, and each gap below applies

@@ -23,6 +23,18 @@ operator. Module `github.com/duy0611/dev-cli`; version in
   change without a migration. The local provider is the stable one; say so
   wherever the two appear side by side.
 
+## Git in the dev container
+
+This container may be guarded, with `.git` mounted read-only:
+
+- `git status`, `diff` and `log` always work.
+- If `git commit` (or `add`, `stash`, `checkout -b`, `fetch`) fails with
+  `Read-only file system`, the container is guarded. Do not retry or work
+  around it: leave the changes uncommitted and say so in your summary. The
+  operator reviews and commits them from the host.
+- Otherwise the container is isolated: commit on a branch, and push if asked.
+  The operator brings the work home with `dev container fetch`.
+
 ## Commands
 
 ```sh
