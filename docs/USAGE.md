@@ -927,6 +927,13 @@ annotation on the pod template, because the tag never changes and nothing else
 would make a new image visible. If it genuinely did not, check the push
 succeeded.
 
+**`image platform (linux/amd64) does not match the expected platform
+(linux/arm64)`, or `uname -m` prints `x86_64` on Apple Silicon** — a local
+container built from an amd64 image under emulation, typically after a k8s build
+moved the base image's tag. `create` and `rebuild` now build for the engine's
+own platform, so a rebuild fixes it. If you set `DOCKER_DEFAULT_PLATFORM`
+yourself, `dev` passes it through and you get the platform you asked for.
+
 **`exec format error` in a k8s pod** — an arm64 image landed on an amd64 node.
 The build targets `linux/amd64` by default; if your nodes are arm64, set
 `--platform linux/arm64` on the provider.

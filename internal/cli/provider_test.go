@@ -13,6 +13,10 @@ import (
 func newTestApp(t *testing.T) (*app, *bytes.Buffer) {
 	t.Helper()
 	t.Setenv("DEV_STATE", t.TempDir())
+	// Skips the local provider's platform probe, which would otherwise ask
+	// whatever docker the host has, since most stubs here replace only
+	// devcontainer.
+	t.Setenv("DOCKER_DEFAULT_PLATFORM", "linux/amd64")
 
 	var out bytes.Buffer
 	a := &app{out: &out}

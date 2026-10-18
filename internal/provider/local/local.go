@@ -94,6 +94,7 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 	args = append(args, remoteEnvArgs(env)...)
 
 	cmd := exec.CommandContext(ctx, devcontainerBin, args...)
+	cmd.Env = upEnv(ctx, os.Environ())
 	// stdout is the JSON result, which is noise. Progress on stderr is kept,
 	// since an image build is minutes of silence otherwise.
 	cmd.Stdout = io.Discard
@@ -379,6 +380,32 @@ func (p *Provider) containerID(ctx context.Context, c model.Container) (string, 
 }
 
 // --- helpers -----------------------------------------------------------------
+
+// platformEnv is the docker CLI's default platform for build, run and compose.
+const platformEnv = "DOCKER_DEFAULT_PLATFORM"
+
+// upEnv returns environ for devcontainer up, pinned to the engine's own
+// platform unless the operator chose one. A local tag can name another
+// architecture after a k8s cross-build, and the engine would build FROM it
+// under emulation. The variable rather than --platform, which the CLI refuses
+// without BuildKit; see ARCHITECTURE.md, "Tooling and testing, in detail".
+func upEnv(ctx context.Context, environ []string) []string {
+	for _, kv := range environ {
+		if v, ok := strings.CutPrefix(kv, platformEnv+"="); ok && v != "" {
+			return environ
+		}
+	}
+	out, err := output(ctx, dockerBin, "version", "--format", "{{.Server.Os}}/{{.Server.Arch}}")
+	if err != nil {
+		return environ
+	}
+	platform := strings.TrimSpace(out)
+	osName, arch, ok := strings.Cut(platform, "/")
+	if !ok || osName == "" || arch == "" || strings.ContainsAny(platform, " \t\n") || strings.Contains(arch, "/") {
+		return environ
+	}
+	return append(environ, platformEnv+"="+platform)
+}
 
 // remoteEnvArgs renders environment variables as devcontainer CLI arguments.
 // --remote-env values are visible in the host process list for the length of

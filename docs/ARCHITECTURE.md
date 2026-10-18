@@ -389,6 +389,19 @@ The longer form of conventions summarised in `AGENTS.md`.
   `read-configuration` emits *plural* merged fields (`onCreateCommands`),
   reports a null `workspaceFolder` when unset, and shells out to `docker ps`
   even to read a file.
+- **The local provider builds for the engine's platform.** `up` runs
+  `devcontainer up` with `DOCKER_DEFAULT_PLATFORM` set from
+  `docker version --format '{{.Server.Os}}/{{.Server.Arch}}'`. An engine keeps
+  one image per tag, and a k8s cross-build for `linux/amd64` moves a shared base
+  tag onto amd64; without a platform, every later local build on an arm64
+  engine runs `FROM` it under emulation, with nothing failing. The variable,
+  not `--platform`: the devcontainer CLI refuses `--platform` without BuildKit,
+  and a docker CLI without buildx is common, while the docker CLI honours the
+  variable on `build`, `run` and `compose` either way. The engine's platform,
+  not `runtime.GOARCH`, because a remote `DOCKER_HOST` or an Intel Mac driving
+  an arm64 machine makes dev's own architecture the wrong one. An operator's own
+  `DOCKER_DEFAULT_PLATFORM` is left alone and skips the probe; a failed probe
+  runs `up` unchanged.
 - **Prompt only at a terminal.** `provider configure` asks for whatever its
   flags left empty, but `isTerminal(os.Stdin)` guards the prompting: a scripted
   run has to fail naming the missing flag rather than block on a question
