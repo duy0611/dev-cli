@@ -1,5 +1,6 @@
 {
   "build": {
+    "context": "..",
     "dockerfile": "Dockerfile"
   },
   "containerEnv": {
@@ -18,8 +19,7 @@
       "package": "@opencode/cli"
     },
     "ghcr.io/devcontainers/features/github-cli:1": {},
-    "ghcr.io/devcontainers/features/node:2": {},
-    "ghcr.io/devcontainers-extra/features/mise:1": {}
+    "ghcr.io/devcontainers/features/node:2": {}
   },
   "mounts": [
     "source=dev-cli-state,target=/var/dev-state,type=volume"
