@@ -1,0 +1,5 @@
+# Loaded only where MISE_ENV=devcontainer, so CI never compiles it. gopls has
+# no release binaries and builds from source in about three minutes; on the
+# state volume that happens once, not on every rebuild.
+[tools]
+"go:golang.org/x/tools/gopls" = "latest"

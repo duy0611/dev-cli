@@ -239,6 +239,10 @@ make hooks      # install .githooks (once per clone)
 make clean
 ```
 
+The toolchain is pinned in `mise.toml`, the same file CI installs from: run
+`mise install` once per clone, or let the devcontainer do it on create.
+`mise.devcontainer.toml` adds gopls inside the container only.
+
 Run `make hooks` after cloning, and again after a change to `.githooks`. It
 copies the hooks into `.git/hooks`, which no clone inherits, so until it runs
 they are simply not installed. A copy rather than `core.hooksPath`, so host git

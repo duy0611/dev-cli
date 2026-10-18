@@ -1,8 +1,14 @@
 {
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
   "containerEnv": {
     "CLAUDE_CONFIG_DIR": "/var/dev-state/claude",
     "GIT_CONFIG_GLOBAL": "/var/dev-state/gitconfig",
     "HERMES_HOME": "/var/dev-state/hermes",
+    "MISE_DATA_DIR": "/var/dev-state/mise",
+    "MISE_ENV": "devcontainer",
+    "MISE_TRUSTED_CONFIG_PATHS": "/workspaces",
     "OPENCODE_CONFIG_DIR": "/var/dev-state/opencode"
   },
   "features": {
@@ -12,15 +18,13 @@
       "package": "@opencode/cli"
     },
     "ghcr.io/devcontainers/features/github-cli:1": {},
-    "ghcr.io/devcontainers/features/go:1": {},
     "ghcr.io/devcontainers/features/node:2": {},
     "ghcr.io/devcontainers-extra/features/mise:1": {}
   },
-  "image": "mcr.microsoft.com/devcontainers/base:1-ubuntu-24.04",
   "mounts": [
     "source=dev-cli-state,target=/var/dev-state,type=volume"
   ],
   "name": "dev-cli",
-  "postCreateCommand": "sudo chown vscode:vscode /var/dev-state",
+  "postCreateCommand": "sudo chown vscode:vscode /var/dev-state && mise install",
   "remoteUser": "vscode"
 }

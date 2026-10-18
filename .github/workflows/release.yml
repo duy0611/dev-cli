@@ -70,10 +70,9 @@ jobs:
           # the same thing.
           fetch-depth: 0
 
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: true
+      - uses: jdx/mise-action@v5
+
+      - uses: ./.github/actions/go-cache
 
       # The whole point of a release build: the tests must pass for the commit
       # being published, not merely for the commit CI last looked at.
