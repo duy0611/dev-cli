@@ -1,0 +1,4 @@
+# The devcontainer builds from the repository root only to reach the mise files.
+*
+!mise.toml
+!mise.devcontainer.toml

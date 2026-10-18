@@ -27,7 +27,12 @@ func newFakePath(t *testing.T) *fakeBin {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	return &fakeBin{dir: dir}
+	t.Setenv(platformEnv, "")
+	f := &fakeBin{dir: dir}
+	// up probes the engine's platform; without a stub it would reach a real
+	// engine through the host's docker.
+	f.install(t, dockerBin, "", 1)
+	return f
 }
 
 // install writes a stub for name that prints stdout and exits with code.
@@ -36,6 +41,7 @@ func (f *fakeBin) install(t *testing.T, name, stdout string, code int) {
 	log := filepath.Join(f.dir, name+".argv")
 	// Appended, not truncated: one command can run the same binary twice.
 	script := "#!/bin/sh\n" +
+		"env > " + shellQuote(filepath.Join(f.dir, name+".env")) + "\n" +
 		"for a in \"$@\"; do printf '%s\\n' \"$a\" >> " + shellQuote(log) + "; done\n" +
 		"printf '%s\\n' " + shellQuote(callSeparator) + " >> " + shellQuote(log) + "\n"
 	if stdout != "" {
@@ -80,6 +86,22 @@ func (f *fakeBin) argv(t *testing.T, name string) []string {
 		t.Fatalf("fake %s was never called", name)
 	}
 	return calls[0]
+}
+
+// env returns the value of key in the environment of the stub's latest call,
+// and whether it was there.
+func (f *fakeBin) env(t *testing.T, name, key string) (string, bool) {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(f.dir, name+".env"))
+	if err != nil {
+		t.Fatalf("fake %s was never called: %v", name, err)
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if v, ok := strings.CutPrefix(line, key+"="); ok {
+			return v, true
+		}
+	}
+	return "", false
 }
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
@@ -759,5 +781,81 @@ func TestRemoveDeletesEveryFolderVolume(t *testing.T) {
 		if !f.calledWith(t, dockerBin, []string{"volume", "rm", "--force", v}) {
 			t.Errorf("Remove did not delete %s; docker calls were %v", v, f.argvAll(t, dockerBin))
 		}
+	}
+}
+
+func TestUpBuildsForTheEnginePlatform(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, devcontainerBin, "", 0)
+	f.install(t, dockerBin, "linux/arm64\n", 0)
+
+	if err := (&Provider{}).Up(context.Background(), testContainer(), nil); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if !f.calledWith(t, dockerBin, []string{"version", "--format", "{{.Server.Os}}/{{.Server.Arch}}"}) {
+		t.Errorf("docker was not asked for the engine platform: %v", f.argvAll(t, dockerBin))
+	}
+	if got, _ := f.env(t, devcontainerBin, platformEnv); got != "linux/arm64" {
+		t.Errorf("up saw %s=%q, want linux/arm64", platformEnv, got)
+	}
+}
+
+func TestRebuildBuildsForTheEnginePlatform(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, devcontainerBin, "", 0)
+	f.install(t, dockerBin, "linux/amd64", 0)
+
+	if err := (&Provider{}).Rebuild(context.Background(), testContainer(), nil, false); err != nil {
+		t.Fatalf("Rebuild: %v", err)
+	}
+	if got, _ := f.env(t, devcontainerBin, platformEnv); got != "linux/amd64" {
+		t.Errorf("rebuild saw %s=%q, want linux/amd64", platformEnv, got)
+	}
+}
+
+// An operator's own platform is deliberate, emulation included.
+func TestUpKeepsTheOperatorsPlatform(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, devcontainerBin, "", 0)
+	f.install(t, dockerBin, "linux/arm64", 0)
+	t.Setenv(platformEnv, "linux/amd64")
+
+	if err := (&Provider{}).Up(context.Background(), testContainer(), nil); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if got, _ := f.env(t, devcontainerBin, platformEnv); got != "linux/amd64" {
+		t.Errorf("up saw %s=%q, want the operator's linux/amd64", platformEnv, got)
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, dockerBin+".argv")); err == nil {
+		t.Errorf("docker was probed despite an operator platform: %v", f.argvAll(t, dockerBin))
+	}
+}
+
+func TestUpRunsWithoutAPlatformWhenTheProbeFails(t *testing.T) {
+	for name, stub := range map[string]struct {
+		out  string
+		code int
+	}{
+		"exit":       {"", 1},
+		"garbage":    {"Cannot connect to the Docker daemon\n", 0},
+		"empty arch": {"linux/\n", 0},
+		"empty os":   {"/arm64\n", 0},
+		"too many":   {"linux/arm/v7\n", 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFakePath(t)
+			f.install(t, devcontainerBin, "", 0)
+			f.install(t, dockerBin, stub.out, stub.code)
+
+			if err := (&Provider{}).Up(context.Background(), testContainer(), nil); err != nil {
+				t.Fatalf("Up: %v", err)
+			}
+			if f.argv(t, devcontainerBin)[0] != "up" {
+				t.Fatalf("up did not run: %v", f.argvAll(t, devcontainerBin))
+			}
+			if got, ok := f.env(t, devcontainerBin, platformEnv); ok && got != "" {
+				t.Errorf("up saw %s=%q after a failed probe", platformEnv, got)
+			}
+		})
 	}
 }

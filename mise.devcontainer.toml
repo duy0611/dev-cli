@@ -1,5 +1,6 @@
 # Loaded only where MISE_ENV=devcontainer, so CI never compiles it. gopls has
-# no release binaries and builds from source in about three minutes; on the
-# state volume that happens once, not on every rebuild.
+# no release binaries and builds from source in minutes, so the devcontainer
+# Dockerfile installs it into the image. Pinned: the version is that layer's
+# cache key, and a newer gopls may require a newer Go than mise.toml's.
 [tools]
-"go:golang.org/x/tools/gopls" = "latest"
+"go:golang.org/x/tools/gopls" = "0.23.0"
