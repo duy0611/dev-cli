@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.16.0](https://github.com/duy0611/dev-cli/compare/v0.15.0...v0.16.0) (2026-10-18)
+
+
+### Features
+
+* **build:** speed up container creation ([7482fcf](https://github.com/duy0611/dev-cli/commit/7482fcf7155770547c13d7cab008dd4e7cc3145c))
+* **cli:** local containers built for the engine's architecture ([f287319](https://github.com/duy0611/dev-cli/commit/f287319d10b9d3007198b117df9207e9580f8fb9))
+
 ## [0.15.0](https://github.com/duy0611/dev-cli/compare/v0.14.0...v0.15.0) (2026-10-18)
 
 
