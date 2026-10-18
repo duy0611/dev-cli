@@ -241,6 +241,11 @@ refer to them by number, so the numbers are stable.
     checkout, and `workspace remove` refuses while worktrees exist, so a
     checkout on disk is never left with no row naming it.
 
+    An extra folder that is a worktree checkout is the same rule again: in
+    guarded mode it is bind-mounted at its own host path, and its common
+    directory, read from git at create and stored on its `container_folders`
+    row, is mounted read-only at its own path.
+
     k8s refuses a container on a worktree outright: a pod has no host bind
     mounts, and a streamed copy of the object store would drift from the host
     with nothing to push it back.
@@ -280,6 +285,23 @@ refer to them by number, so the numbers are stable.
     `transfer.fsckObjects`; host git reads commit data from the container and
     nothing else. `remove` refuses while the volume holds work the folder
     lacks, since it is the only copy.
+
+    A container can have extra folders beyond its primary, which stays in
+    `containers.source` so nothing that reads it changes. They live in
+    `container_folders`, each with its container path stored rather than
+    derived, so renaming the folder on the host cannot move it inside. Guarded
+    mounts one read-only `.git` per repository among them, at the folder's
+    container path; the tree search runs once per repository with every
+    folder's mount as a root, since one repository's config can name a file in
+    another. Isolated gives each folder a volume of its own, named from a hash
+    of the host path, and seeds, fetches and checks each one separately. The
+    folder mounts reach the container by the git guard's route — appended to a
+    generated document, merged into a project's — and are kept out of the
+    configuration digest, so adding a folder is not drift. `rebuild` writes the
+    new set only once the provider's rebuild succeeds. An isolated primary's
+    volume is mounted at the stored `workspace_path`: `/workspaces/<basename>`
+    for a container created since, `/workspaces/<name>` backfilled for the ones
+    before, so their volume stays where it is.
 
 ## Kubernetes provider (experimental)
 

@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/duy0611/dev-cli/internal/model"
@@ -638,5 +639,82 @@ func TestContainerWithoutAModeIsLegacy(t *testing.T) {
 	}
 	if got.Mode != model.ModeLegacy {
 		t.Errorf("mode = %q, want legacy", got.Mode)
+	}
+}
+
+// Extra folders round-trip in order of their host path, with the stored
+// container path, and the primary stays in Source.
+func TestContainerRoundTripsFolders(t *testing.T) {
+	s := openTest(t)
+	seed(t, s)
+	folders := []model.Folder{
+		{HostPath: "/src/b", ContainerPath: "/workspaces/b"},
+		{HostPath: "/wt/a", ContainerPath: "/wt/a", WorktreeRepo: "/src/app/.git"},
+	}
+	if err := s.CreateContainer(model.Container{
+		Name: "multi", WorkspaceName: "ws", SourceKind: model.SourceFolder, Source: "/src/api",
+		Mode: model.ModeIsolated, WorkspacePath: "/workspaces/api", Folders: folders,
+	}); err != nil {
+		t.Fatalf("CreateContainer: %v", err)
+	}
+	got, err := s.GetContainer("ws", "multi")
+	if err != nil {
+		t.Fatalf("GetContainer: %v", err)
+	}
+	if got.Source != "/src/api" || got.WorkspacePath != "/workspaces/api" {
+		t.Errorf("source=%q workspace_path=%q", got.Source, got.WorkspacePath)
+	}
+	want := folders
+	if !slices.Equal(got.Folders, want) {
+		t.Errorf("folders = %v, want %v", got.Folders, want)
+	}
+	list, err := s.ListContainers("ws")
+	if err != nil || len(list) != 1 || !slices.Equal(list[0].Folders, want) {
+		t.Errorf("ListContainers = %v, %v; want the folders loaded", list, err)
+	}
+}
+
+func TestSetContainerFoldersReplacesTheSet(t *testing.T) {
+	s := openTest(t)
+	seed(t, s)
+	if err := s.CreateContainer(model.Container{
+		Name: "multi", WorkspaceName: "ws", SourceKind: model.SourceFolder, Source: "/src/api",
+		Mode: model.ModeGuarded, Folders: []model.Folder{{HostPath: "/src/a", ContainerPath: "/workspaces/a"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	next := []model.Folder{{HostPath: "/src/c", ContainerPath: "/workspaces/c"}}
+	if err := s.SetContainerFolders("ws", "multi", next); err != nil {
+		t.Fatalf("SetContainerFolders: %v", err)
+	}
+	got, _ := s.GetContainer("ws", "multi")
+	if !slices.Equal(got.Folders, next) {
+		t.Errorf("folders = %v, want %v", got.Folders, next)
+	}
+	if err := s.SetContainerFolders("ws", "nope", next); !errors.Is(err, ErrNotFound) {
+		t.Errorf("SetContainerFolders on a missing container = %v, want ErrNotFound", err)
+	}
+}
+
+func TestDeletingAContainerTakesItsFolders(t *testing.T) {
+	s := openTest(t)
+	seed(t, s)
+	c := model.Container{
+		Name: "multi", WorkspaceName: "ws", SourceKind: model.SourceFolder, Source: "/src/api",
+		Mode: model.ModeGuarded, Folders: []model.Folder{{HostPath: "/src/a", ContainerPath: "/workspaces/a"}},
+	}
+	if err := s.CreateContainer(c); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteContainer("ws", "multi"); err != nil {
+		t.Fatal(err)
+	}
+	c.Folders = nil
+	if err := s.CreateContainer(c); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.GetContainer("ws", "multi")
+	if len(got.Folders) != 0 {
+		t.Errorf("a recreated container inherited folders %v", got.Folders)
 	}
 }

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -33,6 +35,18 @@ func folderlessMount(workspace, container string) dcgen.Mount {
 		Volume: local.VolumeName(workspace, container),
 		Folder: local.WorkspaceFolder(container),
 	}
+}
+
+// isolatedMount describes where an isolated container keeps its primary
+// folder's copy: its own volume, at folder.
+func isolatedMount(workspace, container, folder string) dcgen.Mount {
+	return dcgen.Mount{Volume: local.VolumeName(workspace, container), Folder: folder}
+}
+
+// isolatedPath is where a new isolated container's primary appears, the same
+// path a guarded one would give it.
+func isolatedPath(source string) string {
+	return path.Join("/workspaces", filepath.Base(source))
 }
 
 // worktreeMount describes a worktree container's two bind mounts, each at its
@@ -239,7 +253,7 @@ func rewriteGeneratedTools(ctx context.Context, a *app, workspace, name string, 
 		// deleted.
 		switch {
 		case t.container.Mode == model.ModeIsolated:
-			mount = folderlessMount(t.workspace.Name, name)
+			mount = isolatedMount(t.workspace.Name, name, local.WorkspaceFolderOf(t.container))
 		case t.container.WorktreeRepo != "":
 			mount = worktreeMount(t.container.WorktreeRepo, t.container.Source)
 		}

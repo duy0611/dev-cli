@@ -283,3 +283,26 @@ func TestReadOnlyWorktreeMounts(t *testing.T) {
 		t.Errorf("ReadOnlyWorktreeMounts = %v, want %v", got, want)
 	}
 }
+
+// An extra folder is guarded only at a repository root, at the container root
+// it is given.
+func TestRootLayoutAt(t *testing.T) {
+	root := repo(t)
+	l, ok := RootLayout(root, "/workspaces/other")
+	if !ok {
+		t.Fatal("no layout for a repository root")
+	}
+	if l.GitDir != filepath.Join(root, ".git") || l.ContainerGitDir != "/workspaces/other/.git" {
+		t.Errorf("layout = %+v", l)
+	}
+	sub := filepath.Join(root, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := RootLayout(sub, "/workspaces/sub"); ok {
+		t.Error("a subfolder of a repository has a root layout")
+	}
+	if _, ok := RootLayout(t.TempDir(), "/workspaces/x"); ok {
+		t.Error("a plain folder has a root layout")
+	}
+}

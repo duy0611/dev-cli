@@ -1,6 +1,8 @@
 package local
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 
 	"github.com/duy0611/dev-cli/internal/model"
@@ -58,4 +60,22 @@ func WorkspaceFolder(container string) string {
 // are unique only within a workspace.
 func StateVolumeName(workspace, container string) string {
 	return fmt.Sprintf("dev-%s-%s-state", workspace, container)
+}
+
+// WorkspaceFolderOf is where an isolated or folderless container's primary
+// volume is mounted: the stored path, or /workspaces/<name> for a container
+// that predates it.
+func WorkspaceFolderOf(c model.Container) string {
+	if c.WorkspacePath != "" {
+		return c.WorkspacePath
+	}
+	return WorkspaceFolder(c.Name)
+}
+
+// FolderVolumeName is the docker volume an isolated container keeps one extra
+// folder in. Named by a hash of the host path, so any folder name makes a
+// valid, stable volume name; -f- keeps it apart from -state.
+func FolderVolumeName(workspace, container, host string) string {
+	sum := sha256.Sum256([]byte(host))
+	return fmt.Sprintf("dev-%s-%s-f-%s", workspace, container, hex.EncodeToString(sum[:])[:8])
 }

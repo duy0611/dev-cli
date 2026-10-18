@@ -113,44 +113,55 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 	return p.runUserCommands(ctx, c, env)
 }
 
-// seedWorkspace copies the folder into the workspace volume, with the
+// seedWorkspace copies each folder into its volume, primary first, with each
 // repository rebuilt from a bundle so no host .git config or hooks come along.
 // Only up on first create calls it, since it unpacks over the workspace.
 func (p *Provider) seedWorkspace(ctx context.Context, c model.Container) error {
-	folder := WorkspaceFolder(c.Name)
+	if err := p.seedFolder(ctx, c, c.Source, WorkspaceFolderOf(c)); err != nil {
+		return err
+	}
+	for _, f := range c.Folders {
+		if err := p.seedFolder(ctx, c, f.HostPath, f.ContainerPath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
+// seedFolder copies one host folder into the container at dir.
+func (p *Provider) seedFolder(ctx context.Context, c model.Container, host, dir string) error {
 	// The volume is root-owned, and the postCreateCommand that would chown it
 	// is held back by this seeding up, so claim the folder before unpacking.
 	// Through sh so the ids are the container's.
 	var claimErr bytes.Buffer
 	if err := p.Exec(ctx, c,
-		[]string{"sh", "-c", `[ -w "$1" ] || sudo chown -R "$(id -u):$(id -g)" "$1"`, "claim", folder},
+		[]string{"sh", "-c", `[ -w "$1" ] || sudo chown -R "$(id -u):$(id -g)" "$1"`, "claim", dir},
 		provider.ExecOpts{Stdout: io.Discard, Stderr: &claimErr}); err != nil {
 		return fmt.Errorf("claiming %s in container %s: %w: %s",
-			folder, c.Name, err, strings.TrimSpace(claimErr.String()))
+			dir, c.Name, err, strings.TrimSpace(claimErr.String()))
 	}
 
 	pr, pw := io.Pipe()
 	var plan seed.Plan
 	go func() {
 		var err error
-		plan, err = seed.Archive(ctx, c.Source, pw)
+		plan, err = seed.Archive(ctx, host, pw)
 		_ = pw.CloseWithError(err)
 	}()
 	// -p keeps the modes the archive carries; without it the container's umask
 	// strips the executable bit off every script.
 	var stderr bytes.Buffer
-	if err := p.Exec(ctx, c, []string{"tar", "-x", "-p", "-C", folder},
+	if err := p.Exec(ctx, c, []string{"tar", "-x", "-p", "-C", dir},
 		provider.ExecOpts{Stdin: pr, Stdout: io.Discard, Stderr: &stderr}); err != nil {
 		_ = pr.CloseWithError(err)
 		return fmt.Errorf("copying %s into container %s: %w: %s",
-			c.Source, c.Name, err, strings.TrimSpace(stderr.String()))
+			host, c.Name, err, strings.TrimSpace(stderr.String()))
 	}
 	stderr.Reset()
-	if err := p.Exec(ctx, c, append([]string{"sh", "-c", seed.Script}, plan.ScriptArgs(folder)...),
+	if err := p.Exec(ctx, c, append([]string{"sh", "-c", seed.Script}, plan.ScriptArgs(dir)...),
 		provider.ExecOpts{Stdout: io.Discard, Stderr: &stderr}); err != nil {
-		return fmt.Errorf("building the repository in container %s: %w: %s",
-			c.Name, err, strings.TrimSpace(stderr.String()))
+		return fmt.Errorf("building the repository of %s in container %s: %w: %s",
+			host, c.Name, err, strings.TrimSpace(stderr.String()))
 	}
 	return nil
 }
@@ -263,6 +274,11 @@ func (p *Provider) Remove(ctx context.Context, c model.Container) error {
 	var volumes []string
 	if c.SourceKind == model.SourceNone || c.Mode == model.ModeIsolated {
 		volumes = append(volumes, VolumeName(c.WorkspaceName, c.Name))
+	}
+	if c.Mode == model.ModeIsolated {
+		for _, f := range c.Folders {
+			volumes = append(volumes, FolderVolumeName(c.WorkspaceName, c.Name, f.HostPath))
+		}
 	}
 	if c.PersistState {
 		volumes = append(volumes, StateVolumeName(c.WorkspaceName, c.Name))

@@ -36,7 +36,7 @@ func readConfig(ctx context.Context, p provider.Provider, c model.Container, pla
 	if err != nil {
 		return nil, err
 	}
-	return &configCheck{c: c, merged: merged, compose: compose, treeTargets: plan.treeTargets()}, nil
+	return &configCheck{c: c, merged: merged, compose: compose, treeTargets: plan.ownTargets()}, nil
 }
 
 // escape refuses a configuration that reaches the host unless

@@ -94,6 +94,9 @@ func runContainerStartAgent(ctx context.Context, a *app, workspace, name, agentI
 		return err
 	}
 	if status != model.StatusRunning {
+		if err := requireFolders(t.container); err != nil {
+			return err
+		}
 		if err := t.provider.Up(ctx, t.container, environ); err != nil {
 			return err
 		}

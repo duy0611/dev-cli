@@ -308,7 +308,8 @@ func TestIsolatedGeneratedConfigMountsAVolume(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	c := containerRow(t, a, "api")
-	if !strings.Contains(c.GeneratedConfig, "source=dev-ws-api,target=/workspaces/api,type=volume") {
+	want := "source=dev-ws-api,target=/workspaces/" + filepath.Base(c.Source) + ",type=volume"
+	if !strings.Contains(c.GeneratedConfig, want) {
 		t.Errorf("the generated document does not mount the workspace volume:\n%s", c.GeneratedConfig)
 	}
 }
@@ -325,11 +326,35 @@ func TestIsolatedProjectConfigGetsTheVolume(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	doc := documentUsedForUp(t, calls, captured)
-	if !strings.Contains(doc, "source=dev-ws-api,target=/workspaces/api,type=volume") {
+	want := "source=dev-ws-api,target=/workspaces/" + filepath.Base(containerRow(t, a, "api").Source) + ",type=volume"
+	if !strings.Contains(doc, want) {
 		t.Errorf("the merged document does not mount the volume:\n%s", doc)
 	}
 	if strings.Contains(doc, "localWorkspaceFolder") {
 		t.Errorf("the project's bind of the folder survived the merge:\n%s", doc)
+	}
+}
+
+// An isolated container from before workspace_path keeps its volume where it
+// is.
+func TestIsolatedContainerWithoutAWorkspacePathKeepsItsName(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	calls, captured := stubCapturingDevcontainer(t)
+	stubEngineWithMounts(t, "")
+	project := t.TempDir()
+	writeProjectConfigIn(t, project, `{"image":"ubuntu"}`)
+	st, _ := a.store()
+	configPath := filepath.Join(project, ".devcontainer", "devcontainer.json")
+	if err := st.CreateContainer(model.Container{Name: "old", WorkspaceName: "ws", SourceKind: model.SourceFolder,
+		Source: project, ConfigPath: configPath, Mode: model.ModeIsolated}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runIn(t, a, "container", "start", "old"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if doc := documentUsedForUp(t, calls, captured); !strings.Contains(doc, "target=/workspaces/old,type=volume") {
+		t.Errorf("the volume moved:\n%s", doc)
 	}
 }
 

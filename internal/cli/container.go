@@ -63,6 +63,8 @@ type createOpts struct {
 	from            string
 	allowPrivileged bool
 	mode            model.Mode
+	// extraFolders are the --folder arguments after the first.
+	extraFolders []string
 	// Set only on rows from before modes; no flag sets it.
 	legacy bool
 }
@@ -70,7 +72,7 @@ type createOpts struct {
 func newContainerCreateCmd(a *app) *cobra.Command {
 	var (
 		workspace string
-		folder    string
+		folders   []string
 		toolList  string
 		opts      createOpts
 	)
@@ -80,7 +82,10 @@ func newContainerCreateCmd(a *app) *cobra.Command {
 		Short: "Create a container and start it",
 		Long: "Create a container and start it.\n\n" +
 			"The folder is --folder, or the current directory when neither --folder\n" +
-			"nor --no-folder is given; the host's root and your home are refused. A\n" +
+			"nor --no-folder is given; the host's root and your home are refused.\n" +
+			"--folder may be repeated: the first is the primary, whose configuration\n" +
+			"the container is built from, and each other appears at\n" +
+			"/workspaces/<basename>, guarded or isolated as the primary is. A\n" +
 			"project that ships its own .devcontainer configuration is used as it\n" +
 			"is; dev never edits it. For a folder with none, --generate\n" +
 			"builds a base Ubuntu configuration from the tools --tools names.\n\n" +
@@ -105,11 +110,16 @@ func newContainerCreateCmd(a *app) *cobra.Command {
 		Args: exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.tools = parseToolList(toolList)
+			folder := ""
+			if len(folders) > 0 {
+				folder, opts.extraFolders = folders[0], folders[1:]
+			}
 			return runContainerCreate(cmd.Context(), a, workspace, args[0], folder, opts)
 		},
 	}
 	addWorkspaceFlag(cmd, &workspace)
-	cmd.Flags().StringVar(&folder, "folder", "", "host folder holding the project (default: the current directory)")
+	cmd.Flags().StringArrayVar(&folders, "folder", nil,
+		"host folder holding the project (default: the current directory); repeat for more folders, the first is the primary")
 	cmd.Flags().Var(modeFlag{&opts.mode}, "mode",
 		"guarded (the folder live, .git read-only) or isolated (a copy the agent owns); fixed for the container's life")
 	cmd.Flags().BoolVar(&opts.noStart, "no-start", false, "record the container without starting it")
@@ -136,7 +146,7 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 	if err := xpath.ValidateName(name); err != nil {
 		return usageError(err)
 	}
-	if folder != "" && opts.noFolder {
+	if (folder != "" || len(opts.extraFolders) > 0) && opts.noFolder {
 		return usageErrorf("--folder and --no-folder contradict each other")
 	}
 	defaulted := false
@@ -172,6 +182,11 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 	if opts.legacy && mode == model.ModeGuarded {
 		mode = model.ModeLegacy
 	}
+	if len(opts.extraFolders) > 0 {
+		if err := a.allowExtraFolders(wsName, mode); err != nil {
+			return err
+		}
+	}
 	// Before the source is resolved, so the render sees the tools --from
 	// carries.
 	if err := applyFrom(a, wsName, &opts); err != nil {
@@ -188,6 +203,7 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 		configPath   string
 		generated    string
 		worktreeRepo string
+		extras       []model.Folder
 	)
 	if opts.noFolder {
 		// No project to shadow, so --generate is redundant here. Passing
@@ -212,6 +228,10 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 		if err != nil {
 			return err
 		}
+		if extras, err = resolveExtraFolders(ctx, opts.extraFolders, mode); err != nil {
+			return err
+		}
+		sortFolders(extras)
 		if defaulted {
 			a.printf("using %s (the current directory)\n", xpath.Shorten(source))
 		}
@@ -225,8 +245,11 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 		}
 	}
 	if mode == model.ModeGuarded {
-		if err := checkGuarded(a, source, configPath, worktreeRepo); err != nil {
+		if err := checkGuarded(a, source, configPath, worktreeRepo, len(extras) > 0); err != nil {
 			return err
+		}
+		for _, f := range extras {
+			warnGuardGaps(a, f.HostPath, f.WorktreeRepo != "", true)
 		}
 	}
 
@@ -265,6 +288,13 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 		// Stored so every later command mounts the same repository.
 		WorktreeRepo: worktreeRepo,
 		Mode:         mode,
+		Folders:      extras,
+	}
+	if mode == model.ModeIsolated {
+		c.WorkspacePath = isolatedPath(source)
+	}
+	if err := checkFolders(c); err != nil {
+		return err
 	}
 	// After the source is known, before the row is written, so a bad file
 	// creates nothing.
@@ -290,8 +320,19 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 		a.printf("container %s (workspace %s) with no folder\n", name, wsName)
 	} else {
 		a.printf("container %s (workspace %s, %s) from %s\n", name, wsName, mode, xpath.Shorten(source))
-		if mode == model.ModeGuarded && c.GitGuard {
+		for _, f := range c.Folders {
+			a.printf("  with %s at %s\n", xpath.Shorten(f.HostPath), f.ContainerPath)
+		}
+		switch repos := guardedRepos(c); {
+		case len(repos) == 1:
 			a.printf("guarded: the agent can read this repository's history but not commit; you commit and push\n")
+		case len(repos) > 1:
+			short := make([]string, len(repos))
+			for i, r := range repos {
+				short[i] = xpath.Shorten(r)
+			}
+			a.printf("guarded: the agent can read these repositories' history but not commit; you commit and push: %s\n",
+				strings.Join(short, ", "))
 		}
 	}
 
@@ -336,8 +377,8 @@ func (a *app) modeFor(wsName string, opts createOpts) (model.Mode, error) {
 
 // checkGuarded refuses a project mount guarded mode cannot protect, and warns
 // about nested .git files it protects only in part. Both point at isolated
-// mode.
-func checkGuarded(a *app, source, configPath, worktreeRepo string) error {
+// mode. named says the warnings name the folder, since there are several.
+func checkGuarded(a *app, source, configPath, worktreeRepo string, named bool) error {
 	// No .git to guard in a non-repository. A bad project file is reported by
 	// its readers.
 	if !isGitCheckout(source) && worktreeRepo == "" {
@@ -352,15 +393,44 @@ func checkGuarded(a *app, source, configPath, worktreeRepo string) error {
 			return movedWorkspaceError(configPath)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(source, ".gitmodules")); err == nil {
-		warnf(a, "this repository has submodules; guarded mode cannot stop the container repointing "+
-			"a submodule's .git file at a config of its own, which your git would then run. "+
-			"Use --mode isolated if that matters for this repository")
+	warnGuardGaps(a, source, worktreeRepo != "", named)
+	return nil
+}
+
+// warnGuardGaps warns about the .git files in folder that guarded mode cannot
+// hold: a submodule's, and a worktree checkout's own.
+func warnGuardGaps(a *app, folder string, worktree, named bool) {
+	this := "this repository"
+	if named {
+		this = xpath.Shorten(folder)
 	}
-	if worktreeRepo != "" {
-		warnf(a, "this folder is a git worktree; guarded mode cannot stop the container repointing "+
+	if _, err := os.Stat(filepath.Join(folder, ".gitmodules")); err == nil {
+		warnf(a, "%s has submodules; guarded mode cannot stop the container repointing "+
+			"a submodule's .git file at a config of its own, which your git would then run. "+
+			"Use --mode isolated if that matters for this repository", this)
+	}
+	if worktree {
+		if !named {
+			this = "this folder"
+		}
+		warnf(a, "%s is a git worktree; guarded mode cannot stop the container repointing "+
 			"its .git file at a config of its own, which your git would then run. "+
-			"Use --mode isolated if that matters for this repository")
+			"Use --mode isolated if that matters for this repository", this)
+	}
+}
+
+// allowExtraFolders refuses a second folder where a container cannot take
+// one: on k8s, and for a mode with no folders to place.
+func (a *app) allowExtraFolders(wsName string, mode model.Mode) error {
+	kind, err := a.providerKind(wsName)
+	if err != nil {
+		return err
+	}
+	if kind == model.KindK8s {
+		return usageErrorf("the k8s provider is experimental and takes one folder; give --folder once")
+	}
+	if mode != model.ModeGuarded && mode != model.ModeIsolated {
+		return usageErrorf("a %s container takes one folder", displayMode(mode))
 	}
 	return nil
 }
@@ -417,7 +487,7 @@ func folderSource(ctx context.Context, wsName, name, folder string, mode model.M
 	if mode == model.ModeIsolated {
 		// Copied into a volume, never mounted, so there is no host path to
 		// mount.
-		mount = folderlessMount(wsName, name)
+		mount = isolatedMount(wsName, name, isolatedPath(source))
 		// Refused on k8s: a worktree's .git file names a host path the pod does
 		// not have.
 		if isWorktree {
@@ -575,7 +645,7 @@ func runContainerList(ctx context.Context, a *app, workspace string, all bool, t
 		if c.SourceKind == model.SourceNone {
 			return "-"
 		}
-		return xpath.Shorten(c.Source)
+		return folderSummary(c)
 	}
 
 	// A folder path alone does not say whether dev generated the config.
@@ -647,6 +717,9 @@ func newContainerStartCmd(a *app) *cobra.Command {
 // start is shared by `create` and `start`.
 func (a *app) start(ctx context.Context, workspace string, c model.Container) error {
 	warnLegacy(a, c)
+	if err := requireFolders(c); err != nil {
+		return err
+	}
 	st, err := a.store()
 	if err != nil {
 		return err
@@ -791,7 +864,7 @@ func runContainerRemove(ctx context.Context, a *app, workspace, name string, for
 			return fmt.Errorf("%w; --force removes it without checking", err)
 		}
 		if len(found) > 0 {
-			return usageErrorf("container %s holds work its folder does not keep:\n  %s\n"+
+			return usageErrorf("container %s holds work its folders do not keep:\n  %s\n"+
 				"bring the branches home with dev container fetch %s and merge or push them, "+
 				"commit inside first for uncommitted changes, or pass --force to remove it and lose them",
 				name, strings.Join(found, "\n  "), name)
@@ -819,8 +892,11 @@ func runContainerRemove(ctx context.Context, a *app, workspace, name string, for
 	// Only once the check has shown every branch is kept by another ref: after
 	// --force, the fetched refs may be the last copy of the work.
 	if checked {
-		if err := dropFetchedRefs(ctx, t.container.Source, name); err != nil {
-			warnf(a, "leaving the refs dev container fetch wrote under %s: %v", fetchedRefs(name), err)
+		for _, f := range isolatedFolders(t.container) {
+			if err := dropFetchedRefs(ctx, f.host, name); err != nil {
+				warnf(a, "leaving the refs dev container fetch wrote under %s in %s: %v",
+					fetchedRefs(name), xpath.Shorten(f.host), err)
+			}
 		}
 	}
 	a.record("remove", t.workspace.Name, name, nil)
@@ -834,12 +910,18 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 		noCache      bool
 		toolList     string
 		acceptConfig bool
+		addFolders   []string
+		dropFolders  []string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "rebuild NAME",
 		Short: "Recreate a container from its configuration",
-		Args:  exactArgs(1),
+		Long: "Recreate a container from its configuration.\n\n" +
+			"--add-folder and --remove-folder change a guarded container's extra\n" +
+			"folders; each is repeatable. An isolated container's folders, and any\n" +
+			"container's primary folder, are fixed: recreate the container instead.",
+		Args: exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if tools := parseToolList(toolList); len(tools) > 0 {
 				// Before resolve, so the rebuild materialises the new
@@ -853,8 +935,20 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer t.release()
+			defer func() { t.release() }()
+			changing := len(addFolders) > 0 || len(dropFolders) > 0
+			if changing {
+				// Planned and materialised again from the resulting set, so the
+				// rebuilt container has every added folder's guard from its
+				// first command.
+				if t, err = a.retargetFolders(cmd.Context(), t, addFolders, dropFolders); err != nil {
+					return err
+				}
+			}
 			if err := t.requireOverride(a); err != nil {
+				return err
+			}
+			if err := requireFolders(t.container); err != nil {
 				return err
 			}
 			environ, err := a.containerEnv(cmd.Context(), t.container)
@@ -890,6 +984,17 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 			if err := t.provider.Rebuild(cmd.Context(), t.container, environ, noCache); err != nil {
 				return err
 			}
+			// After a successful rebuild only, so a failed one leaves the
+			// record matching the container that still runs.
+			if changing {
+				st, err := a.store()
+				if err != nil {
+					return err
+				}
+				if err := st.SetContainerFolders(t.workspace.Name, t.container.Name, t.container.Folders); err != nil {
+					return err
+				}
+			}
 			if err := trustMountedRepository(cmd.Context(), t.provider, t.container); err != nil {
 				return err
 			}
@@ -905,7 +1010,15 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 					return err
 				}
 			}
-			a.record("rebuild", t.workspace.Name, t.container.Name, map[string]any{"config_digest": digest.Sum})
+			fields := map[string]any{"config_digest": digest.Sum}
+			if changing {
+				hosts := make([]string, len(t.container.Folders))
+				for i, f := range t.container.Folders {
+					hosts[i] = f.HostPath
+				}
+				fields["folders"] = hosts
+			}
+			a.record("rebuild", t.workspace.Name, t.container.Name, fields)
 
 			a.printf("container %s rebuilt\n", t.container.Name)
 			// Re-read on every rebuild: the state volume may be gone, taking
@@ -919,7 +1032,44 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 		"change a generated container's tools, e.g. +yq,-helm (see: dev container tools)")
 	cmd.Flags().BoolVar(&acceptConfig, "accept-config", false,
 		"rebuild with a project configuration that changed since the container was last built")
+	cmd.Flags().StringArrayVar(&addFolders, "add-folder", nil,
+		"add a folder to a guarded container; repeatable")
+	cmd.Flags().StringArrayVar(&dropFolders, "remove-folder", nil,
+		"remove a folder from a guarded container; repeatable")
 	return cmd
+}
+
+// retargetFolders replaces t with a target for the same container with its
+// folders changed. Nothing is stored: rebuild writes the set once the
+// container has it.
+func (a *app) retargetFolders(ctx context.Context, t *target, add, remove []string) (*target, error) {
+	st, err := a.store()
+	if err != nil {
+		return t, err
+	}
+	c, err := st.GetContainer(t.workspace.Name, t.container.Name)
+	if err != nil {
+		return t, err
+	}
+	if c.Mode == model.ModeGuarded && len(add) > 0 {
+		if err := a.allowExtraFolders(t.workspace.Name, c.Mode); err != nil {
+			return t, err
+		}
+	}
+	if err := changeFolders(ctx, &c, add, remove); err != nil {
+		return t, err
+	}
+	for _, f := range c.Folders {
+		if slices.ContainsFunc(add, func(arg string) bool { return storedPath(arg) == f.HostPath }) {
+			warnGuardGaps(a, f.HostPath, f.WorktreeRepo != "", true)
+		}
+	}
+	next, err := a.target(ctx, c, t.workspace, t.provider)
+	if err != nil {
+		return t, err
+	}
+	t.release()
+	return next, nil
 }
 
 func newContainerLogsCmd(a *app) *cobra.Command {

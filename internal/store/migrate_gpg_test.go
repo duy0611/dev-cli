@@ -329,3 +329,77 @@ VALUES ('ws', 'feat', '/src/app/.git', 'feat', '/wt/feat', '7f2a', '2026-09-01T0
 		t.Errorf("migrated worktree = %+v, want the old row's values under its name", w)
 	}
 }
+
+func TestMigrationAddsContainerFolders(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dev.db")
+
+	// Only what 0009 reads: the containers table as it stood after 0008.
+	pre := `
+CREATE TABLE providers (
+  name TEXT PRIMARY KEY, kind TEXT NOT NULL,
+  config TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL
+);
+INSERT INTO providers (name, kind, config, created_at) VALUES ('local', 'local', '{}', '2026-09-01T00:00:00Z');
+CREATE TABLE workspaces (
+  name TEXT PRIMARY KEY,
+  provider_name TEXT NOT NULL REFERENCES providers(name),
+  ssh_forward INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+);
+INSERT INTO workspaces (name, provider_name, ssh_forward, created_at) VALUES ('ws', 'local', 0, '2026-09-01T00:00:00Z');
+CREATE TABLE containers (
+  name TEXT NOT NULL,
+  workspace_name TEXT NOT NULL REFERENCES workspaces(name) ON DELETE CASCADE,
+  source_kind TEXT NOT NULL, source TEXT NOT NULL, config_path TEXT NOT NULL,
+  generated_config TEXT NOT NULL DEFAULT '',
+  persist_state INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  agent_config TEXT NOT NULL DEFAULT '',
+  agent_config_pending INTEGER NOT NULL DEFAULT 0,
+  git_guard INTEGER NOT NULL DEFAULT 0,
+  allow_privileged INTEGER NOT NULL DEFAULT 1,
+  config_digest TEXT NOT NULL DEFAULT '',
+  config_digest_fields TEXT NOT NULL DEFAULT '',
+  mode TEXT NOT NULL DEFAULT 'legacy',
+  worktree_repo TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (workspace_name, name)
+);
+INSERT INTO containers (name, workspace_name, source_kind, source, config_path, mode, created_at)
+VALUES ('iso', 'ws', 'folder', '/src/iso', '', 'isolated', '2026-09-01T00:00:00Z'),
+       ('grd', 'ws', 'folder', '/src/grd', '', 'guarded', '2026-09-01T00:00:00Z'),
+       ('scratch', 'ws', 'none', '', '', 'none', '2026-09-01T00:00:00Z');
+CREATE TABLE app_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE worktrees (
+  workspace_name  TEXT NOT NULL REFERENCES workspaces(name) ON DELETE CASCADE,
+  name            TEXT NOT NULL,
+  repo            TEXT NOT NULL,
+  branch          TEXT NOT NULL,
+  path            TEXT NOT NULL,
+  herdr_workspace TEXT NOT NULL DEFAULT '',
+  created_at      TEXT NOT NULL,
+  PRIMARY KEY (workspace_name, name)
+);`
+
+	seedRaw(t, path, pre,
+		"0001_init.sql", "0002_generated_config.sql", "0003_drop_gpg_forward.sql",
+		"0004_persist_state.sql", "0005_worktrees.sql", "0006_agent_config.sql",
+		"0007_hardening.sql", "0008_container_modes.sql")
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("opening a pre-0009 database: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+
+	for name, want := range map[string]string{"iso": "/workspaces/iso", "grd": "", "scratch": ""} {
+		c, err := s.GetContainer("ws", name)
+		if err != nil {
+			t.Fatalf("GetContainer %s: %v", name, err)
+		}
+		if c.WorkspacePath != want {
+			t.Errorf("%s: workspace_path = %q, want %q", name, c.WorkspacePath, want)
+		}
+		if len(c.Folders) != 0 {
+			t.Errorf("%s: folders = %v, want none", name, c.Folders)
+		}
+	}
+}
