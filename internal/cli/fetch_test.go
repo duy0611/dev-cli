@@ -23,9 +23,9 @@ func isolatedOn(t *testing.T, a *app, name, folder string) {
 // repository at dir.
 func stubContainerRepo(t *testing.T, dir string) {
 	t.Helper()
-	old := workspaceRoot
-	workspaceRoot = func(model.Container) string { return dir }
-	t.Cleanup(func() { workspaceRoot = old })
+	old := inContainer
+	inContainer = func(model.Container, string) string { return dir }
+	t.Cleanup(func() { inContainer = old })
 
 	bin := t.TempDir()
 	writeFile(t, filepath.Join(bin, "devcontainer"), `#!/bin/sh

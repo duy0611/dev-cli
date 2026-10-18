@@ -432,6 +432,53 @@ dev container start-agent api --no-ssh-agent
 Both providers support this. On k8s the relay rides `kubectl exec` rather than a
 local socket, so it works the same way from a pod.
 
+### Work across several repositories at once
+
+Name each folder with `--folder`; the first is the **primary**:
+
+```sh
+dev container create both --folder ~/code/something/repo-1 --folder ~/code/something/repo-2
+```
+
+The primary is the project: its `.devcontainer`, or a generated configuration,
+builds the container, and its `.devcontainer/agents.yaml` is the one applied.
+Every other folder appears at `/workspaces/<its folder name>` — a git worktree
+checkout at its own host path, as a primary one is — and is guarded or isolated
+exactly as the primary is (see
+[What a container can do to your git](#what-a-container-can-do-to-your-git)).
+In guarded mode each repository's `.git` is read-only; in isolated mode each
+folder is copied into a volume of its own. A folder you do not name is not in
+the container at all.
+
+A new container puts its primary at `/workspaces/<its folder name>` in both
+modes, so one set of agent instructions serves either.
+
+`create` refuses, exit 2, a set it cannot mount cleanly: a folder given twice,
+a folder inside another — for a guarded primary that includes anywhere else in
+its repository, which is already mounted whole — and two folders that would
+appear at one path, such as `--folder a/api --folder b/api`. Rename one, or
+leave one out.
+
+`container list` shows the primary followed by `+N`.
+
+A guarded container's extra folders can change on a rebuild; each flag is
+repeatable:
+
+```sh
+dev container rebuild both --add-folder ~/code/something/repo-3
+dev container rebuild both --remove-folder ~/code/something/repo-2
+```
+
+An added folder is guarded from the rebuilt container's first command; a
+removed one's work is already on your host. If an extra folder disappears from
+your host, `start` refuses, exit 1, naming it and the `--remove-folder` that
+drops it. An isolated container's folders, and any container's primary, are
+fixed: recreate the container to change them. In isolated mode `fetch` brings
+each repository's branches home into that repository, and `remove` checks each
+one, naming the folder that still holds work.
+
+The experimental k8s provider takes one folder; more is exit 2.
+
 ### What a container can do to your git
 
 A container's workspace is your checkout, bind-mounted, so anything running in
@@ -498,9 +545,9 @@ What guarded does not cover:
 
 - **A submodule's `.git` file.** It sits in the working tree and points your git
   at the submodule's repository; the container can repoint it. `create` warns
-  when the folder has submodules.
+  when a folder has submodules, naming it when there are several.
 - **A worktree checkout's `.git` file**, for the same reason. `create` warns
-  when the folder is a worktree.
+  when a folder is a worktree.
 - **A nested repository** the agent creates in the working tree, which your
   editor may find and run git in.
 - **A project whose `devcontainer.json` names its own `workspaceMount` or
@@ -1059,7 +1106,7 @@ Removing the active workspace leaves none active rather than a dangling pointer.
 ### container
 
 ```
-dev container create NAME [--folder PATH] [--mode guarded|isolated] [--generate] [--tools LIST]
+dev container create NAME [--folder PATH]... [--mode guarded|isolated] [--generate] [--tools LIST]
                          [--no-persist-state] [--agent-config PATH | --no-agent-config] [--no-start]
                          [--allow-privileged]
 dev container create NAME --no-folder [--tools LIST] [--no-persist-state]
@@ -1071,6 +1118,7 @@ dev container start NAME
 dev container stop NAME
 dev container remove NAME [--force]
 dev container rebuild NAME [--no-cache] [--tools LIST] [--accept-config]
+                          [--add-folder PATH]... [--remove-folder PATH]...
 dev container logs NAME [-f]
 dev container shell NAME [--kube-token] [--ssh-agent|--no-ssh-agent]
 dev container exec NAME [--kube-token] [--ssh-agent|--no-ssh-agent] -- CMD [ARGS...]
@@ -1084,11 +1132,13 @@ dev container config show NAME
 **`create`** takes `--folder PATH` or `--no-folder`, never both. With neither,
 the folder is the current directory, and `create` prints which one it used.
 The host's root and your home directory are refused as a folder: either would
-mount everything under it.
+mount everything under it. `--folder` may be repeated: the first is the
+primary, and the rest are extra folders (see
+[Work across several repositories at once](#work-across-several-repositories-at-once)).
 
 | Flag | Meaning |
 |---|---|
-| `--folder` | host folder holding the project; bind-mounted on local, copied in on k8s. Default: the current directory |
+| `--folder` | host folder holding the project; bind-mounted on local, copied in on k8s. Repeatable: the first is the primary, each other appears at `/workspaces/<basename>`. Default: the current directory |
 | `--mode` | `guarded`: the folder live, `.git` read-only; `isolated`: a copy the agent owns. Default `guarded` on local, `isolated` on k8s. Fixed for the container's life |
 | `--no-folder` | no host directory at all; work lives in a volume `dev` owns |
 | `--generate` | render a base Ubuntu configuration when the folder ships none |
@@ -1103,6 +1153,12 @@ The mode is fixed when the container is created and kept by `rebuild`; see
 [What a container can do to your git](#what-a-container-can-do-to-your-git). A
 `--no-folder` container takes no mode. `--mode guarded` on a k8s workspace is
 exit 2, since a pod cannot mount your folder live.
+
+Extra folders are refused, exit 2, when one is given twice, lies inside another
+folder or inside a guarded primary's repository, or would appear at the same
+container path as another — the message names both. More than one `--folder`
+on the experimental k8s provider, or alongside `--no-folder`, is exit 2 too.
+`--from` never carries folders: this command's `--folder` flags decide them.
 
 With `--from`, `--generate` is implied and `--tools` takes only `+`/`-` changes.
 A source that does not exist is exit 3. A source built from a project's own
@@ -1159,7 +1215,8 @@ wrong the moment anything happened outside `dev`. A `?` means the engine could
 not be reached, or did not answer within `--timeout` (default `10s`, any Go
 duration such as `30s` or `2m`). The timeout is per workspace, so one
 unreachable cluster costs one wait, not one per container, and leaves the other
-workspaces' statuses alone. Either way the list still prints and exits 0. The SOURCE column is `-` for a folderless container, CONFIG
+workspaces' statuses alone. Either way the list still prints and exits 0. The SOURCE column is `-` for a folderless container, and the primary
+followed by `+N` for one with extra folders. CONFIG
 is `generated` when `dev` rendered the configuration (`--generate` or
 `--no-folder`) and `project` when the folder ships its own, STATE says
 whether its agents' configuration is on a volume, and HOST says whether the
@@ -1189,6 +1246,13 @@ only to a container `dev` generated.
 
 A rebuild keeps the volume on both providers. To start from an empty workspace,
 `remove` and `create` — which is explicit about destroying the contents.
+
+`--add-folder` and `--remove-folder`, each repeatable, change a guarded
+container's extra folders. The resulting set is checked as `create` checks it
+before anything changes, and the record is written only once the rebuild
+succeeds. `--remove-folder` of the primary, `--add-folder` of a folder already
+there, and either flag on an isolated or legacy container are exit 2; a folder
+gone from the host can still be removed by the path it was added with.
 
 A rebuild of a project-owned container first compares its configuration with
 the one the container was last built from — the merged configuration, its
@@ -1240,11 +1304,16 @@ created from, as `NAME/<branch>` remote-tracking refs — nothing local changes,
 and you decide what to merge. They travel as a git bundle, so only commit data
 crosses, checked as it arrives. Uncommitted work stays in the container. A
 guarded or folderless container has nothing to fetch (exit 2), and a folder that
-has gone is exit 1.
+has gone is exit 1. With extra folders, each repository's branches go into that
+repository, one `fetched into` line each; a folder that is not a repository is
+skipped with a line saying so, and a git remote named `NAME` in any of them
+refuses the fetch before anything is fetched.
 
 **`remove`** on an isolated container first asks it what it holds: commits on
 any branch your folder lacks, or uncommitted changes. Either refuses the
-removal (exit 2), naming them; `fetch` and commit inside first, or `--force`.
+removal (exit 2), naming them — and, with extra folders, which folder holds
+each; `fetch` and commit inside first, or `--force`. It deletes every folder's
+volume.
 
 **`tools`** lists the catalog, marking each entry official or community.
 **`config show`** prints the configuration a container is built from: the

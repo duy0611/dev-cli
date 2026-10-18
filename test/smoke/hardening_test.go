@@ -276,7 +276,7 @@ func TestSmokeIsolated(t *testing.T) {
 	t.Log("creating an isolated container; the first run pulls a base image")
 	dev("container", "create", name, "--folder", project, "--mode", "isolated", "--generate", "--tools", "yq")
 
-	ws := "/workspaces/" + name
+	ws := "/workspaces/" + filepath.Base(project)
 	sh := func(script string) string {
 		t.Helper()
 		return dev("container", "exec", name, "--", "sh", "-c", "cd "+ws+" && "+script)

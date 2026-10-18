@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -717,5 +718,46 @@ func TestSeedClaimsTheWorkspaceBeforeUnpacking(t *testing.T) {
 	}
 	if claim < 0 || unpack < 0 || claim > unpack {
 		t.Errorf("the workspace was not claimed before the unpack (claim at %d, unpack at %d): %v", claim, unpack, calls)
+	}
+}
+
+// Each extra folder of an isolated container is seeded into its own path,
+// after the primary.
+func TestUpSeedsEveryFolderOfAnIsolatedContainer(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, devcontainerBin, "", 0)
+	f.install(t, dockerBin, "", 0)
+
+	c := isolatedContainer(t)
+	c.WorkspacePath = "/workspaces/main"
+	extra := t.TempDir()
+	c.Folders = []model.Folder{{HostPath: extra, ContainerPath: "/workspaces/extra"}}
+	if err := (&Provider{}).Up(context.Background(), c, nil); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	var unpacked []string
+	for _, argv := range f.argvAll(t, devcontainerBin) {
+		if i := slices.Index(argv, "-C"); i >= 0 && contains(argv, []string{"tar", "-x", "-p"}) {
+			unpacked = append(unpacked, argv[i+1])
+		}
+	}
+	if want := []string{"/workspaces/main", "/workspaces/extra"}; !slices.Equal(unpacked, want) {
+		t.Errorf("unpacked into %v, want %v", unpacked, want)
+	}
+}
+
+func TestRemoveDeletesEveryFolderVolume(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, dockerBin, "abc123\n", 0)
+
+	c := isolatedContainer(t)
+	c.Folders = []model.Folder{{HostPath: "/src/extra", ContainerPath: "/workspaces/extra"}}
+	if err := (&Provider{}).Remove(context.Background(), c); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	for _, v := range []string{"dev-ws-demo", FolderVolumeName("ws", "demo", "/src/extra")} {
+		if !f.calledWith(t, dockerBin, []string{"volume", "rm", "--force", v}) {
+			t.Errorf("Remove did not delete %s; docker calls were %v", v, f.argvAll(t, dockerBin))
+		}
 	}
 }

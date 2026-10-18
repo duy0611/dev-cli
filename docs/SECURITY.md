@@ -68,6 +68,13 @@ configuration while the container runs.
 Tell the agent that committing is your job — in your project's agent
 instructions — or it will keep trying.
 
+A container can be given several folders (`--folder` repeated). The promise is
+per folder: each repository's `.git` is read-only, and each gap below applies
+to the folder that has it. A folder you did not name is not in the container at
+all, so pointing `--folder` at a parent of several repositories is not the way
+to give an agent more than one — `dev` finds a repository only by walking up
+from the folder, so the repositories below the parent would get no guard.
+
 ### Isolated
 
 `dev` copies your folder into a volume the container owns: the repository, the
@@ -85,7 +92,8 @@ git log --oneline main..NAME/branch   # review before you merge
 
 `fetch` copies the agent's branches into your folder as `NAME/<branch>`. It
 reads only commit data, so nothing from the container's configuration reaches
-your git.
+your git. With several folders, each is copied into a volume of its own, and
+each repository's branches come home into that repository.
 
 Your files exist only in the container's volume until you fetch them, and the
 fetched `NAME/<branch>` refs are the only copy on your machine until you merge
@@ -129,11 +137,11 @@ outside `.git` that tell git where the repository is:
 - **Submodules.** Each submodule has a `.git` *file* in your working tree that
   points at its repository. The container can change where it points, and your
   git follows it the next time you use git in that submodule. `dev` warns when a
-  folder has submodules.
+  folder has submodules, naming the folder.
 - **Worktrees.** A `git worktree` checkout has the same kind of `.git` file.
-  `dev` warns when a folder is one.
-- **New repositories.** The agent can create a repository anywhere in the
-  folder, and an editor that finds it may run git there.
+  `dev` warns when a folder is one, naming it.
+- **New repositories.** The agent can create a repository anywhere in any of
+  its folders, and an editor that finds it may run git there.
 - **Projects that move the workspace.** A `devcontainer.json` that sets its own
   `workspaceMount` puts `.git` where `dev` cannot find it, so `dev` refuses to
   create a guarded container for it.

@@ -287,3 +287,14 @@ func fileSum(p string) (string, bool, error) {
 	}
 	return hex.EncodeToString(h.Sum(nil)), true, nil
 }
+
+// RootLayout returns the layout of dir mounted at containerRoot, or false
+// unless dir is itself a repository root. For a container's extra folders,
+// which are mounted as given rather than at their git root.
+func RootLayout(dir, containerRoot string) (Layout, bool) {
+	gitdir := filepath.Join(dir, ".git")
+	if info, err := os.Stat(filepath.Join(gitdir, "config")); err != nil || !info.Mode().IsRegular() {
+		return Layout{}, false
+	}
+	return Layout{GitDir: gitdir, ContainerGitDir: path.Join(containerRoot, ".git")}, true
+}

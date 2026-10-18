@@ -112,7 +112,22 @@ type Container struct {
 	// GitGuardMounts are the mount entries that shield host git, derived per
 	// invocation and not persisted.
 	GitGuardMounts []string
-	CreatedAt      time.Time
+	// Folders are the host folders beyond Source, sorted by host path.
+	Folders []Folder
+	// WorkspacePath is where an isolated container's primary volume is
+	// mounted, empty for every other mode.
+	WorkspacePath string
+	CreatedAt     time.Time
+}
+
+// Folder is a host folder a container has beyond its primary, and where it
+// appears inside the container.
+type Folder struct {
+	HostPath      string
+	ContainerPath string
+	// WorktreeRepo is git's common directory when a guarded folder is a
+	// worktree checkout, empty otherwise.
+	WorktreeRepo string
 }
 
 // Status is a container's liveness as the engine reports it.

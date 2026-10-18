@@ -80,7 +80,12 @@ func (a *app) resolve(ctx context.Context, workspace, name string) (*target, err
 	if err != nil {
 		return nil, err
 	}
+	return a.target(ctx, c, ws, p)
+}
 
+// target plans the git guard for a stored container and materialises its
+// configuration.
+func (a *app) target(ctx context.Context, c model.Container, ws model.Workspace, p provider.Provider) (*target, error) {
 	// Before materialise, which merges these mounts in. Not seeded: exec must
 	// not reset the hooks copy. Deferred on failure, like an overlay error.
 	plan, planErr := a.planGitGuard(ctx, c, c.WorktreeRepo, false, overridesConfig(p))
@@ -176,7 +181,7 @@ func overlayProjectConfig(c model.Container, overrides bool) (model.Container, f
 	if isolated {
 		merged, err = dcgen.OverlayIsolatedWorkspace(merged, dcgen.Mount{
 			Volume: local.VolumeName(c.WorkspaceName, c.Name),
-			Folder: local.WorkspaceFolder(c.Name),
+			Folder: local.WorkspaceFolderOf(c),
 		})
 		if err != nil {
 			return c, func() {}, &overlayError{fmt.Errorf("merging %s: %w", c.ConfigPath, err)}
@@ -201,7 +206,8 @@ func overlayProjectConfig(c model.Container, overrides bool) (model.Container, f
 		}
 	}
 	// Last: the guard's mounts sit inside the .git the worktree binds bring in,
-	// and docker applies mounts in order.
+	// and docker applies mounts in order. The extra folders' mounts ride with
+	// them.
 	if needsGuard {
 		merged, err = dcgen.OverlayMounts(merged, c.GitGuardMounts)
 		if err != nil {

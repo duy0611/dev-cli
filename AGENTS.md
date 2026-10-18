@@ -68,6 +68,7 @@ internal/audit/       the append-only audit log
 internal/dcconfig/    locating a project's .devcontainer config
 internal/dcgen/       generating one: the tool catalog, render, overlays
 internal/gitguard/    what host git runs: the guarded mounts, the tree search
+internal/folders/     a container's extra folders: where each appears, which sets are refused
 internal/guard/       refusing configurations that reach the host
 internal/gitwt/       git worktrees: add, remove, list, which repository
 internal/wtseed/      copying .worktreeinclude files into a new checkout

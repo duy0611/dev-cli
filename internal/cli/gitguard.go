@@ -28,15 +28,19 @@ type gitGuardPlan struct {
 	fingerprint bool
 	tree        []gitguard.Bind
 	treeWatch   []string
+	// folderTargets are where the extra folders' mounts land. Kept out of the
+	// digest, so adding a folder is not configuration drift.
+	folderTargets []string
 }
 
-// treeTargets are the container paths of the tree mounts.
-func (p gitGuardPlan) treeTargets() []string {
-	out := make([]string, len(p.tree))
-	for i, b := range p.tree {
-		out[i] = b.Container
+// ownTargets are the container paths of the tree and folder mounts, which
+// the configuration digest leaves out.
+func (p gitGuardPlan) ownTargets() []string {
+	out := make([]string, 0, len(p.tree)+len(p.folderTargets))
+	for _, b := range p.tree {
+		out = append(out, b.Container)
 	}
-	return out
+	return append(out, p.folderTargets...)
 }
 
 // treeScope is the directories under the container's reach that host git could
@@ -60,22 +64,43 @@ type treeScope struct {
 // arrives after the container exists. The container cannot set it, since
 // .git/config is read-only inside.
 func (a *app) planGitGuard(ctx context.Context, c model.Container, worktreeRepo string, seed, overrides bool) (gitGuardPlan, error) {
-	plan, scope, err := a.planGitDir(c, worktreeRepo, seed)
-	// A Kubernetes workspace is a copy host git never reads.
-	if err != nil || scope == nil || !overrides {
+	plan, scopes, err := a.planGitDir(c, worktreeRepo, seed)
+	if err != nil {
 		return plan, err
+	}
+	// After the primary's guard, before the tree's binds, which may lie
+	// inside a folder's mount: docker applies mounts in order.
+	folderEntries, folderTargets := folderMounts(c)
+	plan.mounts = append(plan.mounts, folderEntries...)
+	plan.folderTargets = folderTargets
+	// A Kubernetes workspace is a copy host git never reads.
+	if len(scopes) == 0 || !overrides {
+		return plan, nil
 	}
 	// watchGitGuard reports a planted commondir by name, which is clearer than
 	// letting git fail.
 	if plan.gitdir != "" && gitguard.CommondirPlanted(plan.gitdir) {
 		return plan, nil
 	}
-	found, err := gitguard.FindTree(ctx, scope.checkout, scope.roots, scope.shielded)
-	if err != nil {
-		// Deferred like an unreadable project file, so stop and remove still
-		// reach the container.
-		return gitGuardPlan{}, &overlayError{err}
+	// One search per repository, since each has its own config, over every
+	// folder's mount: one repository's include can name a file in another.
+	var found []gitguard.TreePath
+	seen := map[string]bool{}
+	for _, scope := range scopes {
+		more, err := gitguard.FindTree(ctx, scope.checkout, scope.roots, scope.shielded)
+		if err != nil {
+			// Deferred like an unreadable project file, so stop and remove
+			// still reach the container.
+			return gitGuardPlan{}, &overlayError{err}
+		}
+		for _, p := range more {
+			if !seen[p.Host] {
+				seen[p.Host] = true
+				found = append(found, p)
+			}
+		}
 	}
+	scope := scopes[0]
 	if scope.watch {
 		for _, p := range found {
 			plan.treeWatch = append(plan.treeWatch, p.Host)
@@ -102,17 +127,30 @@ func (a *app) planGitGuard(ctx context.Context, c model.Container, worktreeRepo 
 	return plan, nil
 }
 
-// planGitDir plans the .git half of the guard, and the scope the working tree
-// half searches.
-func (a *app) planGitDir(c model.Container, worktreeRepo string, seed bool) (gitGuardPlan, *treeScope, error) {
+// planGitDir plans the .git half of the guard, and the scopes the working tree
+// half searches, one per repository.
+func (a *app) planGitDir(c model.Container, worktreeRepo string, seed bool) (gitGuardPlan, []treeScope, error) {
 	// Isolated is checked too, so a wrongly written row still shares nothing
 	// with the host.
-	if !c.GitGuard || c.SourceKind != model.SourceFolder || c.Mode == model.ModeIsolated {
+	if c.SourceKind != model.SourceFolder || c.Mode == model.ModeIsolated {
 		return gitGuardPlan{}, nil, nil
 	}
 	if c.Mode == model.ModeGuarded {
 		return planGuardedGitDir(c, worktreeRepo)
 	}
+	if !c.GitGuard {
+		return gitGuardPlan{}, nil, nil
+	}
+	plan, scope, err := a.planLegacyGitDir(c, worktreeRepo, seed)
+	if scope == nil {
+		return plan, nil, err
+	}
+	return plan, []treeScope{*scope}, err
+}
+
+// planLegacyGitDir plans a container from before modes: the single-file guard
+// and its hooks copy.
+func (a *app) planLegacyGitDir(c model.Container, worktreeRepo string, seed bool) (gitGuardPlan, *treeScope, error) {
 	hooks, err := hooksCopyDir(c.WorkspaceName, c.Name)
 	if err != nil {
 		return gitGuardPlan{}, nil, err
@@ -177,35 +215,63 @@ func (a *app) planGitDir(c model.Container, worktreeRepo string, seed bool) (git
 		&treeScope{checkout: c.Source, roots: []gitguard.Root{root}, shielded: shielded}, nil
 }
 
-// planGuardedGitDir plans a guarded container: .git mounted read-only whole, so
-// no hooks copy, commondir check or fingerprint is needed. The working tree is
-// still searched.
-func planGuardedGitDir(c model.Container, worktreeRepo string) (gitGuardPlan, *treeScope, error) {
-	if worktreeRepo != "" {
-		return gitGuardPlan{mounts: gitguard.ReadOnlyWorktreeMounts(worktreeRepo)}, &treeScope{
-			checkout: c.Source,
-			roots:    []gitguard.Root{{Host: c.Source, Container: c.Source}},
-			shielded: []string{worktreeRepo},
-		}, nil
-	}
-	layout, ok := gitguard.LayoutOf(c.Source)
-	if !ok {
-		return gitGuardPlan{}, nil, nil
-	}
-	if c.GeneratedConfig == "" && c.ConfigPath != "" {
-		custom, err := namesWorkspaceMount(c.ConfigPath)
-		if err != nil {
-			return gitGuardPlan{}, nil, err
+// planGuardedGitDir plans a guarded container: each repository's .git mounted
+// read-only whole, so no hooks copy, commondir check or fingerprint is needed.
+// The working tree is still searched, once per repository. The extra folders'
+// own mounts come from folderMounts.
+func planGuardedGitDir(c model.Container, worktreeRepo string) (gitGuardPlan, []treeScope, error) {
+	var (
+		plan     gitGuardPlan
+		roots    []gitguard.Root
+		shielded []string
+		repos    []string
+	)
+	if c.GitGuard {
+		switch layout, ok := gitguard.LayoutOf(c.Source); {
+		case worktreeRepo != "":
+			plan.mounts = gitguard.ReadOnlyWorktreeMounts(worktreeRepo)
+			roots = append(roots, gitguard.Root{Host: c.Source, Container: c.Source})
+			shielded = append(shielded, worktreeRepo)
+			repos = append(repos, c.Source)
+		case ok:
+			if c.GeneratedConfig == "" && c.ConfigPath != "" {
+				custom, err := namesWorkspaceMount(c.ConfigPath)
+				if err != nil {
+					return gitGuardPlan{}, nil, err
+				}
+				if custom {
+					// Refused at create too: no mount can be aimed at a .git dev
+					// cannot locate.
+					return gitGuardPlan{}, nil, &overlayError{movedWorkspaceError(c.ConfigPath)}
+				}
+			}
+			plan.mounts = gitguard.ReadOnlyMounts(layout)
+			roots = append(roots, gitguard.Root{Host: filepath.Dir(layout.GitDir), Container: path.Dir(layout.ContainerGitDir)})
+			shielded = append(shielded, layout.GitDir)
+			repos = append(repos, c.Source)
 		}
-		if custom {
-			// Refused at create too: no mount can be aimed at a .git dev cannot
-			// locate.
-			return gitGuardPlan{}, nil, &overlayError{movedWorkspaceError(c.ConfigPath)}
+	}
+	if len(roots) == 0 && len(c.Folders) > 0 {
+		// The primary's mount is still writable, so still a place an include
+		// can point into.
+		container, extent := primaryPath(c)
+		roots = append(roots, gitguard.Root{Host: extent, Container: container})
+	}
+	for _, f := range c.Folders {
+		roots = append(roots, gitguard.Root{Host: f.HostPath, Container: f.ContainerPath})
+		if f.WorktreeRepo != "" {
+			shielded = append(shielded, f.WorktreeRepo)
+			repos = append(repos, f.HostPath)
+		} else if layout, ok := gitguard.RootLayout(f.HostPath, f.ContainerPath); ok {
+			shielded = append(shielded, layout.GitDir)
+			repos = append(repos, f.HostPath)
 		}
 	}
-	root := gitguard.Root{Host: filepath.Dir(layout.GitDir), Container: path.Dir(layout.ContainerGitDir)}
-	return gitGuardPlan{mounts: gitguard.ReadOnlyMounts(layout)},
-		&treeScope{checkout: c.Source, roots: []gitguard.Root{root}, shielded: []string{layout.GitDir}}, nil
+	var scopes []treeScope
+	for _, repo := range repos {
+		scopes = append(scopes, treeScope{checkout: repo, roots: roots, shielded: shielded})
+	}
+	return plan, scopes, nil
 }
 
 // namesWorkspaceMount reports whether the project's devcontainer.json moves its
@@ -481,18 +547,20 @@ func trustMountedRepository(ctx context.Context, p provider.Provider, c model.Co
 	if c.SourceKind != model.SourceFolder || c.Mode == model.ModeIsolated {
 		return nil
 	}
-	dirs := []string{c.WorktreeRepo}
+	var dirs []string
 	if c.WorktreeRepo != "" {
-		dirs = append(dirs, c.Source)
+		dirs = append(dirs, c.WorktreeRepo, c.Source)
 	} else if layout, ok := gitguard.LayoutOf(c.Source); ok {
-		dirs = []string{path.Dir(layout.ContainerGitDir)}
-	} else {
-		return nil
+		dirs = append(dirs, path.Dir(layout.ContainerGitDir))
+	}
+	for _, f := range c.Folders {
+		if f.WorktreeRepo != "" {
+			dirs = append(dirs, f.WorktreeRepo, f.ContainerPath)
+		} else if _, ok := gitguard.RootLayout(f.HostPath, f.ContainerPath); ok {
+			dirs = append(dirs, f.ContainerPath)
+		}
 	}
 	for _, dir := range dirs {
-		if dir == "" {
-			continue
-		}
 		var stderr bytes.Buffer
 		err := p.Exec(ctx, c, []string{"sh", "-c",
 			`command -v git >/dev/null || exit 0

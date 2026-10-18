@@ -11,23 +11,104 @@ import (
 // CreateContainer records a container. The name must be free within its
 // workspace.
 func (s *Store) CreateContainer(c model.Container) error {
-	_, err := s.db.Exec(
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("creating container %s: %w", c.Name, err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op once the commit below succeeds
+
+	_, err = tx.Exec(
 		`INSERT INTO containers
 		   (name, workspace_name, source_kind, source, config_path, generated_config,
 		    persist_state, agent_config, agent_config_pending,
 		    git_guard, allow_privileged, config_digest, config_digest_fields,
-		    mode, worktree_repo, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		    mode, worktree_repo, workspace_path, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		c.Name, c.WorkspaceName, string(c.SourceKind), c.Source, c.ConfigPath,
 		c.GeneratedConfig, boolToInt(c.PersistState), c.AgentConfig,
 		boolToInt(c.AgentConfigPending), boolToInt(c.GitGuard),
 		boolToInt(c.AllowPrivileged), c.ConfigDigest, c.ConfigDigestFields,
-		string(modeOrLegacy(c.Mode)), c.WorktreeRepo, nowString())
+		string(modeOrLegacy(c.Mode)), c.WorktreeRepo, c.WorkspacePath, nowString())
 	if err != nil {
 		if isUniqueViolation(err) {
 			return ErrExists
 		}
 		return fmt.Errorf("creating container %s: %w", c.Name, err)
+	}
+	if err := insertFolders(tx, c.WorkspaceName, c.Name, c.Folders); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("creating container %s: %w", c.Name, err)
+	}
+	return nil
+}
+
+func insertFolders(tx *sql.Tx, workspace, name string, folders []model.Folder) error {
+	for _, f := range folders {
+		if _, err := tx.Exec(
+			`INSERT INTO container_folders
+			   (workspace_name, container_name, host_path, container_path, worktree_repo)
+			 VALUES (?, ?, ?, ?, ?)`, workspace, name, f.HostPath, f.ContainerPath, f.WorktreeRepo); err != nil {
+			return fmt.Errorf("recording container %s's folder %s: %w", name, f.HostPath, err)
+		}
+	}
+	return nil
+}
+
+// SetContainerFolders replaces a container's extra folders.
+func (s *Store) SetContainerFolders(workspace, name string, folders []model.Folder) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("updating container %s: %w", name, err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op once the commit below succeeds
+
+	var one int
+	if err := tx.QueryRow(`SELECT 1 FROM containers WHERE workspace_name = ? AND name = ?`,
+		workspace, name).Scan(&one); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("updating container %s: %w", name, err)
+	}
+	if _, err := tx.Exec(`DELETE FROM container_folders WHERE workspace_name = ? AND container_name = ?`,
+		workspace, name); err != nil {
+		return fmt.Errorf("updating container %s: %w", name, err)
+	}
+	if err := insertFolders(tx, workspace, name, folders); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("updating container %s: %w", name, err)
+	}
+	return nil
+}
+
+// loadFolders fills in each container's extra folders. Called once the
+// container rows are closed: the pool has one connection.
+func (s *Store) loadFolders(cs []model.Container) error {
+	for i := range cs {
+		rows, err := s.db.Query(
+			`SELECT host_path, container_path, worktree_repo FROM container_folders
+			 WHERE workspace_name = ? AND container_name = ? ORDER BY host_path`,
+			cs[i].WorkspaceName, cs[i].Name)
+		if err != nil {
+			return fmt.Errorf("reading container %s's folders: %w", cs[i].Name, err)
+		}
+		for rows.Next() {
+			var f model.Folder
+			if err := rows.Scan(&f.HostPath, &f.ContainerPath, &f.WorktreeRepo); err != nil {
+				rows.Close()
+				return fmt.Errorf("reading container %s's folders: %w", cs[i].Name, err)
+			}
+			cs[i].Folders = append(cs[i].Folders, f)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return fmt.Errorf("reading container %s's folders: %w", cs[i].Name, err)
+		}
 	}
 	return nil
 }
@@ -37,9 +118,17 @@ func (s *Store) GetContainer(workspace, name string) (model.Container, error) {
 		`SELECT name, workspace_name, source_kind, source, config_path, generated_config,
 		        persist_state, agent_config, agent_config_pending,
 		        git_guard, allow_privileged, config_digest, config_digest_fields,
-		        mode, worktree_repo, created_at
+		        mode, worktree_repo, workspace_path, created_at
 		 FROM containers WHERE workspace_name = ? AND name = ?`, workspace, name)
-	return scanContainer(row)
+	c, err := scanContainer(row)
+	if err != nil {
+		return c, err
+	}
+	one := []model.Container{c}
+	if err := s.loadFolders(one); err != nil {
+		return model.Container{}, err
+	}
+	return one[0], nil
 }
 
 // ListContainers returns the containers in one workspace, or in every workspace
@@ -48,7 +137,7 @@ func (s *Store) ListContainers(workspace string) ([]model.Container, error) {
 	query := `SELECT name, workspace_name, source_kind, source, config_path, generated_config,
 	                 persist_state, agent_config, agent_config_pending,
 	                 git_guard, allow_privileged, config_digest, config_digest_fields,
-		        mode, worktree_repo, created_at
+		        mode, worktree_repo, workspace_path, created_at
 	          FROM containers`
 	args := []any{}
 	if workspace != "" {
@@ -71,7 +160,14 @@ func (s *Store) ListContainers(workspace string) ([]model.Container, error) {
 		}
 		out = append(out, c)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	if err := s.loadFolders(out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *Store) DeleteContainer(workspace, name string) error {
@@ -106,7 +202,7 @@ func scanContainer(sc scanner) (model.Container, error) {
 	if err := sc.Scan(&c.Name, &c.WorkspaceName, &kind, &c.Source, &c.ConfigPath,
 		&c.GeneratedConfig, &persist, &c.AgentConfig, &pending,
 		&guard, &allowPriv, &c.ConfigDigest, &c.ConfigDigestFields,
-		&mode, &c.WorktreeRepo, &createdAt); err != nil {
+		&mode, &c.WorktreeRepo, &c.WorkspacePath, &createdAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return model.Container{}, ErrNotFound
 		}
