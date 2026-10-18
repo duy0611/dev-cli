@@ -78,11 +78,7 @@ lint:
 
 # golangci-lint is not vendored, and `make lint` skips rather than fails without
 # it — so a machine that never installed it lints a third less than it appears
-# to. Install with the same version the tree was last cleaned against:
-#
-#   V=2.13.2; A=$$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/'); \
-#   curl -sSL https://github.com/golangci/golangci-lint/releases/download/v$$V/golangci-lint-$$V-linux-$$A.tar.gz \
-#     | tar xz -C /tmp && install -m0755 /tmp/golangci-lint-$$V-linux-$$A/golangci-lint ~/.local/bin/
+# to. `mise install` fetches the version mise.toml pins, which is what CI runs.
 #
 # No config file: the default linters are what the tree is clean against, and
 # errcheck is the one that has actually caught things here. An error deliberately

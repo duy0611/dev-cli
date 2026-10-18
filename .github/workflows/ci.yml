@@ -84,28 +84,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v6
-        with:
-          # From go.mod, so the toolchain is not pinned in two places and
-          # cannot disagree with what the module requires.
-          go-version-file: go.mod
-          cache: true
+      # Go and golangci-lint from mise.toml, so CI, the devcontainer and the
+      # operator's machine cannot disagree on either version.
+      - uses: jdx/mise-action@v5
+
+      - uses: ./.github/actions/go-cache
 
       - name: Lint
-        uses: golangci/golangci-lint-action@v8
-        with:
-          # Pinned: a new release adds linters, which would fail a tree that
-          # was clean when it was pushed. Raise it deliberately.
-          version: v2.13.2
-          # The action runs golangci-lint itself; `make lint` also runs gofmt
-          # and go vet, which the next step covers.
-          args: --timeout 5m
-
-      - name: gofmt and vet
-        run: |
-          out=$(gofmt -l .)
-          if [ -n "$out" ]; then echo "$out"; echo "run: gofmt -w ."; exit 1; fi
-          go vet ./...
+        run: make lint
 
       # Builds the relay for both architectures, then dev with them embedded.
       # Before the tests, because a test asserts the embedded relay is a real
@@ -145,10 +131,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: true
+      - uses: jdx/mise-action@v5
+
+      - uses: ./.github/actions/go-cache
 
       # Both Ubuntu images ship Docker with buildx and Node with npm, but not the
       # devcontainer CLI. Without it every smoke test skips and the job goes

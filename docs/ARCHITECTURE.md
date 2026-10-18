@@ -16,9 +16,9 @@ they passed or were skipped, and fails otherwise. Releases are cut by release-pl
 updates an open release PR from the Conventional Commit subjects since the last
 tag, and merging that PR tags the release, publishes it with the changelog, and
 builds `dev` for darwin and linux on both architectures into it. Nobody tags or
-drafts a release by hand (`.github/workflows/`). CI installs tools and calls the
-Makefile targets rather than restating them, so a green tick means what a clean
-local run means. The smoke job runs the local
+drafts a release by hand (`.github/workflows/`). CI installs tools from
+`mise.toml` and calls the Makefile targets rather than restating them, so a
+green tick means what a clean local run means. The smoke job runs the local
 provider against the runner's Docker; its Kubernetes half skips there, since CI
 has no cluster or registry to name.
 

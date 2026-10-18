@@ -35,6 +35,8 @@ make install    # build, then copy to ~/.local/bin/dev
 make hooks      # copy .githooks into .git/hooks — once per clone
 ```
 
+- Go and golangci-lint come from `mise.toml`, which CI installs from too:
+  raise a version there and nowhere else.
 - `make lint && make test` is the fast loop; run it before every commit.
 - `make smoke` needs the `devcontainer` CLI, an engine and network, and skips
   without them. Its Kubernetes half also needs `DEV_SMOKE_K8S_CONTEXT` and

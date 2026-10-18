@@ -1,0 +1,8 @@
+# The toolchain for working on dev, shared by CI, the devcontainer and the
+# operator's machine. go.mod's `go` line is the minimum the module accepts;
+# this is what it is built and linted with.
+[tools]
+go = "1.26"
+# Pinned: a new release adds linters, which would fail a tree that was clean
+# when it was pushed. Raise it deliberately.
+golangci-lint = "2.13.2"
