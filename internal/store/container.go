@@ -21,14 +21,14 @@ func (s *Store) CreateContainer(c model.Container) error {
 		`INSERT INTO containers
 		   (name, workspace_name, source_kind, source, config_path, generated_config,
 		    persist_state, agent_config, agent_config_pending,
-		    git_guard, allow_privileged, config_digest, config_digest_fields,
+		    git_guard, allow_privileged, config_digest, config_digest_fields, idle_stop,
 		    mode, worktree_repo, workspace_path, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		c.Name, c.WorkspaceName, string(c.SourceKind), c.Source, c.ConfigPath,
 		c.GeneratedConfig, boolToInt(c.PersistState), c.AgentConfig,
 		boolToInt(c.AgentConfigPending), boolToInt(c.GitGuard),
 		boolToInt(c.AllowPrivileged), c.ConfigDigest, c.ConfigDigestFields,
-		string(modeOrLegacy(c.Mode)), c.WorktreeRepo, c.WorkspacePath, nowString())
+		boolToInt(c.IdleStop), string(modeOrLegacy(c.Mode)), c.WorktreeRepo, c.WorkspacePath, nowString())
 	if err != nil {
 		if isUniqueViolation(err) {
 			return ErrExists
@@ -117,7 +117,7 @@ func (s *Store) GetContainer(workspace, name string) (model.Container, error) {
 	row := s.db.QueryRow(
 		`SELECT name, workspace_name, source_kind, source, config_path, generated_config,
 		        persist_state, agent_config, agent_config_pending,
-		        git_guard, allow_privileged, config_digest, config_digest_fields,
+		        git_guard, allow_privileged, config_digest, config_digest_fields, idle_stop,
 		        mode, worktree_repo, workspace_path, created_at
 		 FROM containers WHERE workspace_name = ? AND name = ?`, workspace, name)
 	c, err := scanContainer(row)
@@ -136,7 +136,7 @@ func (s *Store) GetContainer(workspace, name string) (model.Container, error) {
 func (s *Store) ListContainers(workspace string) ([]model.Container, error) {
 	query := `SELECT name, workspace_name, source_kind, source, config_path, generated_config,
 	                 persist_state, agent_config, agent_config_pending,
-	                 git_guard, allow_privileged, config_digest, config_digest_fields,
+	                 git_guard, allow_privileged, config_digest, config_digest_fields, idle_stop,
 		        mode, worktree_repo, workspace_path, created_at
 	          FROM containers`
 	args := []any{}
@@ -196,12 +196,13 @@ func scanContainer(sc scanner) (model.Container, error) {
 		pending   int
 		guard     int
 		allowPriv int
+		idleStop  int
 		mode      string
 		createdAt string
 	)
 	if err := sc.Scan(&c.Name, &c.WorkspaceName, &kind, &c.Source, &c.ConfigPath,
 		&c.GeneratedConfig, &persist, &c.AgentConfig, &pending,
-		&guard, &allowPriv, &c.ConfigDigest, &c.ConfigDigestFields,
+		&guard, &allowPriv, &c.ConfigDigest, &c.ConfigDigestFields, &idleStop,
 		&mode, &c.WorktreeRepo, &c.WorkspacePath, &createdAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return model.Container{}, ErrNotFound
@@ -213,6 +214,7 @@ func scanContainer(sc scanner) (model.Container, error) {
 	c.AgentConfigPending = pending != 0
 	c.GitGuard = guard != 0
 	c.AllowPrivileged = allowPriv != 0
+	c.IdleStop = idleStop != 0
 	c.Mode = model.Mode(mode)
 
 	t, err := parseTime(createdAt)

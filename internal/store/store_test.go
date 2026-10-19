@@ -718,3 +718,49 @@ func TestDeletingAContainerTakesItsFolders(t *testing.T) {
 		t.Errorf("a recreated container inherited folders %v", got.Folders)
 	}
 }
+
+func TestIdleStopRoundTrips(t *testing.T) {
+	s := openTest(t)
+	seed(t, s)
+	for name, want := range map[string]bool{"off": false, "on": true} {
+		c := model.Container{Name: name, WorkspaceName: "ws", SourceKind: model.SourceFolder,
+			Source: "/src/" + name, IdleStop: want}
+		if err := s.CreateContainer(c); err != nil {
+			t.Fatalf("CreateContainer %s: %v", name, err)
+		}
+		got, err := s.GetContainer("ws", name)
+		if err != nil {
+			t.Fatalf("GetContainer %s: %v", name, err)
+		}
+		if got.IdleStop != want {
+			t.Errorf("GetContainer %s: IdleStop = %v, want %v", name, got.IdleStop, want)
+		}
+	}
+	list, err := s.ListContainers("ws")
+	if err != nil {
+		t.Fatalf("ListContainers: %v", err)
+	}
+	for _, c := range list {
+		if want := c.Name == "on"; c.IdleStop != want {
+			t.Errorf("ListContainers %s: IdleStop = %v, want %v", c.Name, c.IdleStop, want)
+		}
+	}
+}
+
+func TestIdleStopDefaultsOnForExistingRows(t *testing.T) {
+	s := openTest(t)
+	seed(t, s)
+	if _, err := s.db.Exec(
+		`INSERT INTO containers (name, workspace_name, source_kind, source, config_path,
+		   generated_config, persist_state, agent_config, agent_config_pending, created_at)
+		 VALUES ('old', 'ws', 'folder', '/src/old', '', '', 0, '', 0, ?)`, nowString()); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	got, err := s.GetContainer("ws", "old")
+	if err != nil {
+		t.Fatalf("GetContainer: %v", err)
+	}
+	if !got.IdleStop {
+		t.Error("an existing row came back without idle stop")
+	}
+}

@@ -95,6 +95,9 @@ type Container struct {
 	// the engine socket, host namespaces, host mounts). Set by create's flag
 	// only, never by a project file an agent can edit.
 	AllowPrivileged bool
+	// IdleStop says a watchdog stops the container once nobody is connected.
+	// Fixed at create.
+	IdleStop bool
 	// ConfigDigest is the digest of the project configuration last built from,
 	// so a rebuild can refuse one that changed unseen. Empty for generated
 	// configurations.

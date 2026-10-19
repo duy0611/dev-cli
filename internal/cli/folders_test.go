@@ -539,3 +539,21 @@ func TestFailedRebuildKeepsTheFolders(t *testing.T) {
 		t.Errorf("folders = %v after a failed rebuild, want repo-2 kept", c.Folders)
 	}
 }
+
+func TestCreateNoIdleStop(t *testing.T) {
+	for name, tc := range map[string]struct {
+		flags []string
+		want  bool
+	}{"x": {nil, true}, "y": {[]string{"--no-idle-stop"}, false}} {
+		a, _ := newTestApp(t)
+		seedWorkspace(t, a)
+		argv := append([]string{"container", "create", name, "--no-folder", "--generate",
+			"--tools", "yq", "--no-start"}, tc.flags...)
+		if err := runIn(t, a, argv...); err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+		if got := containerRow(t, a, name).IdleStop; got != tc.want {
+			t.Errorf("%s %v: IdleStop = %v, want %v", name, tc.flags, got, tc.want)
+		}
+	}
+}

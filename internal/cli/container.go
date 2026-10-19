@@ -62,6 +62,7 @@ type createOpts struct {
 	noAgentConfig   bool
 	from            string
 	allowPrivileged bool
+	noIdleStop      bool
 	mode            model.Mode
 	// extraFolders are the --folder arguments after the first.
 	extraFolders []string
@@ -139,6 +140,8 @@ func newContainerCreateCmd(a *app) *cobra.Command {
 		"start from another generated container's tools and settings")
 	cmd.Flags().BoolVar(&opts.allowPrivileged, "allow-privileged", false,
 		"let the configuration ask for privileged mode, the engine socket, host namespaces or a mount of / or your home")
+	cmd.Flags().BoolVar(&opts.noIdleStop, "no-idle-stop", false,
+		"do not stop this container when nobody is connected to it")
 	return cmd
 }
 
@@ -281,6 +284,7 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 		// Set by flag only: a project file the agent can edit must not grant
 		// it.
 		AllowPrivileged: opts.allowPrivileged,
+		IdleStop:        !opts.noIdleStop,
 		// Fixed at create. Off for isolated, which never mounts the folder, and
 		// for folderless, which has no host .git.
 		GitGuard: !opts.noFolder && mode != model.ModeIsolated &&
