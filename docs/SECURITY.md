@@ -137,9 +137,9 @@ code from it: a linter from `node_modules`, a language server's build scripts,
 a virtual environment's interpreter, tasks in `.vscode/`. Open folders the agent
 has written to in your editor's restricted mode until you trust what is there.
 
-**Your ssh agent, in unprotected and isolated modes.** While a `dev` command runs, the container
-can ask your ssh agent to sign with any key it holds. Give it an agent holding
-only the key it needs:
+**Your ssh agent, in unprotected and isolated modes.** While a `dev` command
+runs, the container can ask your ssh agent to sign with any key it holds. Give
+it an agent holding only the key it needs:
 
 ```sh
 eval "$(ssh-agent -s)"          # a new agent, in this shell only
