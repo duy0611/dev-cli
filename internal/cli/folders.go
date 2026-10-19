@@ -170,14 +170,14 @@ func folderSummary(c model.Container) string {
 }
 
 // changeFolders applies rebuild's --add-folder and --remove-folder to c, which
-// must be a guarded container. A removed folder is matched by its stored path,
+// must be a guarded or unprotected container. A removed folder is matched by its stored path,
 // since it may be gone from the host.
 func changeFolders(ctx context.Context, c *model.Container, add, remove []string) error {
-	if c.Mode != model.ModeGuarded {
+	if c.Mode != model.ModeGuarded && c.Mode != model.ModeUnprotected {
 		if c.Mode == model.ModeIsolated {
 			return usageErrorf("container %s is isolated; its folders are fixed, recreate it to change them", c.Name)
 		}
-		return usageErrorf("container %s is %s; only a guarded container's folders can change", c.Name, displayMode(c.Mode))
+		return usageErrorf("container %s is %s; only a guarded or unprotected container's folders can change", c.Name, displayMode(c.Mode))
 	}
 	next := slices.Clone(c.Folders)
 	for _, arg := range remove {

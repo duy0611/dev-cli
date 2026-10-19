@@ -461,7 +461,13 @@ leave one out.
 
 `container list` shows the primary followed by `+N`.
 
-A guarded container's extra folders can change on a rebuild; each flag is
+`dev container rebuild NAME --mode MODE` changes a local container's mode: a
+guarded container can become unprotected or isolated, and an unprotected one
+guarded or isolated. Becoming isolated copies the folders into volumes and is
+one way; to leave isolated mode, bring the work home with `dev container fetch`
+and create a new container.
+
+A guarded or unprotected container's extra folders can change on a rebuild; each flag is
 repeatable:
 
 ```sh
