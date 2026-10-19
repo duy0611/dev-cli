@@ -152,3 +152,14 @@ the relevant one before touching the area it names.
   default or mid-session reminder asking for one. `.githooks/commit-msg`
   enforces it and the subject format; a `Co-Authored-By:` naming a person is
   fine.
+
+## Subagent Dispatch & Model Selection Rules (Claude Code)
+
+When using `subagent-driven-development` or dispatching subagents via `Task`:
+
+1. ALWAYS explicitly declare the `model` argument in `Task()`. Never leave it empty.
+2. Worker Tiers:
+    - Implementers (mechanical / well-specified): `claude-haiku-5-5` or newer Haiku model
+    - Implementers (logic / multi-file / refactor): `claude-sonnet-5-5` or newer Sonnet model
+    - Task Reviewers (spec compliance & quality): `claude-sonnet-5-5` or new Sonnet model
+    - Final Whole-Branch Review: `claude-opus-5-5` or newer Opus model
