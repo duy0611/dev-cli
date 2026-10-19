@@ -158,3 +158,13 @@ type Worktree struct {
 	HerdrWorkspace string
 	CreatedAt      time.Time
 }
+
+// DiffReview is a container's review state: the draft being written and the
+// last round sent.
+type DiffReview struct {
+	WorkspaceName, ContainerName string
+	Draft                        string    // JSON, review.EncodeComments; "" when none
+	Sent                         string    // JSON of the last round sent; "" before the first
+	Snapshot                     string    // review.Snapshot of the diff at the last send
+	SentAt                       time.Time // zero before the first send
+}

@@ -77,6 +77,31 @@ func runContainerStartAgent(ctx context.Context, a *app, workspace, name, agentI
 		return err
 	}
 
+	return a.launchAgent(ctx, t, ag, ag.Command(extra), launchOpts{
+		herdrName:   herdrName,
+		kubeToken:   kubeToken,
+		sshOverride: sshOverride,
+		event:       "start-agent",
+	})
+}
+
+// launchOpts are what the commands that run an agent in a container pass to
+// launchAgent.
+type launchOpts struct {
+	herdrName   string
+	kubeToken   bool
+	sshOverride *bool
+	// event is the audit event recorded around the run.
+	event string
+	// onStart runs once every check has passed, immediately before the agent
+	// starts; an error aborts the launch.
+	onStart func() error
+}
+
+// launchAgent brings t's container up to the point of running argv as an
+// agent: up, owed agent config, presence check, kube token, ssh relay, Herdr
+// naming, guarded run, audit.
+func (a *app) launchAgent(ctx context.Context, t *target, ag agent.Agent, argv []string, o launchOpts) error {
 	environ, err := a.containerEnv(ctx, t.container)
 	if err != nil {
 		return err
@@ -84,7 +109,7 @@ func runContainerStartAgent(ctx context.Context, a *app, workspace, name, agentI
 
 	// Asked before Up, so a host-side failure starts no container. Minted
 	// later, so the token does not age through an image pull.
-	kubeReq, err := askKubeTokenIf(ctx, kubeToken)
+	kubeReq, err := askKubeTokenIf(ctx, o.kubeToken)
 	if err != nil {
 		return err
 	}
@@ -125,7 +150,7 @@ func runContainerStartAgent(ctx context.Context, a *app, workspace, name, agentI
 
 	// After the container is up: the relay runs inside it, and a rebuild would
 	// stop it.
-	environ, stopAgent, err := a.forwardAgent(ctx, t, sshOverride, environ)
+	environ, stopAgent, err := a.forwardAgent(ctx, t, o.sshOverride, environ)
 	if err != nil {
 		return err
 	}
@@ -136,9 +161,14 @@ func runContainerStartAgent(ctx context.Context, a *app, workspace, name, agentI
 	if err := os.Setenv("HERDR_AGENT", ag.ID); err != nil {
 		return err
 	}
-	defer herdr.NameAgent(ctx, herdrName)()
+	defer herdr.NameAgent(ctx, o.herdrName)()
 
-	argv := ag.Command(extra)
+	if o.onStart != nil {
+		if err := o.onStart(); err != nil {
+			return err
+		}
+	}
+
 	started := time.Now()
 	err = a.guardedRun(ctx, t, func() error {
 		return t.provider.Exec(ctx, t.container, argv, provider.ExecOpts{
@@ -149,10 +179,10 @@ func runContainerStartAgent(ctx context.Context, a *app, workspace, name, agentI
 			Stderr: os.Stderr,
 		})
 	})
-	a.recordRun("start-agent", t, started, map[string]any{
+	a.recordRun(o.event, t, started, map[string]any{
 		"agent":      ag.ID,
 		"argv":       argv,
-		"ssh_agent":  agentForwarded(t, sshOverride),
+		"ssh_agent":  agentForwarded(t, o.sshOverride),
 		"kube_token": kubeReq != nil,
 	}, err)
 	return err

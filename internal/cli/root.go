@@ -35,6 +35,7 @@ func Execute(version string) int {
 		newProviderCmd(a),
 		newWorkspaceCmd(a),
 		newContainerCmd(a),
+		newDiffCmd(a),
 		newWorktreeCmd(a),
 		newAuditCmd(a),
 	)

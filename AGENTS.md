@@ -86,6 +86,7 @@ internal/gitwt/       git worktrees: add, remove, list, which repository
 internal/wtseed/      copying .worktreeinclude files into a new checkout
 internal/seed/        an isolated container's first contents: tree + bundle
 internal/relay/, relaybin/  the ssh agent relay and its embedded binary
+internal/review/       a guarded container's diff, the review file, the message for the agent
 internal/herdr/       optional Herdr registration
 internal/xpath/       physical paths, name and env-key validation
 test/smoke/           end-to-end, behind the `smoke` build tag
