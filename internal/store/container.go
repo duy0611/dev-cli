@@ -85,6 +85,39 @@ func (s *Store) SetContainerFolders(workspace, name string, folders []model.Fold
 	return nil
 }
 
+// SetContainerMode rewrites a container's mode-derived columns and its folder
+// set together, so no reader sees one mode's mounts under another mode.
+func (s *Store) SetContainerMode(c model.Container) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("updating container %s: %w", c.Name, err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op once the commit below succeeds
+
+	res, err := tx.Exec(
+		`UPDATE containers SET mode = ?, workspace_path = ?, worktree_repo = ?, generated_config = ?
+		 WHERE workspace_name = ? AND name = ?`,
+		string(modeOrLegacy(c.Mode)), c.WorkspacePath, c.WorktreeRepo, c.GeneratedConfig,
+		c.WorkspaceName, c.Name)
+	if err != nil {
+		return fmt.Errorf("updating container %s: %w", c.Name, err)
+	}
+	if err := requireOneRow(res, ErrNotFound); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM container_folders WHERE workspace_name = ? AND container_name = ?`,
+		c.WorkspaceName, c.Name); err != nil {
+		return fmt.Errorf("updating container %s: %w", c.Name, err)
+	}
+	if err := insertFolders(tx, c.WorkspaceName, c.Name, c.Folders); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("updating container %s: %w", c.Name, err)
+	}
+	return nil
+}
+
 // loadFolders fills in each container's extra folders. Called once the
 // container rows are closed: the pool has one connection.
 func (s *Store) loadFolders(cs []model.Container) error {

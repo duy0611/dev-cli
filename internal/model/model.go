@@ -51,8 +51,7 @@ const (
 	SourceNone SourceKind = "none"
 )
 
-// Mode is how much of the operator's checkout a container can reach. Fixed at
-// create.
+// Mode is how much of the operator's checkout a container can reach.
 type Mode string
 
 const (
@@ -62,6 +61,8 @@ const (
 	ModeIsolated Mode = "isolated"
 	// ModeLegacy is a container created before modes existed.
 	ModeLegacy Mode = "legacy"
+	// ModeUnprotected mounts the folder live with its .git writable.
+	ModeUnprotected Mode = "unprotected"
 	// ModeNone is a folderless container.
 	ModeNone Mode = "none"
 )
@@ -86,7 +87,7 @@ type Container struct {
 	AgentConfig string
 	// AgentConfigPending says applying AgentConfig is still owed.
 	AgentConfigPending bool
-	// Mode is how much of the checkout this container reaches. Fixed at create.
+	// Mode is how much of the checkout this container reaches.
 	Mode Mode
 	// GitGuard says host git is shielded from writes under .git. Meaningful for
 	// legacy containers only.
