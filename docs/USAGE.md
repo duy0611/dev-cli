@@ -959,7 +959,8 @@ dev container exec api -- git pull
 
 A container nobody has been connected to for 30 minutes is stopped, as
 `dev container stop` would: the container, its volumes and its work stay, and
-the next `start` (or `shell`, `exec`, `start-agent`) brings it back. This is on
+the next `start`, `start-agent` or `diff complete` brings it back (`shell` and
+`exec` refuse a stopped container). This is on
 by default on the local provider. The experimental k8s provider has no idle
 stop: a pod whose main process dies is restarted, not stopped.
 
@@ -982,15 +983,18 @@ passwordless sudo`, and starts none.
 
 If a project's own start command has no `TERM` handler, init ignores the stop
 request. The watchdog then kills every other process instead, and the container
-stays running with nothing in it. Either way the next start prints
+stays running with nothing in it. Either way the next `dev` command that starts or checks the container prints
 `container NAME was stopped at 14:30 after 30 idle minutes` (or `had its
-processes stopped`) and records an `idle-stop` event, with `outcome` (`stopped`
+processes stopped`), on stdout when that command started it and on stderr
+when the check found it, and records an `idle-stop` event, with `outcome` (`stopped`
 or `reaped`), `stopped_at` and `idle_minutes`, that `dev audit` shows.
 
 A container started outside `dev`, with `docker start` for instance, has no
-watchdog until the next `dev` command, which restarts a missing one in each
-running container, within 10 seconds and with a warning on failure. This is
-best-effort: a process running as root in the container can disable the
+watchdog until the next `dev` command, which probes each running container
+cheaply through the engine and restarts a missing watchdog, within 10 seconds and with a warning on failure. This is
+best-effort: a container with a restart policy (compose `restart:
+unless-stopped`, say) restarts instead of stopping, and runs without a
+watchdog until the next `dev` command. A process running as root in the container can disable the
 watchdog, so it is not containment (see [SECURITY](SECURITY.md)).
 
 ### See what ran, and when

@@ -118,13 +118,20 @@ the first is alive.
 ### When it is started and repaired
 
 `dev` starts the watchdog after every `Up`, whichever command caused it:
-`create`, `start`, `shell`, `exec`, `start-agent`, `rebuild`, `diff complete`.
+`create`, `start`, `start-agent`, `rebuild`, `diff complete`. (`shell` and
+`exec` refuse a stopped container, so they bring nothing back.)
 A container started some other way (`docker start` behind `dev`'s back) gets no
 watchdog until the next `dev` command starts one; this is documented.
 
 Every `dev` run that opened the database also checks, best-effort and in
-parallel with a short timeout, that each running container's watchdog is alive and restarts it if not. That
-check never stops anything itself; it only repairs. It lives on the host for
+parallel with a short timeout, that each running container's watchdog is alive and restarts it if not. The
+check is a cheap root probe through the engine (`docker exec -u root`, a
+read-only script that reports `ok` or `ensure`); the full `Ensure` through the
+devcontainer CLI runs only on `ensure`. The CLI's exec would cost seconds on
+every command and, entering from outside, would itself count as a session and
+reset the idle clock. A stop notice the check finds goes to stderr, since the
+host command's stdout may be data. A probe error warns and skips. The check
+never stops anything itself; it only repairs. It lives on the host for
 the length of the command and leaves nothing behind.
 
 A session that starts between the watchdog's last check and the stop is killed
@@ -170,7 +177,7 @@ left to explain.
 Nothing, until a container is stopped. Then:
 
 - `dev container list` shows it stopped (the engine says so; invariant 4);
-- the next start is the moment `dev audit` gains the `idle-stop` record;
+- the next `dev` command that starts or checks the container is the moment `dev audit` gains the `idle-stop` record;
 - `dev container create --no-idle-stop` is the one flag in the feature, and
   `docs/USAGE.md` documents it with the session definition below.
 
