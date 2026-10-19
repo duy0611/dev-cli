@@ -655,7 +655,10 @@ on a container created before modes or with `--no-folder`, `guarded` or
 `unprotected` on the k8s provider, and `--mode guarded` on a project that sets
 its own `workspaceMount`. Every folder is placed again for the new mode and the
 set is checked as `create` checks it, so a set the new mode refuses is exit 2.
-`--mode` combines with `--add-folder` and `--remove-folder`.
+`--mode` combines with `--add-folder` and `--remove-folder`. A change of mode is
+printed, as `container api rebuilt (guarded -> unprotected)`, and recorded in the
+audit log. The mode switch itself is not configuration drift; a change to the
+project's own `devcontainer.json` made at the same time still is.
 
 The common use is to open a guarded container up for a while, then close it:
 
