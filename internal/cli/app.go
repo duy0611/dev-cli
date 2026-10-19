@@ -35,6 +35,8 @@ type app struct {
 	idleSeen map[string]bool
 	// idleMu guards idleSeen: the repair pass calls ensureIdle concurrently.
 	idleMu sync.Mutex
+	// outMu serialises the output of concurrent ensureIdle calls.
+	outMu sync.Mutex
 }
 
 // audit returns the log beside the database. A nil Log records nothing, so an

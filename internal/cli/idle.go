@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"os"
 	"sync"
 	"time"
@@ -27,6 +28,12 @@ func (a *app) ensureIdle(ctx context.Context, p provider.Provider, c model.Conta
 	a.idleMu.Unlock()
 
 	state, stop, err := idle.Ensure(ctx, p, c, idleOptions())
+	// A straggler past the repair deadline stays quiet; the caller has moved on.
+	if ctx.Err() != nil {
+		return
+	}
+	a.outMu.Lock()
+	defer a.outMu.Unlock()
 	if err != nil {
 		warnf(a, "idle stop for %s: %v", c.Name, err)
 		return
@@ -66,6 +73,9 @@ func idleOptions() idle.Options {
 
 // repairTimeout bounds the whole repair pass.
 var repairTimeout = 10 * time.Second
+
+// repairGrace is how long past the deadline repair waits for cleanup.
+var repairGrace = time.Second
 
 // repairIdle restarts the watchdog in every running container this run did not
 // already ensure: one started behind dev's back has none. Best-effort, and
@@ -107,6 +117,9 @@ func (a *app) repairIdle(ctx context.Context) {
 		p, ok := providers[ws.Name]
 		if !ok {
 			if p, err = a.providerFor(ws); err != nil {
+				a.outMu.Lock()
+				warnf(a, "idle stop for %s: %v", c.Name, err)
+				a.outMu.Unlock()
 				continue
 			}
 			providers[ws.Name] = p
@@ -131,6 +144,11 @@ func (a *app) repairIdle(ctx context.Context) {
 			}
 			t, err := a.target(ctx, j.c, j.ws, j.p)
 			if err != nil {
+				if ctx.Err() == nil {
+					a.outMu.Lock()
+					warnf(a, "idle stop for %s: %v", j.c.Name, err)
+					a.outMu.Unlock()
+				}
 				return
 			}
 			defer t.release()
@@ -142,5 +160,16 @@ func (a *app) repairIdle(ctx context.Context) {
 	select {
 	case <-done:
 	case <-ctx.Done():
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			a.outMu.Lock()
+			warnf(a, "idle stop check timed out after %s", repairTimeout)
+			a.outMu.Unlock()
+		}
+		// Stragglers get a moment to run their deferred release, so no
+		// generated config is left in the temp directory.
+		select {
+		case <-done:
+		case <-time.After(repairGrace):
+		}
 	}
 }

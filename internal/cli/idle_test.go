@@ -273,14 +273,23 @@ func TestRepairIsBoundedByItsTimeout(t *testing.T) {
 	dir := filepath.Dir(log)
 	stubRunningDocker(t, dir)
 	writeFile(t, filepath.Join(dir, "devcontainer"),
-		"#!/bin/sh\ncase \"$1\" in read-configuration) echo '{\"mergedConfiguration\":{}}'; exit 0;; esac\ncase \"$*\" in *' dev-idle '*) sleep 5;; esac\nexit 0\n")
+		"#!/bin/sh\ncase \"$1\" in read-configuration) echo '{\"mergedConfiguration\":{}}'; exit 0;; esac\ncase \"$*\" in *' dev-idle '*) : > '"+filepath.Join(dir, "reached")+"'; sleep 5;; esac\nexit 0\n")
 	old := repairTimeout
 	repairTimeout = 200 * time.Millisecond
 	t.Cleanup(func() { repairTimeout = old })
+	oldGrace := repairGrace
+	repairGrace = 100 * time.Millisecond
+	t.Cleanup(func() { repairGrace = oldGrace })
 	start := time.Now()
-	run(t.Context(), a, []string{"container", "list"})
+	got := captureStderr(t, func() { run(t.Context(), a, []string{"container", "list"}) })
 	if d := time.Since(start); d > 2*time.Second {
 		t.Errorf("run took %v", d)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "reached")); err != nil {
+		t.Errorf("the stub's sleep was never reached: %v", err)
+	}
+	if !strings.Contains(got, "idle stop check timed out after 200ms") {
+		t.Errorf("no timeout warning: %q", got)
 	}
 }
 
@@ -295,5 +304,21 @@ func TestRepairDoesNothingWithoutTheDatabase(t *testing.T) {
 	}
 	if calls := callsIn(t, filepath.Join(filepath.Dir(log), "docker-calls")); calls != "" {
 		t.Errorf("docker called:\n%s", calls)
+	}
+}
+
+func TestRepairOutputIsSerialised(t *testing.T) {
+	a, out := newTestApp(t)
+	seedWorkspace(t, a)
+	log := stubIdleDevcontainer(t, `marker stopped 1760000000 1860\nstarted`)
+	for _, n := range []string{"x", "y"} {
+		if err := createIdle(t, a, n, "--no-start"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stubRunningDocker(t, filepath.Dir(log))
+	run(t.Context(), a, []string{"container", "list"})
+	if n := strings.Count(out.String(), "after 31 idle minutes"); n != 2 {
+		t.Errorf("reports = %d, want 2: %q", n, out)
 	}
 }
