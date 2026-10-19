@@ -16,10 +16,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// diffExperimental is the caveat every diff command's help carries while the
+// review flow is still being worked out.
+const diffExperimental = "Experimental: the review flow is still being worked out; its\n" +
+	"commands, flags and review file may change without a migration."
+
 func newDiffCmd(a *app) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "diff",
-		Short: "Review a container's uncommitted changes with its agent",
+		Short: "Review a container's uncommitted changes with its agent (experimental)",
+		Long: "Review a container's uncommitted changes with its agent.\n\n" +
+			diffExperimental,
 		// RunE stops cobra inheriting the root's RunE, which exits 0 for a
 		// mistyped subcommand.
 		Args: noArgs(),
@@ -36,12 +43,12 @@ func newDiffEditCmd(a *app) *cobra.Command {
 	var workspace string
 	cmd := &cobra.Command{
 		Use:   "edit NAME",
-		Short: "Comment on a container's uncommitted changes",
+		Short: "Comment on a container's uncommitted changes (experimental)",
 		Long: "Open a container's uncommitted changes in your editor and write comments\n" +
 			"under the lines they are about, with >> at the start of a line. Saving keeps\n" +
 			"the comments as a draft; `dev diff complete` sends them to the agent.\n\n" +
 			"Only a guarded container has its folder on the host, so only a guarded\n" +
-			"container can be reviewed this way.",
+			"container can be reviewed this way.\n\n" + diffExperimental,
 		Args: exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runDiffEdit(cmd.Context(), a, workspace, args[0])
@@ -60,12 +67,12 @@ func newDiffCompleteCmd(a *app) *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "complete NAME",
-		Short: "Send the drafted comments to the agent",
+		Short: "Send the drafted comments to the agent (experimental)",
 		Long: "Send every comment from `dev diff edit` to the agent in one message, and mark\n" +
 			"the round as sent so the next review shows what changed since. The agent has\n" +
 			"to be installed in the container already; --print writes the message instead,\n" +
 			"for an agent dev cannot start or a message that is too large.\n\n" +
-			"The container is started first if it is not running.",
+			"The container is started first if it is not running.\n\n" + diffExperimental,
 		Args: exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runDiffComplete(cmd.Context(), a, workspace, args[0], completeOpts{

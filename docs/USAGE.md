@@ -73,7 +73,10 @@ To get a shell instead:
 dev container shell api
 ```
 
-### Review an agent's changes
+### Review an agent's changes (experimental)
+
+> **Experimental.** The review flow is still being worked out; its commands,
+> flags and review file may change without a migration.
 
 A guarded container leaves the work on your disk, so `dev` can show you the
 uncommitted diff and carry your comments back to the agent.
@@ -1503,17 +1506,20 @@ scaffolding, the branch is the work.
 leaves the checkout and its record. `dev workspace remove` refuses while the
 workspace holds worktrees, as it does for containers.
 
-### diff
+### diff (experimental)
 
 ```
 dev diff edit NAME [--workspace W]
 dev diff complete NAME [--workspace W] [--agent ID] [--new-session] [--print]
 ```
 
+> **Experimental.** Its commands, flags and review file may change without a
+> migration.
+
 `diff` reviews a guarded container's uncommitted changes and sends comments on
 them to its agent. The container need not be running for `edit`, and `complete`
 starts it as `start-agent` does. See
-[Review an agent's changes](#review-an-agents-changes).
+[Review an agent's changes](#review-an-agents-changes-experimental).
 
 **`edit`** opens the changes in `$VISUAL`, else `$EDITOR`, else `vi`.
 Comments are lines starting with `>>` at column 0 under the line they are

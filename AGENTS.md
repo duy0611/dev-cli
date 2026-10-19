@@ -22,6 +22,8 @@ operator. Module `github.com/duy0611/dev-cli`; version in
 - The k8s provider is **experimental**: its settings, objects and lifecycle may
   change without a migration. The local provider is the stable one; say so
   wherever the two appear side by side.
+- `dev diff` is **experimental** too: its commands, flags and review file may
+  change without a migration.
 
 ## Git in the dev container
 
