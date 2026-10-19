@@ -202,10 +202,12 @@ func TestStartAgentOnARunningContainerRunsTheWatchdogOnce(t *testing.T) {
 }
 
 // stubRunningDocker makes every container look running.
-func stubRunningDocker(t *testing.T, dir string) {
+func stubRunningDocker(t *testing.T, dir string, probe ...string) {
+	probe = append(probe, "ensure")
+	probeAnswer := probe[0]
 	t.Helper()
 	writeFile(t, filepath.Join(dir, "docker"),
-		"#!/bin/sh\necho \"$*\" >> '"+filepath.Join(dir, "docker-calls")+"'\ncase \"$*\" in\n  *State*) echo running ;;\n  ps*) echo abc123 ;;\nesac\nexit 0\n")
+		"#!/bin/sh\necho \"$*\" >> '"+filepath.Join(dir, "docker-calls")+"'\ncase \"$*\" in\n  exec*) echo \""+probeAnswer+"\" ;;\n  *State*) echo running ;;\n  ps*) echo abc123 ;;\nesac\nexit 0\n")
 	if err := os.Chmod(filepath.Join(dir, "docker"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -317,8 +319,57 @@ func TestRepairOutputIsSerialised(t *testing.T) {
 		}
 	}
 	stubRunningDocker(t, filepath.Dir(log))
+	got := captureStderr(t, func() { run(t.Context(), a, []string{"container", "list"}) })
+	if n := strings.Count(got, "after 31 idle minutes"); n != 2 {
+		t.Errorf("reports = %d, want 2: %q", n, got)
+	}
+	for _, l := range strings.Split(strings.TrimSpace(got), "\n") {
+		if !strings.HasPrefix(l, "dev: ") {
+			t.Errorf("interleaved stderr line %q", l)
+		}
+	}
+	if strings.Contains(out.String(), "idle minutes") {
+		t.Errorf("a repair notice reached stdout: %q", out)
+	}
+}
+
+func TestRepairOnAHealthyContainerOnlyProbes(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	log := stubIdleDevcontainer(t, "started")
+	if err := createIdle(t, a, "x", "--no-start"); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(log)
+	if err := os.WriteFile(log, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stubRunningDocker(t, dir, "ok")
 	run(t.Context(), a, []string{"container", "list"})
-	if n := strings.Count(out.String(), "after 31 idle minutes"); n != 2 {
-		t.Errorf("reports = %d, want 2: %q", n, out)
+	if calls := callsIn(t, log); strings.Contains(calls, "IDLE-EXEC") || strings.Contains(calls, "exec") {
+		t.Errorf("devcontainer exec on a healthy container:\n%s", calls)
+	}
+	if d := callsIn(t, filepath.Join(dir, "docker-calls")); !strings.Contains(d, "exec -u root abc123 sh -c") {
+		t.Errorf("no root probe:\n%s", d)
+	}
+}
+
+func TestRepairWarnsOnAProbeError(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	log := stubIdleDevcontainer(t, "started")
+	if err := createIdle(t, a, "x", "--no-start"); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(log)
+	stubRunningDocker(t, dir, "ok")
+	writeFile(t, filepath.Join(dir, "docker"),
+		"#!/bin/sh\ncase \"$*\" in\n  exec*) echo nope >&2; exit 1 ;;\n  *State*) echo running ;;\n  ps*) echo abc123 ;;\nesac\nexit 0\n")
+	got := captureStderr(t, func() { run(t.Context(), a, []string{"container", "list"}) })
+	if !strings.Contains(got, "idle stop for x") {
+		t.Errorf("no warning: %q", got)
+	}
+	if strings.Contains(callsIn(t, log), "IDLE-EXEC") {
+		t.Error("fell back to a full exec after a probe error")
 	}
 }

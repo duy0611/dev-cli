@@ -15,6 +15,12 @@ import (
 // ensureIdle starts the idle watchdog in c, and reports the stop it recorded
 // since the last call. An error only warns: idle stop never fails a command.
 func (a *app) ensureIdle(ctx context.Context, p provider.Provider, c model.Container) {
+	a.ensureIdleTo(ctx, p, c, false)
+}
+
+// ensureIdleTo is ensureIdle with the stop notice on stderr when quiet. The
+// repair pass runs inside commands whose stdout is data.
+func (a *app) ensureIdleTo(ctx context.Context, p provider.Provider, c model.Container, quiet bool) {
 	if _, ok := p.(provider.IdleStopper); !ok || !c.IdleStop {
 		return
 	}
@@ -55,6 +61,10 @@ func (a *app) ensureIdle(ctx context.Context, p provider.Provider, c model.Conta
 	if stop.Outcome == "reaped" {
 		what = "had its processes stopped"
 	}
+	if quiet {
+		warnf(a, "container %s %s at %s after %d idle minutes", c.Name, what, stop.At.Local().Format("15:04"), minutes)
+		return
+	}
 	a.printf("container %s %s at %s after %d idle minutes\n", c.Name, what, stop.At.Local().Format("15:04"), minutes)
 }
 
@@ -78,8 +88,10 @@ var repairTimeout = 10 * time.Second
 var repairGrace = time.Second
 
 // repairIdle restarts the watchdog in every running container this run did not
-// already ensure: one started behind dev's back has none. Best-effort, and
-// returns by the deadline whatever the engine is doing.
+// already ensure: one started behind dev's back has none. A cheap probe through
+// the engine comes first, since the full Ensure runs the devcontainer CLI and
+// its exec would count as a session. Best-effort, and returns by the deadline
+// whatever the engine is doing.
 func (a *app) repairIdle(ctx context.Context) {
 	if !a.isOpened || a.openErr != nil {
 		return
@@ -142,6 +154,25 @@ func (a *app) repairIdle(ctx context.Context) {
 			if s, err := statusWithin(ctx, j.p, j.c); err != nil || s != model.StatusRunning {
 				return
 			}
+			ok, err := idle.Healthy(ctx, j.p.(provider.IdleStopper), j.c)
+			if ctx.Err() != nil {
+				return
+			}
+			if err != nil {
+				a.outMu.Lock()
+				warnf(a, "idle stop for %s: %v", j.c.Name, err)
+				a.outMu.Unlock()
+				return
+			}
+			a.idleMu.Lock()
+			if a.idleSeen == nil {
+				a.idleSeen = map[string]bool{}
+			}
+			a.idleSeen[j.c.WorkspaceName+"/"+j.c.Name] = true
+			a.idleMu.Unlock()
+			if ok {
+				return
+			}
 			t, err := a.target(ctx, j.c, j.ws, j.p)
 			if err != nil {
 				if ctx.Err() == nil {
@@ -152,7 +183,7 @@ func (a *app) repairIdle(ctx context.Context) {
 				return
 			}
 			defer t.release()
-			a.ensureIdle(ctx, j.p, t.container)
+			a.ensureIdleTo(ctx, j.p, t.container, true)
 		}()
 	}
 	done := make(chan struct{})
