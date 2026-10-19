@@ -32,8 +32,8 @@ This container may be guarded, with `.git` mounted read-only:
   `Read-only file system`, the container is guarded. Do not retry or work
   around it: leave the changes uncommitted and say so in your summary. The
   operator reviews and commits them from the host.
-- Otherwise the container is isolated: commit on a branch, and push if asked.
-  The operator brings the work home with `dev container fetch`.
+- Otherwise commit on a branch, and push if asked. If the container is
+  isolated, the operator brings the work home with `dev container fetch`.
 
 ## Commands
 

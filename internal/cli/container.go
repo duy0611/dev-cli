@@ -1096,9 +1096,9 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 	cmd.Flags().BoolVar(&acceptConfig, "accept-config", false,
 		"rebuild with a project configuration that changed since the container was last built")
 	cmd.Flags().StringArrayVar(&addFolders, "add-folder", nil,
-		"add a folder to a guarded container; repeatable")
+		"add a folder to a guarded or unprotected container; repeatable")
 	cmd.Flags().StringArrayVar(&dropFolders, "remove-folder", nil,
-		"remove a folder from a guarded container; repeatable")
+		"remove a folder from a guarded or unprotected container; repeatable")
 	cmd.Flags().Var(modeFlag{&mode}, "mode",
 		"change the container's mode: guarded, unprotected, or isolated (one way)")
 	return cmd
