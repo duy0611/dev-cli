@@ -73,6 +73,86 @@ To get a shell instead:
 dev container shell api
 ```
 
+### Review an agent's changes
+
+A guarded container leaves the work on your disk, so `dev` can show you the
+uncommitted diff and carry your comments back to the agent.
+
+```sh
+dev diff edit api
+```
+
+`edit` writes the changes to a temporary file and opens your editor on it.
+Write a comment on its own line under the line it is about, starting with `>>`
+at column 0:
+
+```diff
+@@ -12,6 +12,7 @@
+ func handler(w http.ResponseWriter, r *http.Request) {
++    if r.Method != http.MethodPost {
+>> why not let the router enforce this?
+         http.Error(w, "method", http.StatusMethodNotAllowed)
+     }
+```
+
+Lines starting with `#` are dev's own — the instructions, and the last round's
+comments — and are ignored when the file is read back. Saving keeps the
+comments as a draft and prints how many were saved.
+
+`$VISUAL` opens the file, else `$EDITOR`, else `vi`. `edit` reads the file back
+when the editor process exits, so an editor that detaches — VS Code, for one —
+needs its wait flag: plain `code` returns at once and dev would save the file
+before you typed.
+
+```sh
+EDITOR="code --wait" dev diff edit api
+```
+
+When the file comes back unchanged, dev says so and names this fix.
+
+When you are done, quit the agent (or leave it running), then send the whole
+draft in one message:
+
+```sh
+dev diff complete api
+```
+
+`complete` starts the container if it is stopped and continues the agent's most
+recent session, so the conversation that made the changes reads your comments.
+If that agent is still running in the container, it asks first: two processes
+would share one conversation. `--new-session` starts a fresh session instead;
+the review carries its own context, so it works nearly as well. `--print`
+writes the message to stdout for pasting into a session dev cannot type into,
+and is the way round a review too large for one message (about 100 KiB; Linux
+caps a single argument at 128 KiB).
+
+The argv each agent gets, after its binary:
+
+| Agent | Continues the last session | New session |
+|---|---|---|
+| `claude` | `--continue PROMPT` | `PROMPT` |
+| `opencode` | `--continue --prompt PROMPT` | `--prompt PROMPT` |
+| `hermes` | `chat --continue --query PROMPT` | `chat --query PROMPT` |
+
+`codex` cannot take a first message, so `--agent codex` is refused; use
+`--print`. `claude`'s combination was checked against the real CLI;
+`opencode`'s and `hermes`'s come from their documentation and were not
+confirmed here — if one of them ignores the prompt, rerun with `--new-session`
+or use `--print`. Hermes keeps its interactive mode only on a real TTY, which
+the exec gives it; what its bare `--continue` resumes was not checked here.
+
+After a send, the next `edit` starts with a `# Last review` block listing what
+was sent and when, and marks the hunks that changed since with
+`# changed since your last review`. Comments on code that disappeared are
+carried to the nearest remaining anchor with a note saying where they were —
+`complete` refuses rather than send one whose hunk it cannot find, and points
+back at `edit`.
+
+Review reads the folder with host git, so it needs a folder on the host: only a
+guarded container has one. An isolated container copies it into its volume, and
+a folderless container has none at all; both are refused. Legacy containers,
+made before modes existed, are accepted as guarded.
+
 ### Work a branch in its own checkout
 
 A worktree gives a branch its own directory, so an agent can work on it without
@@ -1422,6 +1502,52 @@ scaffolding, the branch is the work.
 `dev container remove` on a container on a worktree removes the container and
 leaves the checkout and its record. `dev workspace remove` refuses while the
 workspace holds worktrees, as it does for containers.
+
+### diff
+
+```
+dev diff edit NAME [--workspace W]
+dev diff complete NAME [--workspace W] [--agent ID] [--new-session] [--print]
+```
+
+`diff` reviews a guarded container's uncommitted changes and sends comments on
+them to its agent. The container need not be running for `edit`, and `complete`
+starts it as `start-agent` does. See
+[Review an agent's changes](#review-an-agents-changes).
+
+**`edit`** opens the changes in `$VISUAL`, else `$EDITOR`, else `vi`.
+Comments are lines starting with `>>` at column 0 under the line they are
+about; consecutive `>>` lines are one comment. `#` lines are dev's and are
+ignored. Saving stores the draft and prints how many comments it saved. A file
+whose diff lines were edited is refused rather than stored, naming the line;
+at a terminal it offers to reopen the file, and otherwise exits 1 with the
+file's path, which is kept. A successful edit removes the temporary file.
+
+**`complete`**
+
+| Flag | Meaning |
+|---|---|
+| `--agent ID` | which agent runs: `claude` (default), `opencode` or `hermes` |
+| `--new-session` | start a fresh session instead of continuing the agent's last |
+| `--print` | print the message instead of running an agent; cannot be combined with `--agent` or `--new-session` |
+
+The round is marked sent once the agent has started, so a crash in the agent
+does not resend the comments. `--print` marks it sent too, since printing is
+how you send it.
+
+| Case | Exit |
+|---|---|
+| Container does not exist | 3 |
+| Container isolated or folderless | 2 |
+| No uncommitted changes (`edit`) | 0 |
+| No comments in the draft | 2 |
+| A commented hunk is no longer in the diff | 1 |
+| The saved file changed a diff line | 1 (offers a reopen at a terminal) |
+| The editor exited non-zero | 1 |
+| The agent cannot take a first message | 2 |
+| The agent is already running and there is no terminal | 1 |
+| The review is too large for one message | 1 |
+| `--print` with `--agent` or `--new-session` | 2 |
 
 ### audit
 
