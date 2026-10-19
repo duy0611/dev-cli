@@ -3,6 +3,8 @@ package idle
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -139,11 +141,12 @@ func TestEnsureLeavesARunningWatchdog(t *testing.T) {
 	if err := os.WriteFile(sh, []byte("sleep 60\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("sh", sh)
+	cmd := exec.Command("sh", sh, "run", r.idleDir, "86400", "3600")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	t.Cleanup(func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); _ = cmd.Wait() })
 	if err := os.WriteFile(filepath.Join(r.idleDir, "pid"), []byte(strconv.Itoa(cmd.Process.Pid)), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +176,8 @@ func TestEnsureReplacesAStalePidfile(t *testing.T) {
 	}
 	// The cleanup kills from the pidfile, so wait for the watchdog to replace the stale pid.
 	for end := time.Now().Add(2 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
-		if b, _ := os.ReadFile(filepath.Join(r.idleDir, "pid")); strings.TrimSpace(string(b)) != strconv.Itoa(cmd.Process.Pid) {
+		b, _ := os.ReadFile(filepath.Join(r.idleDir, "pid"))
+		if got := strings.TrimSpace(string(b)); got != "" && got != strconv.Itoa(cmd.Process.Pid) {
 			return
 		}
 	}
@@ -246,5 +250,102 @@ func TestEnsureFailsWhenTheDirCannotBeMade(t *testing.T) {
 func TestSecondsClampsToOne(t *testing.T) {
 	if seconds(500*time.Millisecond) != 1 || seconds(0) != 1 || seconds(90*time.Second) != 90 {
 		t.Fatal("bad clamp")
+	}
+}
+
+func TestEnsureIgnoresAProcessThatOnlyMentionsTheWatchdog(t *testing.T) {
+	r := newEnsureRig(t)
+	if err := os.MkdirAll(r.idleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", "-c", "sleep 60 # watchdog.sh")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	if err := os.WriteFile(filepath.Join(r.idleDir, "pid"), []byte(strconv.Itoa(cmd.Process.Pid)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := r.ensure(t); s != Started {
+		t.Fatalf("got %v", s)
+	}
+	waitPid(t, r.idleDir)
+}
+
+type probeProvider struct {
+	provider.Provider
+	err error
+	out string
+}
+
+func (p probeProvider) ProbeIdle(_ context.Context, _ model.Container, argv []string, w io.Writer) error {
+	if p.err != nil {
+		return p.err
+	}
+	if p.out != "" {
+		_, err := io.WriteString(w, p.out)
+		return err
+	}
+	c := exec.Command(argv[0], argv[1:]...)
+	c.Stdout = w
+	return c.Run()
+}
+
+func (r *ensureRig) healthy(t *testing.T) bool {
+	t.Helper()
+	ok, err := healthy(context.Background(), probeProvider{}, model.Container{Name: "box"}, r.state, r.fallback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ok
+}
+
+func TestHealthyProbe(t *testing.T) {
+	r := newEnsureRig(t)
+	if r.healthy(t) {
+		t.Fatal("healthy with no watchdog")
+	}
+	r.ensure(t)
+	waitPid(t, r.idleDir)
+	if !r.healthy(t) {
+		t.Fatal("not healthy with a running watchdog")
+	}
+	marker := filepath.Join(r.idleDir, "marker")
+	if err := os.WriteFile(marker, []byte("stopped 1 2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if r.healthy(t) {
+		t.Fatal("healthy with a marker pending")
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatal("the probe removed the marker")
+	}
+}
+
+func TestHealthyProbeRejectsAMentioningProcess(t *testing.T) {
+	r := newEnsureRig(t)
+	if err := os.MkdirAll(r.idleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", "-c", "sleep 60 # watchdog.sh")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	if err := os.WriteFile(filepath.Join(r.idleDir, "pid"), []byte(strconv.Itoa(cmd.Process.Pid)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if r.healthy(t) {
+		t.Fatal("healthy on a stale pidfile")
+	}
+}
+
+func TestHealthyErrors(t *testing.T) {
+	c := model.Container{Name: "box"}
+	if _, err := healthy(context.Background(), probeProvider{err: errors.New("boom")}, c, "/x", "/y"); err == nil {
+		t.Fatal("want the probe error")
+	}
+	if _, err := healthy(context.Background(), probeProvider{out: "maybe\n"}, c, "/x", "/y"); err == nil {
+		t.Fatal("want an error for unexpected output")
 	}
 }

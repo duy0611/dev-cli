@@ -38,9 +38,24 @@ func init() {
 // devcontainer.json. See provider.ConfigOverrider.
 func (p *Provider) OverridesConfig() {}
 
-// StopsWhenIdle marks this provider as one whose containers run the idle
-// watchdog. See provider.IdleStopper.
-func (p *Provider) StopsWhenIdle() {}
+// ProbeIdle runs argv as root in the container with docker exec. See
+// provider.IdleStopper.
+func (p *Provider) ProbeIdle(ctx context.Context, c model.Container, argv []string, stdout io.Writer) error {
+	id, err := p.containerID(ctx, c)
+	if err != nil {
+		return err
+	}
+	if id == "" {
+		return fmt.Errorf("container %s does not exist yet", c.Name)
+	}
+	var stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, dockerBin, append([]string{"exec", "-u", "root", id}, argv...)...)
+	cmd.Stdout, cmd.Stderr = stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("docker exec: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
 
 // Up creates or starts the container. The CLI does both in one call.
 func (p *Provider) Up(ctx context.Context, c model.Container, env []provider.EnvVar) error {

@@ -11,8 +11,8 @@ sessions() {
 		read -r line < "$s" 2>/dev/null || continue
 		pid=${line%% *}
 		set -- ${line##*) }
-		[ "$1" = Z ] && continue
-		[ "$2" = 0 ] && [ "$pid" != 1 ] && n=$((n + 1))
+		[ "${1:-}" = Z ] && continue
+		[ "${2:-}" = 0 ] && [ "$pid" != 1 ] && n=$((n + 1))
 	done
 	echo "$n"
 }
@@ -31,7 +31,12 @@ run)
 	idle=0
 	while :; do
 		sleep "$TICK"
-		if [ "$(sessions)" -gt 0 ]; then
+		n=$(sessions)
+		# An unreadable count is a session: failing safe keeps the container up.
+		case $n in
+		''|*[!0-9]*) n=1 ;;
+		esac
+		if [ "$n" -gt 0 ]; then
 			idle=0
 		else
 			idle=$((idle + TICK))

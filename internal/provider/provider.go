@@ -72,9 +72,12 @@ type ConfigOverrider interface {
 	OverridesConfig()
 }
 
-// IdleStopper is a provider whose containers can stop themselves when idle. The
-// method is a marker: implementing it is the answer.
-type IdleStopper interface{ StopsWhenIdle() }
+// IdleStopper is a provider whose containers can stop themselves when idle.
+type IdleStopper interface {
+	// ProbeIdle runs argv in c as root through the engine directly, cheaply,
+	// without the devcontainer CLI.
+	ProbeIdle(ctx context.Context, c model.Container, argv []string, stdout io.Writer) error
+}
 
 // ConfigReader is a provider that can report a container's configuration as the
 // devcontainer CLI will merge it: the project's document, every feature it

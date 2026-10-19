@@ -205,3 +205,18 @@ func TestWatchdogResetsOnASession(t *testing.T) {
 		t.Fatalf("marker = %q", got)
 	}
 }
+
+func TestWatchdogCountSurvivesAMalformedStatLine(t *testing.T) {
+	r := newRig(t, []fakeProc{{1, "sh", "S", 0}}, false)
+	d := filepath.Join(r.proc, "40")
+	if err := os.MkdirAll(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d, "stat"), []byte("40 (x) S\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := r.cmd("count").Output()
+	if err != nil || strings.TrimSpace(string(out)) != "0" {
+		t.Fatalf("count = %q, %v", out, err)
+	}
+}
