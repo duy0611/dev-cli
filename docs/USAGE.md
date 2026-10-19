@@ -474,11 +474,12 @@ dev container rebuild both --remove-folder ~/code/something/repo-2
 
 An added folder gets the container's mode from the rebuilt container's first
 command; a removed one's work is already on your host. If an extra folder
-disappears from your host, `start` refuses, exit 1, naming it and the `--remove-folder` that
-drops it. An isolated container's folders, and any container's primary, are
-fixed: recreate the container to change them. In isolated mode `fetch` brings
-each repository's branches home into that repository, and `remove` checks each
-one, naming the folder that still holds work.
+disappears from your host, `start` refuses, exit 1, naming it and the
+`--remove-folder` that drops it. An isolated container's folders, and any
+container's primary, are fixed: recreate the container to change them. In
+isolated mode `fetch` brings each repository's branches home into that
+repository, and `remove` checks each one, naming the folder that still holds
+work.
 
 The experimental k8s provider takes one folder; more is exit 2.
 
@@ -659,27 +660,27 @@ set is checked as `create` checks it, so a set the new mode refuses is exit 2.
 The common use is to open a guarded container up for a while, then close it:
 
 ```sh
-dev container rebuild api --mode unprotected   # let the agent commit a stack of PRs
-dev container rebuild api --mode guarded       # guarded again from the next command
+dev container rebuild api --mode unprotected   # open up for a stack of PRs
+dev container rebuild api --mode guarded       # guarded again
 ```
 
 Switching to guarded protects from then on and undoes nothing: whatever the
 container wrote to `.git` while it was unprotected is still there. Read
 `.git/config` and the hooks before you trust the folder again. A rebuild
-replaces the container, so a running agent session stops; `start-agent` resumes where the
-agent keeps its own state.
+replaces the container, so a running agent session stops; `start-agent` resumes
+where the agent keeps its own state.
 
 A switch into isolated copies each folder into a volume as it is at that moment,
 uncommitted and untracked files included, exactly as the first create of an
 isolated container does, then runs the lifecycle commands. If `up` or the copy
-fails, `dev` removes the new container and volumes, returns the original
-error and keeps the old mode: rerun the command, or `rebuild` for the old
-container back. If only a lifecycle command fails, the container is already isolated and
+fails, `dev` removes the new container and volumes, returns the original error
+and keeps the old mode: rerun the command, or `rebuild` for the old container
+back. If only a lifecycle command fails, the container is already isolated and
 its volume holds the copy, so the mode is recorded as isolated. A volume left
 from an earlier isolated life is exit 1, naming it.
 
-The mode is recorded only after the rebuild succeeds, never by `start` or `exec`.
-The audit log's `rebuild` record carries `mode_from` and `mode_to`.
+The mode is recorded only after the rebuild succeeds, never by `start` or
+`exec`. The audit log's `rebuild` record carries `mode_from` and `mode_to`.
 
 ### Keep an agent's plugins across a rebuild
 
@@ -1199,8 +1200,9 @@ Removing the active workspace leaves none active rather than a dangling pointer.
 ### container
 
 ```
-dev container create NAME [--folder PATH]... [--mode guarded|unprotected|isolated] [--generate] [--tools LIST]
-                         [--no-persist-state] [--agent-config PATH | --no-agent-config] [--no-start]
+dev container create NAME [--folder PATH]...
+                         [--mode guarded|unprotected|isolated] [--generate] [--tools LIST] [--no-persist-state]
+                         [--agent-config PATH | --no-agent-config] [--no-start]
                          [--allow-privileged]
 dev container create NAME --no-folder [--tools LIST] [--no-persist-state]
                          [--agent-config PATH | --no-agent-config] [--no-start]
@@ -1343,14 +1345,15 @@ only to a container `dev` generated.
 A rebuild keeps the volume on both providers. To start from an empty workspace,
 `remove` and `create` — which is explicit about destroying the contents.
 
-`--mode` changes the container's mode along the edges in
-[Changing a container's mode](#changing-a-containers-mode); the new mode is
-written only once the rebuild succeeds. `--add-folder` and `--remove-folder`,
-each repeatable, change a guarded or unprotected container's extra folders.
-The resulting set is checked as `create` checks it before anything changes, and
-the record is written only once the rebuild succeeds. `--remove-folder` of the primary, `--add-folder` of a folder already
-there, and either flag on an isolated or legacy container are exit 2; a folder
-gone from the host can still be removed by the path it was added with.
+`--mode` changes the container's mode along the edges in [Changing a container's
+mode](#changing-a-containers-mode); the new mode is written only once the
+rebuild succeeds. `--add-folder` and `--remove-folder`, each repeatable, change
+a guarded or unprotected container's extra folders. The resulting set is checked
+as `create` checks it before anything changes, and the record is written only
+once the rebuild succeeds. `--remove-folder` of the primary, `--add-folder` of a
+folder already there, and either flag on an isolated or legacy container are
+exit 2; a folder gone from the host can still be removed by the path it was
+added with.
 
 A rebuild of a project-owned container first compares its configuration with
 the one the container was last built from — the merged configuration, its
