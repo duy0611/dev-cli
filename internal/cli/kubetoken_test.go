@@ -139,9 +139,10 @@ func TestAskKubeTokenNeedsATerminal(t *testing.T) {
 // went.
 type recordingProvider struct {
 	provider.Provider
-	execs     []recordedExec
-	noKubectl bool
-	failExec  bool
+	execs        []recordedExec
+	noKubectl    bool
+	failExec     bool
+	pgrepRunning bool
 }
 
 type recordedExec struct {
@@ -161,6 +162,11 @@ func (p *recordingProvider) Exec(_ context.Context, _ model.Container, cmd []str
 		return errors.New("exec failed")
 	}
 	if p.noKubectl && strings.Contains(strings.Join(cmd, " "), "command -v kubectl") {
+		return errors.New("exit status 1")
+	}
+	// pgrep succeeds only when the test says the agent is running; every other
+	// exec succeeds, so the default is "not running".
+	if strings.Contains(strings.Join(cmd, " "), "pgrep") && !p.pgrepRunning {
 		return errors.New("exit status 1")
 	}
 	return nil
