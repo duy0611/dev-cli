@@ -42,18 +42,18 @@ if [ "$(id -u)" = 0 ]; then run=
 elif sudo -n true 2>/dev/null; then run="sudo -n"
 else cat >/dev/null; echo unavailable; exit 0; fi
 if [ -d "$state" ]; then dir=$state/idle; else dir=$fallback; fi
-$run mkdir -p "$dir"
-if [ -e "$dir/marker" ]; then
-	echo "marker $(cat "$dir/marker")"
+$run mkdir -p "$dir" || exit 1
+if $run test -e "$dir/marker"; then
+	echo "marker $($run cat "$dir/marker")"
 	$run rm -f "$dir/marker"
 fi
-pid=$(cat "$dir/pid" 2>/dev/null)
+pid=$($run cat "$dir/pid" 2>/dev/null)
 case $pid in ''|*[!0-9]*) ;; *)
 	if tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -q watchdog.sh; then
 		cat >/dev/null; echo running; exit 0
 	fi ;;
 esac
-$run sh -c 'cat > "$1"' _ "$dir/watchdog.sh"
+$run sh -c 'cat > "$1"' _ "$dir/watchdog.sh" || exit 1
 if command -v setsid >/dev/null 2>&1; then
 	$run setsid sh "$dir/watchdog.sh" run "$dir" "$after" "$tick" </dev/null >/dev/null 2>&1 &
 else
@@ -76,7 +76,7 @@ func ensure(ctx context.Context, p provider.Provider, c model.Container, o Optio
 	}
 	var out, errb bytes.Buffer
 	cmd := []string{"sh", "-c", ensureScript, "dev-idle", stateDir,
-		strconv.Itoa(int(o.After.Seconds())), strconv.Itoa(int(o.Tick.Seconds())), fallback}
+		strconv.Itoa(seconds(o.After)), strconv.Itoa(seconds(o.Tick)), fallback}
 	err := p.Exec(ctx, c, cmd, provider.ExecOpts{Stdin: bytes.NewReader(Script), Stdout: &out, Stderr: &errb})
 	if err != nil {
 		return "", nil, fmt.Errorf("idle watchdog in %s: %w: %s", c.Name, err, strings.TrimSpace(errb.String()))
@@ -107,4 +107,9 @@ func ensure(ctx context.Context, p provider.Provider, c model.Container, o Optio
 
 func badOutput(c model.Container, out string) error {
 	return fmt.Errorf("idle watchdog in %s: unexpected output %q", c.Name, out)
+}
+
+// seconds is at least 1: the watchdog's sleep 0 would spin and an AFTER of 0 stops at once.
+func seconds(d time.Duration) int {
+	return max(1, int(d.Seconds()))
 }

@@ -75,7 +75,7 @@ func killPidfile(dir string) {
 		return
 	}
 	if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil && pid > 1 {
-		_ = syscall.Kill(pid, syscall.SIGKILL)
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
 	}
 }
 
@@ -226,5 +226,25 @@ func TestEnsureRejectsUnexpectedOutput(t *testing.T) {
 	_, _, err := ensure(context.Background(), hostProvider{out: "hello\n"}, model.Container{Name: "box"}, quiet, "/x", "/y")
 	if err == nil || !strings.Contains(err.Error(), "box") || !strings.Contains(err.Error(), "hello") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestEnsureFailsWhenTheDirCannotBeMade(t *testing.T) {
+	r := newEnsureRig(t)
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r.state = filepath.Join(t.TempDir(), "missing")
+	r.fallback = filepath.Join(file, "sub")
+	_, _, err := ensure(context.Background(), hostProvider{}, model.Container{Name: "box"}, quiet, r.state, r.fallback)
+	if err == nil {
+		t.Fatal("want an error")
+	}
+}
+
+func TestSecondsClampsToOne(t *testing.T) {
+	if seconds(500*time.Millisecond) != 1 || seconds(0) != 1 || seconds(90*time.Second) != 90 {
+		t.Fatal("bad clamp")
 	}
 }
