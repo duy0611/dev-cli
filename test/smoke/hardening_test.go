@@ -52,6 +52,21 @@ func gitFixture(t *testing.T) string {
 // read once: host git renames a new config over the old, which detaches a
 // single-file mount a moment later (at once on Linux, about 1.5s on a macOS
 // podman machine).
+// gitProbes are the paths under ws that must refuse a write, by every spelling
+// of .git a case-insensitive disk could honour.
+func gitProbes(ws string) map[string]string {
+	gitdir := ws + "/.git"
+	return map[string]string{
+		"config":           gitdir + "/config",
+		"info/attributes":  gitdir + "/info/attributes",
+		"a new hook":       gitdir + "/hooks/smoke-probe",
+		"commondir":        gitdir + "/commondir",
+		"CONFIG":           gitdir + "/CONFIG",
+		".GIT/config":      ws + "/.GIT/config",
+		"HOOKS/a new hook": gitdir + "/HOOKS/smoke-probe-upper",
+	}
+}
+
 func TestSmokeGitGuard(t *testing.T) {
 	requireBinaries(t, "devcontainer", "docker", "git")
 	t.Setenv("DEV_STATE", t.TempDir())
@@ -95,15 +110,7 @@ func TestSmokeGitGuard(t *testing.T) {
 
 	// Every route into .git, including case variants that got past single-file
 	// mounts on macOS.
-	probes := map[string]string{
-		"config":           gitdir + "/config",
-		"info/attributes":  gitdir + "/info/attributes",
-		"a new hook":       gitdir + "/hooks/smoke-probe",
-		"commondir":        gitdir + "/commondir",
-		"CONFIG":           gitdir + "/CONFIG",
-		".GIT/config":      ws + "/.GIT/config",
-		"HOOKS/a new hook": gitdir + "/HOOKS/smoke-probe-upper",
-	}
+	probes := gitProbes(ws)
 	tryAll := func(when string) {
 		t.Helper()
 		for label, path := range probes {
@@ -382,7 +389,7 @@ func TestSmokeUnprotectedRoundTrip(t *testing.T) {
 		if err == nil || !strings.Contains(out, "Read-only file system") {
 			t.Errorf("%s: a commit inside was not refused as read-only: %v\n%s", when, err, out)
 		}
-		for label, path := range map[string]string{"CONFIG": ".git/CONFIG", "a new hook": ".git/hooks/x"} {
+		for label, path := range gitProbes(".") {
 			if out, err := sh("echo '# smoke-probe' >> " + path); err == nil {
 				t.Errorf("%s: a write to %s succeeded inside the container: %s", when, label, out)
 			}
