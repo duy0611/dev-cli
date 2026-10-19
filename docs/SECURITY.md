@@ -130,6 +130,13 @@ dev container start-agent NAME --ssh-agent
 inside the container. Use keys made for the purpose, with spend limits and
 short expiry where the issuer offers them.
 
+**Idle stop is not containment.** A container nobody is connected to for 30
+minutes is stopped by a watchdog running inside it. Anything running as root
+there, or with passwordless sudo, can kill the watchdog, and the container then
+runs until the next `dev` command restarts it. For every other process the stop
+happens. It limits how long forgotten work keeps running; it does not limit
+what a hostile process can do meanwhile. Local provider only.
+
 ## Guarded's known gaps
 
 Guarded protects everything inside `.git`. It does not protect the files

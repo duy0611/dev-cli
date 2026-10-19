@@ -19,6 +19,7 @@ command. For what `dev` *is* and how it fits together, read the
   - [Commit a devcontainer.json that also works under dev](#commit-a-devcontainerjson-that-also-works-under-dev)
   - [Query a cluster from inside a container](#query-a-cluster-from-inside-a-container)
   - [Run a workspace in Kubernetes](#run-a-workspace-in-kubernetes)
+  - [Idle containers](#idle-containers)
   - [See what ran, and when](#see-what-ran-and-when)
   - [Clean up](#clean-up)
 - [Troubleshooting](#troubleshooting)
@@ -954,6 +955,44 @@ dev container exec api -- git pull
 `dev container sync api` pushes your workspace *settings*, not your files. See
 [Add a secret and rotate it](#add-a-secret-and-rotate-it).
 
+### Idle containers
+
+A container nobody has been connected to for 30 minutes is stopped, as
+`dev container stop` would: the container, its volumes and its work stay, and
+the next `start` (or `shell`, `exec`, `start-agent`) brings it back. This is on
+by default on the local provider. The experimental k8s provider has no idle
+stop: a pod whose main process dies is restarted, not stopped.
+
+`dev` starts a small watchdog inside the container with every start; nothing is
+installed on your host. A session is a process that entered the container from
+outside through the engine's exec: `dev container shell`, `exec`,
+`start-agent`, `dev diff complete`, the ssh relay, a plain `docker exec`, or a
+VS Code server while its editor is attached. Processes that session left behind
+do not count, so a detached `tmux` or a `nohup` job does not keep the container
+up. A VS Code server keeps it up until the server exits, usually within minutes
+of the editor closing.
+
+A container that must run unattended, a long build or a service under test, is
+created with `--no-idle-stop`. The choice is fixed at create.
+
+The watchdog needs root, since it signals the container's init. When the
+container's user is not root and has no passwordless `sudo`, `dev` warns once
+per run, `idle stop is unavailable in NAME: its user is not root and has no
+passwordless sudo`, and starts none.
+
+If a project's own start command has no `TERM` handler, init ignores the stop
+request. The watchdog then kills every other process instead, and the container
+stays running with nothing in it. Either way the next start prints
+`container NAME was stopped at 14:30 after 30 idle minutes` (or `had its
+processes stopped`) and records an `idle-stop` event, with `outcome` (`stopped`
+or `reaped`), `stopped_at` and `idle_minutes`, that `dev audit` shows.
+
+A container started outside `dev`, with `docker start` for instance, has no
+watchdog until the next `dev` command, which restarts a missing one in each
+running container, within 10 seconds and with a warning on failure. This is
+best-effort: a process running as root in the container can disable the
+watchdog, so it is not containment (see [SECURITY](SECURITY.md)).
+
 ### See what ran, and when
 
 Every container `dev` creates, rebuilds, starts, stops or removes, every command
@@ -1214,7 +1253,7 @@ Removing the active workspace leaves none active rather than a dangling pointer.
 ```
 dev container create NAME [--folder PATH]... [--mode guarded|isolated] [--generate] [--tools LIST]
                          [--no-persist-state] [--agent-config PATH | --no-agent-config] [--no-start]
-                         [--allow-privileged]
+                         [--allow-privileged] [--no-idle-stop]
 dev container create NAME --no-folder [--tools LIST] [--no-persist-state]
                          [--agent-config PATH | --no-agent-config] [--no-start]
 dev container create NAME --from SOURCE [--folder PATH | --no-folder] [--tools +ID,-ID]
@@ -1254,6 +1293,7 @@ primary, and the rest are extra folders (see
 | `--no-agent-config` | apply no agents.yaml, even if the project has one |
 | `--from` | start from another generated container's tools and settings in this workspace |
 | `--no-start` | record the container without starting it |
+| `--no-idle-stop` | do not stop this container when nobody is connected to it; fixed at create. See [Idle containers](#idle-containers) |
 
 The mode is fixed when the container is created and kept by `rebuild`; see
 [What a container can do to your git](#what-a-container-can-do-to-your-git). A

@@ -41,6 +41,17 @@ every command resolves the settings afresh, and no copy exists there to drift.
 It is optional for the reason `AgentForwarder` is, not because one provider
 cannot implement it.
 
+`IdleStopper` is optional in the same way, and only the local provider has it:
+`Ensure` copies the watchdog into the container and starts it once. The k8s
+provider omits it, since a pod whose PID 1 dies is restarted, so a watchdog
+would be a restart loop. Sessions are judged from `/proc` inside the container,
+never from the host and never from anything a process can claim: a process
+whose parent is outside the PID namespace reports `ppid 0`, which only the
+engine's exec can produce, and it does not depend on how Docker Desktop or a
+podman machine report parent PIDs. PID 1 receives only signals it has a handler
+for, so the watchdog sends `TERM`, and if init survives it kills every other
+process with `kill -KILL -1` and records `reaped` rather than `stopped`.
+
 ## Invariants
 
 Violating one of these produces a failure far from its cause. Code comments

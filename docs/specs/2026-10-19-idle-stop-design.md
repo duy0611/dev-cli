@@ -94,10 +94,17 @@ started it.
 
 Every minute it counts sessions. After 30 minutes with none it:
 
-1. writes a marker next to itself holding the time and the idle minutes;
-2. sends `TERM` to PID 1, and `KILL` if PID 1 is still there ten seconds later,
-   which ends the container exactly as `docker stop` would, leaving its
-   filesystem and volumes in place.
+1. writes a marker next to itself holding the time, the idle minutes and the outcome;
+2. sends `TERM` to PID 1 and waits ten seconds. If PID 1 is gone, the container
+   has stopped exactly as `docker stop` would, filesystem and volumes in place.
+   If it is still there, the watchdog kills every other process with
+   `kill -KILL -1`, leaving the container running with only its init.
+
+PID 1 inside its own namespace receives only signals it has a handler for,
+`KILL` included. The devcontainer CLI's default start command traps `TERM`
+(`trap "exit 0" 15`), so `TERM` stops the container; a project command with no
+handler would not, which is why the fallback reaps the processes instead. The
+marker records which happened: `stopped` or `reaped`.
 
 PID 1 is root, so the watchdog needs root. `dev` runs it directly when the
 remote user is root and under `sudo -n` otherwise. A container with neither —
@@ -115,8 +122,8 @@ the first is alive.
 A container started some other way (`docker start` behind `dev`'s back) gets no
 watchdog until the next `dev` command starts one; this is documented.
 
-Every `dev` run also checks, best-effort and in parallel with a short timeout,
-that each running container's watchdog is alive and restarts it if not. That
+Every `dev` run that opened the database also checks, best-effort and in
+parallel with a short timeout, that each running container's watchdog is alive and restarts it if not. That
 check never stops anything itself; it only repairs. It lives on the host for
 the length of the command and leaves nothing behind.
 
@@ -147,7 +154,7 @@ watchdog, and the repair pass ignores them.
 Migration `0011` adds the column, `NOT NULL DEFAULT 1`, so containers that
 predate the feature get it. The column is fixed at create, like the mode; a
 container that must run unattended — a long build, a service under test — is
-created with the flag. No watchdog is started, and a running one is stopped.
+created with the flag. No watchdog is ever started for it.
 
 ## The marker
 

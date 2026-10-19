@@ -88,6 +88,7 @@ internal/seed/        an isolated container's first contents: tree + bundle
 internal/relay/, relaybin/  the ssh agent relay and its embedded binary
 internal/review/       a guarded container's diff, the review file, the message for the agent
 internal/herdr/       optional Herdr registration
+internal/idle/        the in-container watchdog that stops an idle container
 internal/xpath/       physical paths, name and env-key validation
 test/smoke/           end-to-end, behind the `smoke` build tag
 ```
