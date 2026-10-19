@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.17.0](https://github.com/duy0611/dev-cli/compare/v0.16.0...v0.17.0) (2026-10-19)
+
+
+### Features
+
+* **agent:** start claude, opencode and hermes with a first message ([803af6e](https://github.com/duy0611/dev-cli/commit/803af6e7a4e2862db44f5ee18428a5d08c8fcfd6))
+* **cli:** dev diff edit and complete ([2ec25cc](https://github.com/duy0611/dev-cli/commit/2ec25cc9d0e4601633a8a64a61580aa728437b3e))
+* **review:** read a guarded container's diff and carry review comments ([d379e9d](https://github.com/duy0611/dev-cli/commit/d379e9d5cb8878a73c62619f06092819eb733e55))
+* **store:** keep a container's diff review draft and sent round ([701890a](https://github.com/duy0611/dev-cli/commit/701890ad8847ef2a9aed290ac019c2eecd9c953f))
+
+
+### Bug Fixes
+
+* mark diff command as experimental ([713de02](https://github.com/duy0611/dev-cli/commit/713de02cf21e28b7a391a6583af1a4804e6327c4))
+
 ## [0.16.0](https://github.com/duy0611/dev-cli/compare/v0.15.0...v0.16.0) (2026-10-18)
 
 
