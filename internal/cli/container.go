@@ -781,6 +781,7 @@ func (a *app) start(ctx context.Context, workspace string, c model.Container) er
 		return err
 	}
 	trustGitHub(ctx, a, p, c)
+	a.ensureIdle(ctx, p, c)
 	// A row with no digest takes the one just started from. Never overwritten
 	// here: rebuild is what catches an edited document.
 	if cc != nil && c.ConfigDigest == "" {
@@ -1003,6 +1004,7 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 				return err
 			}
 			trustGitHub(cmd.Context(), a, t.provider, t.container)
+			a.ensureIdle(cmd.Context(), t.provider, t.container)
 			// After a successful rebuild only: the digest must describe the
 			// configuration the container has.
 			if cc != nil && digest.Sum != t.container.ConfigDigest {

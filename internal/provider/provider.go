@@ -72,6 +72,10 @@ type ConfigOverrider interface {
 	OverridesConfig()
 }
 
+// IdleStopper is a provider whose containers can stop themselves when idle. The
+// method is a marker: implementing it is the answer.
+type IdleStopper interface{ StopsWhenIdle() }
+
 // ConfigReader is a provider that can report a container's configuration as the
 // devcontainer CLI will merge it: the project's document, every feature it
 // names, and the override dev passes alongside.

@@ -28,6 +28,10 @@ type app struct {
 	// Built on first use. Tests leave it nil, where it records nothing.
 	auditLog *audit.Log
 	auditOff bool
+
+	// idleSeen holds "workspace/name" for each container ensureIdle has
+	// handled this run.
+	idleSeen map[string]bool
 }
 
 // audit returns the log beside the database. A nil Log records nothing, so an

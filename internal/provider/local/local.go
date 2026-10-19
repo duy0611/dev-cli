@@ -38,6 +38,10 @@ func init() {
 // devcontainer.json. See provider.ConfigOverrider.
 func (p *Provider) OverridesConfig() {}
 
+// StopsWhenIdle marks this provider as one whose containers run the idle
+// watchdog. See provider.IdleStopper.
+func (p *Provider) StopsWhenIdle() {}
+
 // Up creates or starts the container. The CLI does both in one call.
 func (p *Provider) Up(ctx context.Context, c model.Container, env []provider.EnvVar) error {
 	return p.up(ctx, c, env, false, false)
