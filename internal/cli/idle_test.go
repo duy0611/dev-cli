@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/duy0611/dev-cli/internal/audit"
 	"github.com/duy0611/dev-cli/internal/model"
@@ -197,5 +198,102 @@ func TestStartAgentOnARunningContainerRunsTheWatchdogOnce(t *testing.T) {
 	}
 	if strings.Contains(calls, " up ") {
 		t.Errorf("a running container was brought up:\n%s", calls)
+	}
+}
+
+// stubRunningDocker makes every container look running.
+func stubRunningDocker(t *testing.T, dir string) {
+	t.Helper()
+	writeFile(t, filepath.Join(dir, "docker"),
+		"#!/bin/sh\necho \"$*\" >> '"+filepath.Join(dir, "docker-calls")+"'\ncase \"$*\" in\n  *State*) echo running ;;\n  ps*) echo abc123 ;;\nesac\nexit 0\n")
+	if err := os.Chmod(filepath.Join(dir, "docker"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRepairRestartsAMissingWatchdog(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	log := stubIdleDevcontainer(t, "started")
+	for _, n := range []string{"x", "y"} {
+		if err := createIdle(t, a, n, "--no-start"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stubRunningDocker(t, filepath.Dir(log))
+	if code := run(t.Context(), a, []string{"container", "list"}); code != exitOK {
+		t.Fatalf("exit %d", code)
+	}
+	if n := strings.Count(callsIn(t, log), "IDLE-EXEC"); n != 2 {
+		t.Errorf("watchdog calls = %d, want 2:\n%s", n, callsIn(t, log))
+	}
+}
+
+func TestRepairSkipsStoppedAndOptedOut(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	log := stubIdleDevcontainer(t, "started")
+	if err := createIdle(t, a, "stopped", "--no-start"); err != nil {
+		t.Fatal(err)
+	}
+	if err := createIdle(t, a, "optout", "--no-start", "--no-idle-stop"); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(log)
+	// Only "optout" is running.
+	writeFile(t, filepath.Join(dir, "docker"),
+		"#!/bin/sh\ncase \"$*\" in\n  *optout*) case \"$*\" in *State*) echo running;; ps*) echo abc123;; esac;;\nesac\nexit 0\n")
+	run(t.Context(), a, []string{"container", "list"})
+	if calls := callsIn(t, log); strings.Contains(calls, "IDLE-EXEC") {
+		t.Errorf("watchdog started:\n%s", calls)
+	}
+}
+
+func TestRepairSkipsWhatThisRunAlreadyEnsured(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	log := stubIdleDevcontainer(t, "started")
+	if err := createIdle(t, a, "x", "--no-start"); err != nil {
+		t.Fatal(err)
+	}
+	stubRunningDocker(t, filepath.Dir(log))
+	run(t.Context(), a, []string{"container", "start", "x"})
+	if n := strings.Count(callsIn(t, log), "IDLE-EXEC"); n != 1 {
+		t.Errorf("watchdog calls = %d, want 1:\n%s", n, callsIn(t, log))
+	}
+}
+
+func TestRepairIsBoundedByItsTimeout(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	log := stubIdleDevcontainer(t, "started")
+	if err := createIdle(t, a, "x", "--no-start"); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(log)
+	stubRunningDocker(t, dir)
+	writeFile(t, filepath.Join(dir, "devcontainer"),
+		"#!/bin/sh\ncase \"$1\" in read-configuration) echo '{\"mergedConfiguration\":{}}'; exit 0;; esac\ncase \"$*\" in *' dev-idle '*) sleep 5;; esac\nexit 0\n")
+	old := repairTimeout
+	repairTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { repairTimeout = old })
+	start := time.Now()
+	run(t.Context(), a, []string{"container", "list"})
+	if d := time.Since(start); d > 2*time.Second {
+		t.Errorf("run took %v", d)
+	}
+}
+
+func TestRepairDoesNothingWithoutTheDatabase(t *testing.T) {
+	a, _ := newTestApp(t)
+	a.version = "test"
+	log := stubIdleDevcontainer(t, "started")
+	stubRunningDocker(t, filepath.Dir(log))
+	run(t.Context(), a, []string{"--version"})
+	if calls := callsIn(t, log); calls != "" {
+		t.Errorf("devcontainer called:\n%s", calls)
+	}
+	if calls := callsIn(t, filepath.Join(filepath.Dir(log), "docker-calls")); calls != "" {
+		t.Errorf("docker called:\n%s", calls)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"text/tabwriter"
 	"time"
 
@@ -32,6 +33,8 @@ type app struct {
 	// idleSeen holds "workspace/name" for each container ensureIdle has
 	// handled this run.
 	idleSeen map[string]bool
+	// idleMu guards idleSeen: the repair pass calls ensureIdle concurrently.
+	idleMu sync.Mutex
 }
 
 // audit returns the log beside the database. A nil Log records nothing, so an

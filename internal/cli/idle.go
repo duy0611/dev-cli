@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/duy0611/dev-cli/internal/idle"
@@ -16,12 +17,14 @@ func (a *app) ensureIdle(ctx context.Context, p provider.Provider, c model.Conta
 	if _, ok := p.(provider.IdleStopper); !ok || !c.IdleStop {
 		return
 	}
+	key := c.WorkspaceName + "/" + c.Name
+	a.idleMu.Lock()
 	if a.idleSeen == nil {
 		a.idleSeen = map[string]bool{}
 	}
-	key := c.WorkspaceName + "/" + c.Name
 	seen := a.idleSeen[key]
 	a.idleSeen[key] = true
+	a.idleMu.Unlock()
 
 	state, stop, err := idle.Ensure(ctx, p, c, idleOptions())
 	if err != nil {
@@ -59,4 +62,85 @@ func idleOptions() idle.Options {
 		o.Tick = d
 	}
 	return o
+}
+
+// repairTimeout bounds the whole repair pass.
+var repairTimeout = 10 * time.Second
+
+// repairIdle restarts the watchdog in every running container this run did not
+// already ensure: one started behind dev's back has none. Best-effort, and
+// returns by the deadline whatever the engine is doing.
+func (a *app) repairIdle(ctx context.Context) {
+	if !a.isOpened || a.openErr != nil {
+		return
+	}
+	type job struct {
+		c  model.Container
+		ws model.Workspace
+		p  provider.Provider
+	}
+	// Every store read happens here, before the fan-out: a goroutine still
+	// running at the deadline must not touch the store after the caller
+	// closes it.
+	containers, err := a.st.ListContainers("")
+	if err != nil {
+		return
+	}
+	workspaces := map[string]model.Workspace{}
+	providers := map[string]provider.Provider{}
+	var jobs []job
+	for _, c := range containers {
+		key := c.WorkspaceName + "/" + c.Name
+		a.idleMu.Lock()
+		seen := a.idleSeen[key]
+		a.idleMu.Unlock()
+		if !c.IdleStop || seen {
+			continue
+		}
+		ws, ok := workspaces[c.WorkspaceName]
+		if !ok {
+			if ws, err = a.st.GetWorkspace(c.WorkspaceName); err != nil {
+				continue
+			}
+			workspaces[c.WorkspaceName] = ws
+		}
+		p, ok := providers[ws.Name]
+		if !ok {
+			if p, err = a.providerFor(ws); err != nil {
+				continue
+			}
+			providers[ws.Name] = p
+		}
+		if _, ok := p.(provider.IdleStopper); ok {
+			jobs = append(jobs, job{c, ws, p})
+		}
+	}
+	if len(jobs) == 0 {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, repairTimeout)
+	defer cancel()
+	var wg sync.WaitGroup
+	for _, j := range jobs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if s, err := statusWithin(ctx, j.p, j.c); err != nil || s != model.StatusRunning {
+				return
+			}
+			t, err := a.target(ctx, j.c, j.ws, j.p)
+			if err != nil {
+				return
+			}
+			defer t.release()
+			a.ensureIdle(ctx, j.p, t.container)
+		}()
+	}
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
 }

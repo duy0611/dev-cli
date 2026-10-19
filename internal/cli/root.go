@@ -30,7 +30,13 @@ func Execute(version string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	root := newRootCmd(version)
+	return run(ctx, a, os.Args[1:])
+}
+
+// run executes one invocation against a, then repairs idle watchdogs. The
+// caller closes a, so the repair finishes first.
+func run(ctx context.Context, a *app, args []string) int {
+	root := newRootCmd(a.version)
 	root.AddCommand(
 		newProviderCmd(a),
 		newWorkspaceCmd(a),
@@ -44,7 +50,9 @@ func Execute(version string) int {
 	root.SilenceErrors = true
 	root.SilenceUsage = true
 
+	root.SetArgs(args)
 	err := root.ExecuteContext(ctx)
+	a.repairIdle(ctx)
 	if err == nil {
 		return exitOK
 	}
