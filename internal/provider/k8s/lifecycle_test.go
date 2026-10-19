@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/duy0611/dev-cli/internal/provider"
 )
 
 func TestParseCommandShapes(t *testing.T) {
@@ -147,7 +149,7 @@ func TestRebuildClearsTheMarkerAndReRuns(t *testing.T) {
 	s := lifecycleStubs(t, true)
 	c := k8sContainer(t)
 
-	if err := testProvider().Rebuild(context.Background(), c, nil, false); err != nil {
+	if err := testProvider().Rebuild(context.Background(), c, nil, provider.RebuildOpts{}); err != nil {
 		t.Fatalf("Rebuild: %v", err)
 	}
 	calls := kubectlCalls(t, s)

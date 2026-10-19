@@ -184,7 +184,7 @@ func (a *app) ensureAgentPresent(ctx context.Context, t *target, ag agent.Agent,
 		return fmt.Errorf("add %s to %s and rebuild", ag.Binary, t.container.ConfigPath)
 	}
 
-	if err := t.provider.Rebuild(ctx, t.container, environ, false); err != nil {
+	if err := t.provider.Rebuild(ctx, t.container, environ, provider.RebuildOpts{}); err != nil {
 		return err
 	}
 	if err := trustMountedRepository(ctx, t.provider, t.container); err != nil {

@@ -26,16 +26,31 @@ type ExecOpts struct {
 	Stderr io.Writer
 }
 
+// RebuildOpts are the choices a rebuild takes beyond the container itself.
+type RebuildOpts struct {
+	NoCache bool
+	// Seed copies the folders into fresh workspace volumes, as a first create
+	// does. Only a switch into isolated sets it.
+	Seed bool
+}
+
+// LifecycleError is a lifecycle hook failing after a seeded rebuild: the
+// volumes now hold the container's copy, so the mode has changed.
+type LifecycleError struct{ Err error }
+
+func (e *LifecycleError) Error() string { return e.Err.Error() }
+
+func (e *LifecycleError) Unwrap() error { return e.Err }
+
 // Provider runs and inspects containers for one engine.
 type Provider interface {
 	// Up creates the container if missing, and starts it if stopped. Safe on a
 	// running one.
 	Up(ctx context.Context, c model.Container, env []EnvVar) error
 
-	// Rebuild recreates the container from its configuration, optionally
-	// without the image layer cache. Takes the same env as Up, since lifecycle
-	// commands run again.
-	Rebuild(ctx context.Context, c model.Container, env []EnvVar, noCache bool) error
+	// Rebuild recreates the container from its configuration. Takes the same
+	// env as Up, since lifecycle commands run again.
+	Rebuild(ctx context.Context, c model.Container, env []EnvVar, opts RebuildOpts) error
 
 	// Exec runs a command inside a running container.
 	Exec(ctx context.Context, c model.Container, cmd []string, opts ExecOpts) error

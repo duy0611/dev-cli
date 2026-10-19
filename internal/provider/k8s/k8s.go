@@ -6,6 +6,7 @@ package k8s
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -54,10 +55,13 @@ func (p *Provider) Up(ctx context.Context, c model.Container, env []provider.Env
 }
 
 // Rebuild recreates the container from its configuration.
-func (p *Provider) Rebuild(ctx context.Context, c model.Container, env []provider.EnvVar, noCache bool) error {
+func (p *Provider) Rebuild(ctx context.Context, c model.Container, env []provider.EnvVar, opts provider.RebuildOpts) error {
+	if opts.Seed {
+		return errors.New("a k8s container is isolated from create; nothing to seed")
+	}
 	return p.apply(ctx, c, env, applyOpts{
 		build:   true,
-		noCache: noCache,
+		noCache: opts.NoCache,
 		// The tag is always :latest, so only a changed pod template gives a new
 		// ReplicaSet.
 		rebuiltAt: time.Now().UTC().Format(time.RFC3339),

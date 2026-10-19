@@ -2,6 +2,7 @@ package local
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -236,7 +237,7 @@ func TestRebuildAsksForRecreate(t *testing.T) {
 	f.install(t, devcontainerBin, "", 0)
 
 	p := &Provider{}
-	if err := p.Rebuild(context.Background(), testContainer(), nil, true); err != nil {
+	if err := p.Rebuild(context.Background(), testContainer(), nil, provider.RebuildOpts{NoCache: true}); err != nil {
 		t.Fatalf("Rebuild: %v", err)
 	}
 
@@ -256,7 +257,7 @@ func TestRebuildWithoutNoCache(t *testing.T) {
 	f.install(t, devcontainerBin, "", 0)
 
 	p := &Provider{}
-	if err := p.Rebuild(context.Background(), testContainer(), nil, false); err != nil {
+	if err := p.Rebuild(context.Background(), testContainer(), nil, provider.RebuildOpts{}); err != nil {
 		t.Fatalf("Rebuild: %v", err)
 	}
 	if contains(f.argv(t, devcontainerBin), []string{"--build-no-cache"}) {
@@ -805,7 +806,7 @@ func TestRebuildBuildsForTheEnginePlatform(t *testing.T) {
 	f.install(t, devcontainerBin, "", 0)
 	f.install(t, dockerBin, "linux/amd64", 0)
 
-	if err := (&Provider{}).Rebuild(context.Background(), testContainer(), nil, false); err != nil {
+	if err := (&Provider{}).Rebuild(context.Background(), testContainer(), nil, provider.RebuildOpts{}); err != nil {
 		t.Fatalf("Rebuild: %v", err)
 	}
 	if got, _ := f.env(t, devcontainerBin, platformEnv); got != "linux/amd64" {
@@ -857,5 +858,141 @@ func TestUpRunsWithoutAPlatformWhenTheProbeFails(t *testing.T) {
 				t.Errorf("up saw %s=%q after a failed probe", platformEnv, got)
 			}
 		})
+	}
+}
+
+// installScripted replaces a stub with one that logs like install and then runs
+// body, a shell fragment with the call's arguments in "$@".
+func (f *fakeBin) installScripted(t *testing.T, name, body string) {
+	t.Helper()
+	log := filepath.Join(f.dir, name+".argv")
+	script := "#!/bin/sh\n" +
+		"for a in \"$@\"; do printf '%s\\n' \"$a\" >> " + shellQuote(log) + "; done\n" +
+		"printf '%s\\n' " + shellQuote(callSeparator) + " >> " + shellQuote(log) + "\n" +
+		body + "\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(f.dir, name), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// noVolumes is a docker that has no volume and no container.
+const noVolumes = `[ "$1" = volume ] && [ "$2" = inspect ] && exit 1`
+
+func rebuildVerbs(f *fakeBin, t *testing.T) []string {
+	var verbs []string
+	for _, argv := range f.argvAll(t, devcontainerBin) {
+		verbs = append(verbs, argv[0])
+	}
+	return verbs
+}
+
+func TestRebuildWithSeedSeedsBeforeTheLifecycleHooks(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, devcontainerBin, "", 0)
+	f.installScripted(t, dockerBin, noVolumes)
+
+	err := (&Provider{}).Rebuild(context.Background(), isolatedContainer(t), nil, provider.RebuildOpts{Seed: true})
+	if err != nil {
+		t.Fatalf("Rebuild: %v", err)
+	}
+	want := []string{"up", "exec", "exec", "exec", "run-user-commands"}
+	if got := rebuildVerbs(f, t); !slices.Equal(got, want) {
+		t.Fatalf("devcontainer calls = %v, want %v", got, want)
+	}
+	up := f.argvAll(t, devcontainerBin)[0]
+	for _, w := range []string{"--remove-existing-container", "--skip-post-create"} {
+		if !contains(up, []string{w}) {
+			t.Errorf("up is missing %s: %v", w, up)
+		}
+	}
+}
+
+func TestRebuildWithoutSeedNeverSeeds(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, devcontainerBin, "", 0)
+	f.installScripted(t, dockerBin, "")
+
+	if err := (&Provider{}).Rebuild(context.Background(), isolatedContainer(t), nil, provider.RebuildOpts{}); err != nil {
+		t.Fatalf("Rebuild: %v", err)
+	}
+	calls := f.argvAll(t, devcontainerBin)
+	if len(calls) != 1 || calls[0][0] != "up" || contains(calls[0], []string{"--skip-post-create"}) {
+		t.Errorf("a rebuild without Seed seeded: %v", calls)
+	}
+}
+
+func TestRebuildWithSeedRefusesAnExistingVolume(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, devcontainerBin, "", 0)
+	f.installScripted(t, dockerBin, "")
+
+	err := (&Provider{}).Rebuild(context.Background(), isolatedContainer(t), nil, provider.RebuildOpts{Seed: true})
+	if err == nil || !strings.Contains(err.Error(), VolumeName("ws", "demo")) {
+		t.Fatalf("err = %v, want one naming %s", err, VolumeName("ws", "demo"))
+	}
+	if _, statErr := os.Stat(filepath.Join(f.dir, devcontainerBin+".argv")); statErr == nil {
+		t.Errorf("devcontainer ran despite the refusal: %v", f.argvAll(t, devcontainerBin))
+	}
+}
+
+func TestRebuildWithSeedCleansUpAFailedSeed(t *testing.T) {
+	f := newFakePath(t)
+	f.installScripted(t, devcontainerBin, `case "$*" in *tar*) exit 1;; esac`)
+	f.installScripted(t, dockerBin, noVolumes+"\n"+`[ "$1" = ps ] && echo abc123`)
+
+	c := isolatedContainer(t)
+	c.PersistState = true
+	err := (&Provider{}).Rebuild(context.Background(), c, nil, provider.RebuildOpts{Seed: true})
+	if err == nil || !strings.Contains(err.Error(), "copying") {
+		t.Fatalf("err = %v, want the seed's own error", err)
+	}
+	for _, want := range [][]string{
+		{"rm", "--force", "abc123"},
+		{"volume", "rm", "--force", "dev-ws-demo"},
+	} {
+		if !f.calledWith(t, dockerBin, want) {
+			t.Errorf("docker was not called with %v: %v", want, f.argvAll(t, dockerBin))
+		}
+	}
+	for _, argv := range f.argvAll(t, dockerBin) {
+		if slices.Contains(argv, StateVolumeName("ws", "demo")) {
+			t.Errorf("cleanup touched the state volume: %v", argv)
+		}
+	}
+}
+
+func TestRebuildWithSeedCleansUpAFailedUpWithNoContainer(t *testing.T) {
+	f := newFakePath(t)
+	f.installScripted(t, devcontainerBin, `exit 1`)
+	f.installScripted(t, dockerBin, noVolumes)
+
+	err := (&Provider{}).Rebuild(context.Background(), isolatedContainer(t), nil, provider.RebuildOpts{Seed: true})
+	if err == nil || !strings.Contains(err.Error(), "starting container") {
+		t.Fatalf("err = %v, want the up's own error", err)
+	}
+	for _, argv := range f.argvAll(t, dockerBin) {
+		if argv[0] == "rm" {
+			t.Errorf("docker rm ran with no container: %v", argv)
+		}
+	}
+	if !f.calledWith(t, dockerBin, []string{"volume", "rm", "--force", "dev-ws-demo"}) {
+		t.Errorf("the volume was not removed: %v", f.argvAll(t, dockerBin))
+	}
+}
+
+func TestRebuildWithSeedReportsAFailedHookAsALifecycleError(t *testing.T) {
+	f := newFakePath(t)
+	f.installScripted(t, devcontainerBin, `[ "$1" = run-user-commands ] && exit 1`)
+	f.installScripted(t, dockerBin, noVolumes)
+
+	err := (&Provider{}).Rebuild(context.Background(), isolatedContainer(t), nil, provider.RebuildOpts{Seed: true})
+	var le *provider.LifecycleError
+	if !errors.As(err, &le) {
+		t.Fatalf("err = %v, want a *provider.LifecycleError", err)
+	}
+	for _, argv := range f.argvAll(t, dockerBin) {
+		if argv[0] == "rm" || (argv[0] == "volume" && argv[1] == "rm") {
+			t.Errorf("a failed hook removed something: %v", argv)
+		}
 	}
 }

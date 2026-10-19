@@ -40,19 +40,31 @@ func (p *Provider) OverridesConfig() {}
 
 // Up creates or starts the container. The CLI does both in one call.
 func (p *Provider) Up(ctx context.Context, c model.Container, env []provider.EnvVar) error {
-	return p.up(ctx, c, env, false, false)
+	return p.up(ctx, c, env, false, provider.RebuildOpts{})
 }
 
 // Rebuild recreates the container from its configuration.
 //
 // There is no `devcontainer rebuild`: the CLI spells it as flags on `up`.
-func (p *Provider) Rebuild(ctx context.Context, c model.Container, env []provider.EnvVar, noCache bool) error {
-	return p.up(ctx, c, env, true, noCache)
+func (p *Provider) Rebuild(ctx context.Context, c model.Container, env []provider.EnvVar, opts provider.RebuildOpts) error {
+	return p.up(ctx, c, env, true, opts)
 }
 
-func (p *Provider) up(ctx context.Context, c model.Container, env []provider.EnvVar, recreate, noCache bool) error {
+func (p *Provider) up(ctx context.Context, c model.Container, env []provider.EnvVar, recreate bool, opts provider.RebuildOpts) error {
 	if err := requireBinary(devcontainerBin); err != nil {
 		return err
+	}
+	if opts.Seed {
+		if err := requireBinary(dockerBin); err != nil {
+			return err
+		}
+		// Seeding unpacks over the volume, so one that exists is never ours to
+		// overwrite.
+		for _, v := range seedVolumes(c) {
+			if exec.CommandContext(ctx, dockerBin, "volume", "inspect", v).Run() == nil {
+				return fmt.Errorf("volume %s already exists; remove it before switching container %s to isolated", v, c.Name)
+			}
+		}
 	}
 
 	// An isolated workspace volume starts empty, so on first create the
@@ -60,8 +72,8 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 	// marker for a skipped hook, so run-user-commands runs each once. A
 	// recreate is never seeded: seeding unpacks over the workspace and would
 	// destroy agent work.
-	seeding := false
-	if c.Mode == model.ModeIsolated && !recreate {
+	seeding := opts.Seed
+	if !seeding && c.Mode == model.ModeIsolated && !recreate {
 		id, err := p.containerID(ctx, c)
 		if err != nil {
 			return err
@@ -85,7 +97,7 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 	if recreate {
 		args = append(args, "--remove-existing-container")
 	}
-	if noCache {
+	if opts.NoCache {
 		args = append(args, "--build-no-cache")
 	}
 	if seeding {
@@ -100,18 +112,64 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 	cmd.Stdout = io.Discard
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("starting container %s: %w", c.Name, err)
+		err = fmt.Errorf("starting container %s: %w", c.Name, err)
+		if opts.Seed {
+			p.discardSeed(ctx, c)
+		}
+		return err
 	}
 	if err := p.claimStateDir(ctx, c); err != nil {
+		if opts.Seed {
+			p.discardSeed(ctx, c)
+		}
 		return err
 	}
 	if !seeding {
 		return nil
 	}
 	if err := p.seedWorkspace(ctx, c); err != nil {
+		if opts.Seed {
+			p.discardSeed(ctx, c)
+		}
 		return err
 	}
-	return p.runUserCommands(ctx, c, env)
+	if err := p.runUserCommands(ctx, c, env); err != nil {
+		if opts.Seed {
+			return &provider.LifecycleError{Err: err}
+		}
+		return err
+	}
+	return nil
+}
+
+// seedVolumes are the volumes a seeded rebuild fills: the workspace and one
+// per extra folder, never the state volume.
+func seedVolumes(c model.Container) []string {
+	vols := []string{VolumeName(c.WorkspaceName, c.Name)}
+	for _, f := range c.Folders {
+		vols = append(vols, FolderVolumeName(c.WorkspaceName, c.Name, f.HostPath))
+	}
+	return vols
+}
+
+// discardSeed undoes a seeded rebuild that failed before its volumes were
+// whole. A failed up may have left no container, and cleanup must never
+// replace the error that caused it, so failures here are only reported.
+func (p *Provider) discardSeed(ctx context.Context, c model.Container) {
+	id, err := p.containerID(ctx, c)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "dev: cleaning up container %s: %v\n", c.Name, err)
+	}
+	if id != "" {
+		if err := runDocker(ctx, "rm", "--force", id); err != nil {
+			fmt.Fprintf(os.Stderr, "dev: cleaning up container %s: %v\n", c.Name, err)
+		}
+	}
+	for _, v := range seedVolumes(c) {
+		if err := runDocker(ctx, "volume", "rm", "--force", v); err != nil {
+			fmt.Fprintf(os.Stderr, "dev: cleaning up volume %s: %v\n", v, err)
+		}
+	}
 }
 
 // seedWorkspace copies each folder into its volume, primary first, with each

@@ -996,7 +996,7 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 			if _, _, err := a.planGitDir(t.container, t.container.WorktreeRepo, true); err != nil {
 				return err
 			}
-			if err := t.provider.Rebuild(cmd.Context(), t.container, environ, noCache); err != nil {
+			if err := t.provider.Rebuild(cmd.Context(), t.container, environ, provider.RebuildOpts{NoCache: noCache}); err != nil {
 				return err
 			}
 			// After a successful rebuild only, so a failed one leaves the
