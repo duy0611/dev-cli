@@ -121,7 +121,7 @@ func newContainerCreateCmd(a *app) *cobra.Command {
 	cmd.Flags().StringArrayVar(&folders, "folder", nil,
 		"host folder holding the project (default: the current directory); repeat for more folders, the first is the primary")
 	cmd.Flags().Var(modeFlag{&opts.mode}, "mode",
-		"guarded (the folder live, .git read-only) or isolated (a copy the agent owns); fixed for the container's life")
+		"guarded (the folder live, .git read-only), unprotected (the folder live, .git writable) or isolated (a copy the agent owns)")
 	cmd.Flags().BoolVar(&opts.noStart, "no-start", false, "record the container without starting it")
 	cmd.Flags().BoolVar(&opts.noFolder, "no-folder", false,
 		"create a container with no host folder; its work lives in a volume dev owns")
@@ -316,6 +316,9 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 		return err
 	}
 	a.recordCreate(wsName, c)
+	if mode == model.ModeUnprotected {
+		warnUnprotected(a, name)
+	}
 	if opts.noFolder {
 		a.printf("container %s (workspace %s) with no folder\n", name, wsName)
 	} else {
@@ -368,11 +371,23 @@ func (a *app) modeFor(wsName string, opts createOpts) (model.Mode, error) {
 				"use --mode isolated, the k8s default")
 		}
 		return model.ModeGuarded, nil
+	case model.ModeUnprotected:
+		if kind == model.KindK8s {
+			return "", usageErrorf("--mode unprotected needs a local provider: a pod cannot mount your folder live; " +
+				"use --mode isolated, the k8s default")
+		}
+		return model.ModeUnprotected, nil
 	case model.ModeIsolated:
 		return model.ModeIsolated, nil
 	default:
-		return "", usageErrorf("unknown mode %q; use guarded or isolated", opts.mode)
+		return "", usageErrorf("unknown mode %q; use guarded, unprotected or isolated", opts.mode)
 	}
+}
+
+// warnUnprotected tells the operator what an unprotected container can reach.
+func warnUnprotected(a *app, name string) {
+	warnf(a, "container %s is unprotected: it can change what git on your machine runs; "+
+		"dev container rebuild %s --mode guarded closes it again", name, name)
 }
 
 // checkGuarded refuses a project mount guarded mode cannot protect, and warns
@@ -429,7 +444,7 @@ func (a *app) allowExtraFolders(wsName string, mode model.Mode) error {
 	if kind == model.KindK8s {
 		return usageErrorf("the k8s provider is experimental and takes one folder; give --folder once")
 	}
-	if mode != model.ModeGuarded && mode != model.ModeIsolated {
+	if mode != model.ModeGuarded && mode != model.ModeUnprotected && mode != model.ModeIsolated {
 		return usageErrorf("a %s container takes one folder", displayMode(mode))
 	}
 	return nil

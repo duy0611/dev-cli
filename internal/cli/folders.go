@@ -95,6 +95,11 @@ func folderMounts(c model.Container) (mounts, targets []string) {
 		case model.ModeIsolated:
 			add = []string{fmt.Sprintf("source=%s,target=%s,type=volume",
 				local.FolderVolumeName(c.WorkspaceName, c.Name, f.HostPath), f.ContainerPath)}
+		case model.ModeUnprotected:
+			add = []string{fmt.Sprintf("source=%s,target=%s,type=bind", f.HostPath, f.ContainerPath)}
+			if f.WorktreeRepo != "" {
+				add = append(add, fmt.Sprintf("source=%s,target=%s,type=bind", f.WorktreeRepo, f.WorktreeRepo))
+			}
 		case model.ModeGuarded:
 			add = []string{fmt.Sprintf("source=%s,target=%s,type=bind", f.HostPath, f.ContainerPath)}
 			if f.WorktreeRepo != "" {
@@ -139,10 +144,10 @@ func guardedRepos(c model.Container) []string {
 	return out
 }
 
-// requireFolders refuses to start a guarded container whose extra folder is
+// requireFolders refuses to start a live-folder container whose extra folder is
 // gone from the host, rather than leave the engine to fail the mount.
 func requireFolders(c model.Container) error {
-	if c.Mode != model.ModeGuarded {
+	if c.Mode != model.ModeGuarded && c.Mode != model.ModeUnprotected {
 		return nil
 	}
 	for _, f := range c.Folders {
