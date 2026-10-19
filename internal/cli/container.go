@@ -14,6 +14,7 @@ import (
 	"github.com/duy0611/dev-cli/internal/dcconfig"
 	"github.com/duy0611/dev-cli/internal/dcgen"
 	"github.com/duy0611/dev-cli/internal/gitwt"
+	"github.com/duy0611/dev-cli/internal/guard"
 	"github.com/duy0611/dev-cli/internal/model"
 	"github.com/duy0611/dev-cli/internal/provider"
 	"github.com/duy0611/dev-cli/internal/store"
@@ -919,6 +920,31 @@ func runContainerRemove(ctx context.Context, a *app, workspace, name string, for
 	return nil
 }
 
+// checkRequestedMode refuses a --mode the container cannot take, before
+// anything is changed.
+func (a *app) checkRequestedMode(workspace, name string, to model.Mode) error {
+	wsName, err := a.workspaceName(workspace)
+	if err != nil {
+		return err
+	}
+	st, err := a.store()
+	if err != nil {
+		return err
+	}
+	c, err := st.GetContainer(wsName, name)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return notFoundErrorf("no such container: %s", name)
+		}
+		return err
+	}
+	kind, err := a.providerKind(wsName)
+	if err != nil {
+		return err
+	}
+	return checkModeChange(name, c.Mode, to, kind)
+}
+
 func newContainerRebuildCmd(a *app) *cobra.Command {
 	var (
 		workspace    string
@@ -944,6 +970,13 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 			"bring the work home with dev container fetch, then create a new container.",
 		Args: exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Before the tools are stored, so a refused change leaves the row as
+			// it was.
+			if mode != "" {
+				if err := a.checkRequestedMode(workspace, args[0], mode); err != nil {
+					return err
+				}
+			}
 			if tools := parseToolList(toolList); len(tools) > 0 {
 				// Before resolve, so the rebuild materialises the new
 				// configuration.
@@ -962,17 +995,26 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 			if to == "" {
 				to = from
 			}
-			kind, err := a.providerKind(t.workspace.Name)
-			if err != nil {
-				return err
-			}
-			if mode != "" {
-				if err := checkModeChange(t.container.Name, from, to, kind); err != nil {
+			modeChanged := to != from
+			changing := len(addFolders) > 0 || len(dropFolders) > 0
+
+			// Drift is checked against the configuration the container was
+			// built from, so a change of mode is not mistaken for one of the
+			// project's. The new mode's configuration gets the escape check
+			// below.
+			var digest guard.Digest
+			if modeChanged {
+				if err := t.requireOverride(a); err != nil {
+					return err
+				}
+				oldCC, err := readConfig(cmd.Context(), t.provider, t.container, t.gitGuard)
+				if err != nil {
+					return err
+				}
+				if _, err := a.checkDrift(oldCC, acceptConfig); err != nil {
 					return err
 				}
 			}
-			modeChanged := to != from
-			changing := len(addFolders) > 0 || len(dropFolders) > 0
 			var next model.Container
 			if changing || modeChanged {
 				// Planned and materialised again from the resulting set, so the
@@ -1006,8 +1048,11 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			digest, err := a.checkDrift(cc, acceptConfig)
-			if err != nil {
+			if modeChanged {
+				if digest, err = cc.digest(); err != nil {
+					return err
+				}
+			} else if digest, err = a.checkDrift(cc, acceptConfig); err != nil {
 				return err
 			}
 			if err := a.escape(cc); err != nil {
@@ -1028,13 +1073,13 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 			if !recreated {
 				return rebuildErr
 			}
-			// After a successful rebuild only, so a failed one leaves the
-			// record matching the container that still runs.
+			// After a rebuild that recreated the container only, so a failed
+			// one leaves the record matching the container that still runs.
+			st, err := a.store()
+			if err != nil {
+				return err
+			}
 			if changing || modeChanged {
-				st, err := a.store()
-				if err != nil {
-					return err
-				}
 				if modeChanged {
 					err = st.SetContainerMode(next)
 				} else {
@@ -1044,25 +1089,8 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 					return err
 				}
 			}
-			if rebuildErr != nil {
-				fields := map[string]any{"mode_from": string(from), "mode_to": string(to)}
-				a.record("rebuild", t.workspace.Name, t.container.Name, fields)
-				if to == model.ModeUnprotected {
-					warnUnprotected(a, t.container.Name)
-				}
-				return rebuildErr
-			}
-			if err := trustMountedRepository(cmd.Context(), t.provider, t.container); err != nil {
-				return err
-			}
-			trustGitHub(cmd.Context(), a, t.provider, t.container)
-			// After a successful rebuild only: the digest must describe the
-			// configuration the container has.
+			// The digest must describe the configuration the container has.
 			if cc != nil && digest.Sum != t.container.ConfigDigest {
-				st, err := a.store()
-				if err != nil {
-					return err
-				}
 				if err := st.SetConfigDigest(t.workspace.Name, t.container.Name, digest.Sum, digest.Record()); err != nil {
 					return err
 				}
@@ -1079,11 +1107,22 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 				fields["mode_from"], fields["mode_to"] = string(from), string(to)
 			}
 			a.record("rebuild", t.workspace.Name, t.container.Name, fields)
+			if rebuildErr != nil {
+				return rebuildErr
+			}
 			if modeChanged && to == model.ModeUnprotected {
 				warnUnprotected(a, t.container.Name)
 			}
+			if err := trustMountedRepository(cmd.Context(), t.provider, t.container); err != nil {
+				return err
+			}
+			trustGitHub(cmd.Context(), a, t.provider, t.container)
 
-			a.printf("container %s rebuilt\n", t.container.Name)
+			if modeChanged {
+				a.printf("container %s rebuilt (%s -> %s)\n", t.container.Name, from, to)
+			} else {
+				a.printf("container %s rebuilt\n", t.container.Name)
+			}
 			// Re-read on every rebuild: the state volume may be gone, taking
 			// the last apply with it.
 			return a.applyAgentConfig(cmd.Context(), t.provider, t.container, environ, spec)

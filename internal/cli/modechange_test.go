@@ -248,7 +248,23 @@ func TestRebuildWorktreeToIsolatedDropsTheHostBinds(t *testing.T) {
 	if err := runIn(t, a, "container", "rebuild", "feat", "--mode", "isolated"); err != nil {
 		t.Fatalf("rebuild: %v", err)
 	}
-	for _, m := range mountsUsedForUp(t, calls, captured) {
+	mounts := mountsUsedForUp(t, calls, captured)
+	// The workspace mount rides in workspaceMount, not mounts: both must show
+	// the volume, so an empty list cannot pass.
+	if len(mounts) == 0 {
+		t.Fatal("the up document has no mounts")
+	}
+	docs, _ := filepath.Glob(filepath.Join(captured, "*"))
+	volume := false
+	for _, f := range docs {
+		b, _ := os.ReadFile(f)
+		volume = volume || strings.Contains(string(b), `"workspaceMount": "source=dev-ws-feat,`) ||
+			strings.Contains(string(b), `"workspaceMount":"source=dev-ws-feat,`)
+	}
+	if !volume {
+		t.Errorf("no volume workspace mount in any document up received (mounts: %v)", mounts)
+	}
+	for _, m := range mounts {
 		for _, p := range []string{wt, common} {
 			if strings.Contains(m, "source="+p+",") || strings.HasSuffix(m, "source="+p) {
 				t.Errorf("host bind survived: %s", m)
@@ -300,6 +316,95 @@ func TestLifecycleFailureIntoIsolatedStillRecordsTheMode(t *testing.T) {
 	}
 }
 
+func TestLifecycleFailureIntoIsolatedRecordsTheDigest(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	stubEchoingDevcontainer(t)
+	stubEngineWithMounts(t, "")
+	root := gitRepoWithConfig(t, `{"image":"ubuntu"}`)
+	if err := runContainerCreate(t.Context(), a, "", "api", root, createOpts{}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	before := containerRow(t, a, "api").ConfigDigest
+	stubDockerWithoutVolumes(t)
+	// Fails the hooks, and answers read-configuration like the echoing stub.
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "devcontainer"), `#!/bin/sh
+case "$1" in
+  read-configuration)
+    file=""; prev=""
+    for a in "$@"; do case "$prev" in --override-config) file="$a" ;; esac; prev="$a"; done
+    printf '{"mergedConfiguration":%s}\n' "$(tr -d "\n" < "$file")"; exit 0 ;;
+  run-user-commands) echo boom >&2; exit 1 ;;
+esac
+exit 0
+`)
+	if err := os.Chmod(filepath.Join(dir, "devcontainer"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if err := runIn(t, a, "container", "rebuild", "api", "--mode", "isolated"); err == nil {
+		t.Fatal("rebuild succeeded with a failing hook")
+	}
+	c := containerRow(t, a, "api")
+	if c.Mode != model.ModeIsolated {
+		t.Fatalf("mode = %q, want isolated", c.Mode)
+	}
+	if c.ConfigDigest == before {
+		t.Errorf("the digest is still the guarded configuration's")
+	}
+	if err := runIn(t, a, "container", "rebuild", "api"); err != nil {
+		t.Errorf("a plain rebuild after the switch: %v", err)
+	}
+}
+
+func TestRebuildPrintsTheModeChange(t *testing.T) {
+	a, out := newTestApp(t)
+	seedWorkspace(t, a)
+	stubCapturingDevcontainer(t)
+	root := gitRepoWithConfig(t, `{"image":"ubuntu"}`)
+	if err := runContainerCreate(t.Context(), a, "", "api", root, createOpts{mode: model.ModeUnprotected}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	out.Reset()
+
+	if err := runIn(t, a, "container", "rebuild", "api", "--mode", "guarded"); err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+	if want := "container api rebuilt (unprotected -> guarded)\n"; !strings.Contains(out.String(), want) {
+		t.Errorf("output = %q, want %q", out.String(), want)
+	}
+	out.Reset()
+	if err := runIn(t, a, "container", "rebuild", "api"); err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+	if got := out.String(); strings.Contains(got, "->") {
+		t.Errorf("a rebuild without a change named one: %q", got)
+	}
+}
+
+func TestRefusedModeChangeLeavesTheToolsAlone(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	stubCapturingDevcontainer(t)
+	stubEngineWithMounts(t, "")
+	generatedGuardedOnRepo(t, a, "api")
+	stubDockerWithoutVolumes(t)
+	if err := runIn(t, a, "container", "rebuild", "api", "--mode", "isolated"); err != nil {
+		t.Fatalf("switch: %v", err)
+	}
+	before := containerRow(t, a, "api")
+
+	err := runIn(t, a, "container", "rebuild", "api", "--mode", "guarded", "--tools", "+helm")
+	if got := exitCodeOf(err); got != exitUsage {
+		t.Fatalf("exit code = %d (%v), want %d", got, err, exitUsage)
+	}
+	if after := containerRow(t, a, "api"); after.GeneratedConfig != before.GeneratedConfig {
+		t.Errorf("the refused rebuild stored the tool change:\n%s", after.GeneratedConfig)
+	}
+}
+
 func TestRebuildIntoUnprotectedWarns(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)
@@ -346,5 +451,105 @@ func TestRebuildAddsAFolderToAnUnprotectedContainer(t *testing.T) {
 	}
 	if c := containerRow(t, a, "multi"); len(c.Folders) != 1 || c.Folders[0].HostPath != third {
 		t.Errorf("folders = %v", c.Folders)
+	}
+}
+
+// stubEchoingDevcontainer is a devcontainer whose read-configuration reports
+// the override document it was given, as the real CLI does, or else the
+// project's file.
+func stubEchoingDevcontainer(t *testing.T) (calls string) {
+	t.Helper()
+	dir := t.TempDir()
+	calls = filepath.Join(dir, "calls")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> '` + calls + `'
+if [ "$1" = read-configuration ]; then
+  file=""; prev=""
+  for a in "$@"; do
+    case "$prev" in --override-config) file="$a" ;; --config) [ -n "$file" ] || cfg="$a" ;; esac
+    prev="$a"
+  done
+  [ -n "$file" ] || file="$cfg"
+  printf '{"mergedConfiguration":%s}\n' "$(tr -d "\n" < "$file")"
+fi
+exit 0
+`
+	writeFile(t, filepath.Join(dir, "devcontainer"), script)
+	if err := os.Chmod(filepath.Join(dir, "devcontainer"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return calls
+}
+
+func TestModeSwitchOfAProjectConfigIsNotDrift(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	stubEchoingDevcontainer(t)
+	stubEngineWithMounts(t, "")
+	root := gitRepoWithConfig(t, `{"image":"ubuntu"}`)
+	if err := runContainerCreate(t.Context(), a, "", "api", root, createOpts{}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	guardedDigest := containerRow(t, a, "api").ConfigDigest
+	if guardedDigest == "" {
+		t.Fatal("fixture has no digest")
+	}
+
+	if err := runIn(t, a, "container", "rebuild", "api", "--mode", "unprotected"); err != nil {
+		t.Fatalf("guarded -> unprotected: %v", err)
+	}
+	unprotected := containerRow(t, a, "api").ConfigDigest
+	if unprotected == guardedDigest {
+		t.Errorf("the digest was not updated for the new mode")
+	}
+	if err := runIn(t, a, "container", "rebuild", "api", "--mode", "guarded"); err != nil {
+		t.Fatalf("unprotected -> guarded: %v", err)
+	}
+	if got := containerRow(t, a, "api").ConfigDigest; got != guardedDigest {
+		t.Errorf("digest after the way back = %s, want %s", got, guardedDigest)
+	}
+}
+
+func TestModeSwitchOfAProjectConfigIntoIsolatedIsNotDrift(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	stubEchoingDevcontainer(t)
+	stubEngineWithMounts(t, "")
+	root := gitRepoWithConfig(t, `{"image":"ubuntu"}`)
+	if err := runContainerCreate(t.Context(), a, "", "api", root, createOpts{}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	before := containerRow(t, a, "api").ConfigDigest
+	stubDockerWithoutVolumes(t)
+
+	if err := runIn(t, a, "container", "rebuild", "api", "--mode", "isolated"); err != nil {
+		t.Fatalf("guarded -> isolated: %v", err)
+	}
+	c := containerRow(t, a, "api")
+	if c.Mode != model.ModeIsolated || c.ConfigDigest == "" || c.ConfigDigest == before {
+		t.Errorf("row = mode %q digest %q (was %q)", c.Mode, c.ConfigDigest, before)
+	}
+}
+
+func TestProjectEditDuringAModeSwitchIsStillDrift(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	stubEchoingDevcontainer(t)
+	stubEngineWithMounts(t, "")
+	root := gitRepoWithConfig(t, `{"image":"ubuntu"}`)
+	if err := runContainerCreate(t.Context(), a, "", "api", root, createOpts{}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	before := containerRow(t, a, "api")
+	writeFile(t, filepath.Join(root, ".devcontainer", "devcontainer.json"), `{"image":"debian"}`)
+
+	err := runIn(t, a, "container", "rebuild", "api", "--mode", "unprotected")
+	if got := exitCodeOf(err); got != exitUsage {
+		t.Fatalf("exit code = %d (%v), want %d", got, err, exitUsage)
+	}
+	after := containerRow(t, a, "api")
+	if after.Mode != before.Mode || after.ConfigDigest != before.ConfigDigest {
+		t.Errorf("row changed: %+v -> %+v", before, after)
 	}
 }
