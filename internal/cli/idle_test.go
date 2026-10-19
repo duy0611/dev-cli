@@ -11,6 +11,7 @@ import (
 	"github.com/duy0611/dev-cli/internal/audit"
 	"github.com/duy0611/dev-cli/internal/model"
 	"github.com/duy0611/dev-cli/internal/provider"
+	"github.com/duy0611/dev-cli/internal/provider/local"
 )
 
 // stubIdleDevcontainer is stubDevcontainer plus an answer for the watchdog
@@ -151,4 +152,50 @@ func (p noExecProvider) Exec(context.Context, model.Container, []string, provide
 func TestK8sGetsNoIdleWatchdog(t *testing.T) {
 	a, _ := newTestApp(t)
 	a.ensureIdle(t.Context(), noExecProvider{t: t}, model.Container{Name: "x", IdleStop: true})
+}
+
+func TestUnavailableWarnsOncePerRun(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	log := stubIdleDevcontainer(t, "unavailable")
+	if err := createIdle(t, a, "x", "--no-start"); err != nil {
+		t.Fatal(err)
+	}
+	c := containerRow(t, a, "x")
+	p := &local.Provider{}
+	got := captureStderr(t, func() {
+		a.ensureIdle(t.Context(), p, c)
+		a.ensureIdle(t.Context(), p, c)
+	})
+	if n := strings.Count(got, "idle stop is unavailable"); n != 1 {
+		t.Errorf("warnings = %d, want 1: %q", n, got)
+	}
+	if n := strings.Count(callsIn(t, log), "IDLE-EXEC"); n != 2 {
+		t.Errorf("watchdog calls = %d, want 2 (each rebuild needs one)", n)
+	}
+}
+
+func TestStartAgentOnARunningContainerRunsTheWatchdogOnce(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	log := stubIdleDevcontainer(t, "started")
+	if err := createIdle(t, a, "x", "--no-start"); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(log)
+	writeFile(t, filepath.Join(dir, "docker"),
+		"#!/bin/sh\ncase \"$*\" in\n  *State*) echo running ;;\n  ps*) echo abc123 ;;\nesac\nexit 0\n")
+	if err := os.Chmod(filepath.Join(dir, "docker"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := runContainerStartAgent(t.Context(), a, "", "x", "claude", "", nil, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	calls := callsIn(t, log)
+	if n := strings.Count(calls, "IDLE-EXEC"); n != 1 {
+		t.Errorf("watchdog calls = %d, want 1:\n%s", n, calls)
+	}
+	if strings.Contains(calls, " up ") {
+		t.Errorf("a running container was brought up:\n%s", calls)
+	}
 }

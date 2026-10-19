@@ -19,14 +19,17 @@ func (a *app) ensureIdle(ctx context.Context, p provider.Provider, c model.Conta
 	if a.idleSeen == nil {
 		a.idleSeen = map[string]bool{}
 	}
-	a.idleSeen[c.WorkspaceName+"/"+c.Name] = true
+	key := c.WorkspaceName + "/" + c.Name
+	seen := a.idleSeen[key]
+	a.idleSeen[key] = true
 
 	state, stop, err := idle.Ensure(ctx, p, c, idleOptions())
 	if err != nil {
 		warnf(a, "idle stop for %s: %v", c.Name, err)
 		return
 	}
-	if state == idle.Unavailable {
+	// A rebuild in the same run calls again; the warning is once per run.
+	if state == idle.Unavailable && !seen {
 		warnf(a, "idle stop is unavailable in %s: its user is not root and has no passwordless sudo", c.Name)
 	}
 	if stop == nil {
