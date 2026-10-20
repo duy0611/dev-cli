@@ -242,28 +242,9 @@ func rewriteGeneratedTools(ctx context.Context, a *app, workspace, name string, 
 		return err
 	}
 
-	// Derived from the rows, never a flag: a rebuild must not change what the
-	// container is mounted on.
-	var mount dcgen.Mount
-	switch t.container.SourceKind {
-	case model.SourceNone:
-		mount = folderlessMount(t.workspace.Name, name)
-	default:
-		// From the stored column, not the checkout on disk, which may have been
-		// deleted.
-		switch {
-		case t.container.Mode == model.ModeIsolated:
-			mount = isolatedMount(t.workspace.Name, name, local.WorkspaceFolderOf(t.container))
-		case t.container.WorktreeRepo != "":
-			mount = worktreeMount(t.container.WorktreeRepo, t.container.Source)
-		}
-	}
-	// Derived from the stored column, since this re-renders the whole document
-	// and a state mount kept only in the JSON would be dropped.
-	state := stateFor(t.container.PersistState, t.workspace.Name, name)
-	config, err := dcgen.Render(name, next, mount, state)
+	config, err := renderGenerated(t.container, next)
 	if err != nil {
-		return usageError(err)
+		return err
 	}
 
 	st, err := a.store()
@@ -271,4 +252,33 @@ func rewriteGeneratedTools(ctx context.Context, a *app, workspace, name string, 
 		return err
 	}
 	return st.UpdateContainerConfig(t.workspace.Name, name, config)
+}
+
+// renderGenerated re-renders c's generated document with tools, deriving the
+// mount and state from c's columns.
+func renderGenerated(c model.Container, tools []string) (string, error) {
+	// Derived from the rows, never a flag: a rebuild must not change what the
+	// container is mounted on.
+	var mount dcgen.Mount
+	switch c.SourceKind {
+	case model.SourceNone:
+		mount = folderlessMount(c.WorkspaceName, c.Name)
+	default:
+		// From the stored column, not the checkout on disk, which may have been
+		// deleted.
+		switch {
+		case c.Mode == model.ModeIsolated:
+			mount = isolatedMount(c.WorkspaceName, c.Name, local.WorkspaceFolderOf(c))
+		case c.WorktreeRepo != "":
+			mount = worktreeMount(c.WorktreeRepo, c.Source)
+		}
+	}
+	// Derived from the stored column, since this re-renders the whole document
+	// and a state mount kept only in the JSON would be dropped.
+	state := stateFor(c.PersistState, c.WorkspaceName, c.Name)
+	config, err := dcgen.Render(c.Name, tools, mount, state)
+	if err != nil {
+		return "", usageError(err)
+	}
+	return config, nil
 }

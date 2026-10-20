@@ -136,7 +136,7 @@ func TestUpAppliesAndWaits(t *testing.T) {
 
 func TestRebuildAlwaysBuilds(t *testing.T) {
 	s := clusterStubs(t, true) // already exists, so Up would not build
-	if err := testProvider().Rebuild(context.Background(), k8sContainer(t), nil, true); err != nil {
+	if err := testProvider().Rebuild(context.Background(), k8sContainer(t), nil, provider.RebuildOpts{NoCache: true}); err != nil {
 		t.Fatalf("Rebuild: %v", err)
 	}
 
@@ -359,5 +359,12 @@ func TestUpSkipsTheFirstCreateSyncWithoutAFolder(t *testing.T) {
 		if strings.Contains(call, "tar -x") {
 			t.Errorf("Up synced a folderless container: %q", call)
 		}
+	}
+}
+
+func TestRebuildRefusesToSeed(t *testing.T) {
+	err := testProvider().Rebuild(context.Background(), k8sContainer(t), nil, provider.RebuildOpts{Seed: true})
+	if err == nil || !strings.Contains(err.Error(), "nothing to seed") {
+		t.Errorf("err = %v, want a refusal to seed", err)
 	}
 }

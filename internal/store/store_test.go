@@ -718,3 +718,48 @@ func TestDeletingAContainerTakesItsFolders(t *testing.T) {
 		t.Errorf("a recreated container inherited folders %v", got.Folders)
 	}
 }
+
+// A change of mode rewrites every mode-derived column and the folder set in
+// one go, so a reader never sees a mode with another mode's mounts.
+func TestSetContainerModeRewritesTheModeColumns(t *testing.T) {
+	s := openTest(t)
+	seed(t, s)
+	if err := s.CreateContainer(model.Container{
+		Name: "c", WorkspaceName: "ws", SourceKind: model.SourceFolder, Source: "/src/api",
+		Mode: model.ModeGuarded, WorktreeRepo: "/r", GeneratedConfig: "old",
+		Folders: []model.Folder{{HostPath: "/a", ContainerPath: "/workspaces/a", WorktreeRepo: "/ra"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := model.Container{
+		Name: "c", WorkspaceName: "ws", SourceKind: model.SourceFolder, Source: "/src/api",
+		Mode: model.ModeIsolated, WorkspacePath: "/workspaces/x", WorktreeRepo: "",
+		GeneratedConfig: "new",
+		Folders:         []model.Folder{{HostPath: "/a", ContainerPath: "/workspaces/a", WorktreeRepo: ""}},
+	}
+	if err := s.SetContainerMode(want); err != nil {
+		t.Fatalf("SetContainerMode: %v", err)
+	}
+	got, err := s.GetContainer("ws", "c")
+	if err != nil {
+		t.Fatalf("GetContainer: %v", err)
+	}
+	if got.Mode != want.Mode || got.WorkspacePath != want.WorkspacePath ||
+		got.WorktreeRepo != want.WorktreeRepo || got.GeneratedConfig != want.GeneratedConfig {
+		t.Errorf("got mode=%q workspace_path=%q worktree_repo=%q config=%q, want %q %q %q %q",
+			got.Mode, got.WorkspacePath, got.WorktreeRepo, got.GeneratedConfig,
+			want.Mode, want.WorkspacePath, want.WorktreeRepo, want.GeneratedConfig)
+	}
+	if !slices.Equal(got.Folders, want.Folders) {
+		t.Errorf("folders = %v, want %v", got.Folders, want.Folders)
+	}
+}
+
+func TestSetContainerModeOnAMissingContainer(t *testing.T) {
+	s := openTest(t)
+	seed(t, s)
+	err := s.SetContainerMode(model.Container{Name: "nope", WorkspaceName: "ws", Mode: model.ModeIsolated})
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("SetContainerMode on a missing container = %v, want ErrNotFound", err)
+	}
+}

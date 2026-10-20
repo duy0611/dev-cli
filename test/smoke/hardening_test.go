@@ -3,6 +3,7 @@
 package smoke
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,6 +52,21 @@ func gitFixture(t *testing.T) string {
 // read once: host git renames a new config over the old, which detaches a
 // single-file mount a moment later (at once on Linux, about 1.5s on a macOS
 // podman machine).
+// gitProbes are the paths under ws that must refuse a write, by every spelling
+// of .git a case-insensitive disk could honour.
+func gitProbes(ws string) map[string]string {
+	gitdir := ws + "/.git"
+	return map[string]string{
+		"config":           gitdir + "/config",
+		"info/attributes":  gitdir + "/info/attributes",
+		"a new hook":       gitdir + "/hooks/smoke-probe",
+		"commondir":        gitdir + "/commondir",
+		"CONFIG":           gitdir + "/CONFIG",
+		".GIT/config":      ws + "/.GIT/config",
+		"HOOKS/a new hook": gitdir + "/HOOKS/smoke-probe-upper",
+	}
+}
+
 func TestSmokeGitGuard(t *testing.T) {
 	requireBinaries(t, "devcontainer", "docker", "git")
 	t.Setenv("DEV_STATE", t.TempDir())
@@ -94,15 +110,7 @@ func TestSmokeGitGuard(t *testing.T) {
 
 	// Every route into .git, including case variants that got past single-file
 	// mounts on macOS.
-	probes := map[string]string{
-		"config":           gitdir + "/config",
-		"info/attributes":  gitdir + "/info/attributes",
-		"a new hook":       gitdir + "/hooks/smoke-probe",
-		"commondir":        gitdir + "/commondir",
-		"CONFIG":           gitdir + "/CONFIG",
-		".GIT/config":      ws + "/.GIT/config",
-		"HOOKS/a new hook": gitdir + "/HOOKS/smoke-probe-upper",
-	}
+	probes := gitProbes(ws)
 	tryAll := func(when string) {
 		t.Helper()
 		for label, path := range probes {
@@ -323,5 +331,137 @@ func TestSmokeIsolated(t *testing.T) {
 	dev("container", "remove", name)
 	if got := hostGit("for-each-ref", "refs/remotes/"+name+"/"); got != "" {
 		t.Errorf("remove left the fetched refs behind: %q", got)
+	}
+}
+
+// modeFixture is a committed git repository with no devcontainer config, so a
+// generated one (Ubuntu, with the git these tests need) is used.
+func modeFixture(t *testing.T) (project string, hostGit func(args ...string) string) {
+	t.Helper()
+	project = gitFixture(t)
+	if err := os.RemoveAll(filepath.Join(project, ".devcontainer")); err != nil {
+		t.Fatal(err)
+	}
+	hostGit = func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = project
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("host git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	if err := os.WriteFile(filepath.Join(project, "f.txt"), []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hostGit("add", "f.txt")
+	hostGit("commit", "-q", "-m", "init")
+	return project, hostGit
+}
+
+// TestSmokeUnprotectedRoundTrip checks a container's .git is read-only while
+// guarded, writable while unprotected, and read-only again once guarded.
+func TestSmokeUnprotectedRoundTrip(t *testing.T) {
+	requireBinaries(t, "devcontainer", "docker", "git")
+	t.Setenv("DEV_STATE", t.TempDir())
+	bin := buildBinary(t)
+	project, hostGit := modeFixture(t)
+
+	const name = "dev-smoke-unprotected"
+	dev := func(args ...string) string { t.Helper(); return run(t, bin, args...) }
+	t.Cleanup(func() { _ = exec.Command(bin, "container", "remove", name, "--force").Run() })
+
+	dev("provider", "configure", providerName, "--kind", "local")
+	dev("workspace", "init", workspaceName, "--provider", providerName)
+	t.Log("creating a guarded container; the first run pulls a base image")
+	dev("container", "create", name, "--folder", project, "--generate", "--tools", "yq")
+
+	ws := "/workspaces/" + filepath.Base(project)
+	sh := func(script string) (string, error) {
+		t.Helper()
+		out, err := exec.Command(bin, "container", "exec", name, "--", "sh", "-c", "cd "+ws+" && "+script).CombinedOutput()
+		return string(out), err
+	}
+	requireReadOnly := func(when string) {
+		t.Helper()
+		out, err := sh("git commit -q --allow-empty -m guarded-attempt")
+		if err == nil || !strings.Contains(out, "Read-only file system") {
+			t.Errorf("%s: a commit inside was not refused as read-only: %v\n%s", when, err, out)
+		}
+		for label, path := range gitProbes(".") {
+			if out, err := sh("echo '# smoke-probe' >> " + path); err == nil {
+				t.Errorf("%s: a write to %s succeeded inside the container: %s", when, label, out)
+			}
+		}
+	}
+	requireReadOnly("guarded")
+
+	dev("container", "rebuild", name, "--mode", "unprotected")
+	if out, err := sh("git commit -q --allow-empty -m from-unprotected"); err != nil {
+		t.Fatalf("a commit inside an unprotected container failed: %v\n%s", err, out)
+	}
+	if got := hostGit("log", "-1", "--format=%s"); got != "from-unprotected" {
+		t.Errorf("host git log -1 is %q; want the commit made inside", got)
+	}
+
+	dev("container", "rebuild", name, "--mode", "guarded")
+	requireReadOnly("guarded again")
+}
+
+// TestSmokeGuardedToIsolated checks a guarded container becomes isolated with
+// the folder's uncommitted and untracked files, that fetch brings the work
+// home, and that leaving isolated is refused with exit 2.
+func TestSmokeGuardedToIsolated(t *testing.T) {
+	requireBinaries(t, "devcontainer", "docker", "git")
+	t.Setenv("DEV_STATE", t.TempDir())
+	bin := buildBinary(t)
+	project, hostGit := modeFixture(t)
+	if err := os.WriteFile(filepath.Join(project, "f.txt"), []byte("one\nwip\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "untracked.txt"), []byte("new\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	globalConfig := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(globalConfig, []byte("[user]\n\tname = agent\n\temail = a@example.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
+
+	const name = "dev-smoke-to-isolated"
+	dev := func(args ...string) string { t.Helper(); return run(t, bin, args...) }
+	t.Cleanup(func() { _ = exec.Command(bin, "container", "remove", name, "--force").Run() })
+
+	dev("provider", "configure", providerName, "--kind", "local")
+	dev("workspace", "init", workspaceName, "--provider", providerName)
+	t.Log("creating a guarded container; the first run pulls a base image")
+	dev("container", "create", name, "--folder", project, "--generate", "--tools", "yq")
+
+	dev("container", "rebuild", name, "--mode", "isolated")
+
+	ws := "/workspaces/" + filepath.Base(project)
+	sh := func(script string) string {
+		t.Helper()
+		return dev("container", "exec", name, "--", "sh", "-c", "cd "+ws+" && "+script)
+	}
+	if got := strings.TrimSpace(sh("git status --porcelain")); !strings.Contains(got, "M f.txt") || !strings.Contains(got, "?? untracked.txt") {
+		t.Errorf("the copy's status is %q; want f.txt modified and untracked.txt untracked", got)
+	}
+
+	sh("git switch -q -c agent-work && git add -A && git commit -qm 'from the agent'")
+	dev("container", "fetch", name)
+	if got := hostGit("log", "--format=%s", "-1", "refs/remotes/"+name+"/agent-work"); got != "from the agent" {
+		t.Errorf("fetch did not bring the agent's branch home: %q", got)
+	}
+
+	cmd := exec.Command(bin, "container", "rebuild", name, "--mode", "guarded")
+	out, err := cmd.CombinedOutput()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 2 {
+		t.Errorf("leaving isolated: err %v; want exit 2\n%s", err, out)
+	}
+	if got := strings.TrimSpace(sh("echo still-running")); got != "still-running" {
+		t.Errorf("the container did not survive the refused rebuild: %q", got)
 	}
 }

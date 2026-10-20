@@ -135,6 +135,11 @@ func (a *app) planGitDir(c model.Container, worktreeRepo string, seed bool) (git
 	if c.SourceKind != model.SourceFolder || c.Mode == model.ModeIsolated {
 		return gitGuardPlan{}, nil, nil
 	}
+	// Before the GitGuard check: create sets it for unprotected too, so a later
+	// switch to guarded finds the primary.
+	if c.Mode == model.ModeUnprotected {
+		return gitGuardPlan{}, nil, nil
+	}
 	if c.Mode == model.ModeGuarded {
 		return planGuardedGitDir(c, worktreeRepo)
 	}

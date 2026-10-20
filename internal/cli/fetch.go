@@ -31,8 +31,8 @@ func newContainerFetchCmd(a *app) *cobra.Command {
 			"nothing from the container's configuration or hooks is read on your\n" +
 			"machine, and objects are checked as they arrive.\n\n" +
 			"Uncommitted work in the container stays there; commit it inside first.\n" +
-			"A guarded container's work is already in its folder, so it has nothing\n" +
-			"to fetch.",
+			"A guarded or unprotected container's work is already in its folder, so\n" +
+			"it has nothing to fetch.",
 		Args: exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runContainerFetch(cmd.Context(), a, workspace, args[0])

@@ -389,3 +389,44 @@ func TestWorkspaceForwardingSkipsAGuardedContainer(t *testing.T) {
 		t.Error("the audit record would say the agent was forwarded")
 	}
 }
+
+type fakeSession struct{}
+
+func (fakeSession) Socket() string              { return "/run/dev/agent.sock" }
+func (fakeSession) Close() error                { return nil }
+func (fakeSession) End() string                 { return "closed" }
+func (fakeSession) Drops() []provider.AgentDrop { return nil }
+
+type fakeForwarder struct{ provider.Provider }
+
+func (fakeForwarder) ForwardAgent(context.Context, model.Container, string) (provider.AgentSession, error) {
+	return fakeSession{}, nil
+}
+
+func TestSSHAgentIsForwardedIntoAnUnprotectedContainer(t *testing.T) {
+	a, _ := newTestApp(t)
+	sock := t.TempDir() + "/agent.sock"
+	if err := touch(sock); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSH_AUTH_SOCK", sock)
+	on := true
+	t2 := &target{
+		workspace: model.Workspace{Name: "ws"},
+		container: model.Container{Name: "api", Mode: model.ModeUnprotected},
+		provider:  fakeForwarder{},
+	}
+
+	env, stop, err := a.forwardAgent(context.Background(), t2, &on, nil)
+	if err != nil {
+		t.Fatalf("forwardAgent: %v", err)
+	}
+	stop()
+	set := false
+	for _, e := range env {
+		set = set || e.Key == sshAuthSockKey
+	}
+	if !set || !agentForwarded(t2, &on) {
+		t.Errorf("the agent was not forwarded: %v", env)
+	}
+}

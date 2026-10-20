@@ -14,6 +14,7 @@ command. For what `dev` *is* and how it fits together, read the
   - [Which credentials to give a container](#which-credentials-to-give-a-container)
   - [Push to git from inside a container](#push-to-git-from-inside-a-container)
   - [What a container can do to your git](#what-a-container-can-do-to-your-git)
+  - [Changing a container's mode](#changing-a-containers-mode)
   - [Keep an agent's plugins across a rebuild](#keep-an-agents-plugins-across-a-rebuild)
   - [Declare a project's agent setup](#declare-a-projects-agent-setup)
   - [Commit a devcontainer.json that also works under dev](#commit-a-devcontainerjson-that-also-works-under-dev)
@@ -526,15 +527,15 @@ dev container create both --folder ~/code/something/repo-1 --folder ~/code/somet
 The primary is the project: its `.devcontainer`, or a generated configuration,
 builds the container, and its `.devcontainer/agents.yaml` is the one applied.
 Every other folder appears at `/workspaces/<its folder name>` — a git worktree
-checkout at its own host path, as a primary one is — and is guarded or isolated
-exactly as the primary is (see
+checkout at its own host path, as a primary one is — and has the mode
+the primary has (see
 [What a container can do to your git](#what-a-container-can-do-to-your-git)).
-In guarded mode each repository's `.git` is read-only; in isolated mode each
-folder is copied into a volume of its own. A folder you do not name is not in
-the container at all.
+In guarded mode each repository's `.git` is read-only; in unprotected mode it is
+writable; in isolated mode each folder is copied into a volume of its own. A
+folder you do not name is not in the container at all.
 
-A new container puts its primary at `/workspaces/<its folder name>` in both
-modes, so one set of agent instructions serves either.
+A new container puts its primary at `/workspaces/<its folder name>` in every
+mode, so one set of agent instructions serves all three.
 
 `create` refuses, exit 2, a set it cannot mount cleanly: a folder given twice,
 a folder inside another — for a guarded primary that includes anywhere else in
@@ -544,7 +545,9 @@ leave one out.
 
 `container list` shows the primary followed by `+N`.
 
-A guarded container's extra folders can change on a rebuild; each flag is
+`dev container rebuild NAME --mode MODE` changes a local container's mode; see
+[Changing a container's mode](#changing-a-containers-mode). A guarded or
+unprotected container's extra folders can change on a rebuild; each flag is
 repeatable:
 
 ```sh
@@ -552,13 +555,14 @@ dev container rebuild both --add-folder ~/code/something/repo-3
 dev container rebuild both --remove-folder ~/code/something/repo-2
 ```
 
-An added folder is guarded from the rebuilt container's first command; a
-removed one's work is already on your host. If an extra folder disappears from
-your host, `start` refuses, exit 1, naming it and the `--remove-folder` that
-drops it. An isolated container's folders, and any container's primary, are
-fixed: recreate the container to change them. In isolated mode `fetch` brings
-each repository's branches home into that repository, and `remove` checks each
-one, naming the folder that still holds work.
+An added folder gets the container's mode from the rebuilt container's first
+command; a removed one's work is already on your host. If an extra folder
+disappears from your host, `start` refuses, exit 1, naming it and the
+`--remove-folder` that drops it. An isolated container's folders, and any
+container's primary, are fixed: recreate the container to change them. In
+isolated mode `fetch` brings each repository's branches home into that
+repository, and `remove` checks each one, naming the folder that still holds
+work.
 
 The experimental k8s provider takes one folder; more is exit 2.
 
@@ -582,8 +586,8 @@ reads. What does not: `commit`, `add`, `stash`, creating a branch, `fetch` and
 `pull`, all of which write to `.git` and fail with `Read-only file system`. You
 review the agent's edits in your checkout and commit them yourself. Tell the
 agent so in your project's agent instructions, or it will keep trying. The
-project's `AGENTS.md` or `CLAUDE.md` is in the container in both modes, so one
-passage can serve either by telling the agent how to recognise the guarded
+project's `AGENTS.md` or `CLAUDE.md` is in the container in every mode, so one
+passage can serve all by telling the agent how to recognise the guarded
 case:
 
 ```markdown
@@ -595,8 +599,8 @@ This container may be guarded, with `.git` mounted read-only:
   `Read-only file system`, the container is guarded. Do not retry or work
   around it: leave the changes uncommitted and say so in your summary.
   The operator reviews and commits them from the host.
-- Otherwise the container is isolated: commit on a branch, and push
-  if asked. The operator brings the work home with `dev container fetch`.
+- Otherwise commit on a branch, and push if asked. If the container is
+  isolated, the operator brings the work home with `dev container fetch`.
 ```
 
 Go by the error rather than a probe: in a worktree `.git` is a file, and
@@ -660,6 +664,25 @@ What guarded does not cover:
   (lefthook's `lefthook.yml`, pre-commit's `.pre-commit-config.yaml`). The agent
   edits those like any other file. Review before running workspace code.
 
+**Unprotected** (`--mode unprotected`, local provider only) mounts your folder
+live with nothing over `.git`: it is writable, and the agent can commit,
+branch, stash and fetch in it, with your checkout showing each change as it
+happens. It gives up the guard. Anything running in the container can write
+`core.fsmonitor`, a hook or any other setting that names a program, and host git
+runs it the next time you use git in the folder. `create --mode unprotected`
+and a rebuild into it print a warning that says so and names
+`rebuild --mode guarded` as the way back.
+
+None of guarded's checks run: no hooks-path or `include.path` mounts, no probe
+before each command, and no refusal of a project that sets its own
+`workspaceMount`, whose mount is used as the project wrote it. The ssh agent is
+allowed, as in isolated: `--ssh-agent` and `--ssh-forward` work, so the agent
+can push and sign. A worktree folder's common directory is mounted writable at
+its own path so the checkout's `.git` file resolves. `fetch` refuses an
+unprotected container, since its work is already in your folder. `container
+list` shows `unprotected` in `MODE`. [SECURITY.md](SECURITY.md) says when to
+choose it.
+
 **Isolated** (`--mode isolated`) never shares your folder with the container.
 On first create, `dev` copies it into a volume the container owns: the working
 tree as it is — uncommitted changes, untracked and ignored files, so `.env` and
@@ -696,6 +719,54 @@ editor publishing a branch) lifts it until the container restarts, and on
 macOS a write to `.git/CONFIG` gets past it — and, for a project that moves its
 workspace, it only fingerprints `.git` around each command. Recreate such a
 container in a mode.
+
+### Changing a container's mode
+
+`dev container rebuild NAME --mode MODE` recreates a local container in another
+mode. Each allowed change, and what it keeps:
+
+| From \ To | guarded | unprotected | isolated |
+|---|---|---|---|
+| guarded | no-op | yes | yes, one way |
+| unprotected | yes | no-op | yes, one way |
+| isolated | no | no | no-op |
+
+Asking for the current mode changes nothing about the mode and the rebuild goes
+ahead. Everything else is exit 2 and touches nothing: leaving isolated (bring
+the work home with `dev container fetch` and create a new container), any change
+on a container created before modes or with `--no-folder`, `guarded` or
+`unprotected` on the k8s provider, and `--mode guarded` on a project that sets
+its own `workspaceMount`. Every folder is placed again for the new mode and the
+set is checked as `create` checks it, so a set the new mode refuses is exit 2.
+`--mode` combines with `--add-folder` and `--remove-folder`. A change of mode is
+printed, as `container api rebuilt (guarded -> unprotected)`, and recorded in the
+audit log. The mode switch itself is not configuration drift; a change to the
+project's own `devcontainer.json` made at the same time still is.
+
+The common use is to open a guarded container up for a while, then close it:
+
+```sh
+dev container rebuild api --mode unprotected   # open up for a stack of PRs
+dev container rebuild api --mode guarded       # guarded again
+```
+
+Switching to guarded protects from then on and undoes nothing: whatever the
+container wrote to `.git` while it was unprotected is still there. Read
+`.git/config` and the hooks before you trust the folder again. A rebuild
+replaces the container, so a running agent session stops; `start-agent` resumes
+where the agent keeps its own state.
+
+A switch into isolated copies each folder into a volume as it is at that moment,
+uncommitted and untracked files included, exactly as the first create of an
+isolated container does, then runs the lifecycle commands. If `up` or the copy
+fails, `dev` removes the new container and volumes, returns the original error
+and keeps the old mode: rerun the command, or `rebuild` for the old container
+back. If only a lifecycle command fails, the container is already isolated and
+its volume holds the copy, so the mode is recorded as isolated. A volume left
+from an earlier isolated life is exit 1, naming it.
+
+The mode is recorded only after the rebuild succeeds, never by `start` or
+`exec`. The audit log's `rebuild` record carries `mode_from` and `mode_to`.
 
 ### Keep an agent's plugins across a rebuild
 
@@ -1215,8 +1286,9 @@ Removing the active workspace leaves none active rather than a dangling pointer.
 ### container
 
 ```
-dev container create NAME [--folder PATH]... [--mode guarded|isolated] [--generate] [--tools LIST]
-                         [--no-persist-state] [--agent-config PATH | --no-agent-config] [--no-start]
+dev container create NAME [--folder PATH]...
+                         [--mode guarded|unprotected|isolated] [--generate] [--tools LIST] [--no-persist-state]
+                         [--agent-config PATH | --no-agent-config] [--no-start]
                          [--allow-privileged]
 dev container create NAME --no-folder [--tools LIST] [--no-persist-state]
                          [--agent-config PATH | --no-agent-config] [--no-start]
@@ -1228,6 +1300,7 @@ dev container stop NAME
 dev container remove NAME [--force]
 dev container rebuild NAME [--no-cache] [--tools LIST] [--accept-config]
                           [--add-folder PATH]... [--remove-folder PATH]...
+                          [--mode guarded|unprotected|isolated]
 dev container logs NAME [-f]
 dev container shell NAME [--kube-token] [--ssh-agent|--no-ssh-agent]
 dev container exec NAME [--kube-token] [--ssh-agent|--no-ssh-agent] -- CMD [ARGS...]
@@ -1248,7 +1321,7 @@ primary, and the rest are extra folders (see
 | Flag | Meaning |
 |---|---|
 | `--folder` | host folder holding the project; bind-mounted on local, copied in on k8s. Repeatable: the first is the primary, each other appears at `/workspaces/<basename>`. Default: the current directory |
-| `--mode` | `guarded`: the folder live, `.git` read-only; `isolated`: a copy the agent owns. Default `guarded` on local, `isolated` on k8s. Fixed for the container's life |
+| `--mode` | `guarded`: the folder live, `.git` read-only; `unprotected`: the folder live, `.git` writable (local only); `isolated`: a copy the agent owns. Default `guarded` on local, `isolated` on k8s. Change it later with `rebuild --mode` |
 | `--no-folder` | no host directory at all; work lives in a volume `dev` owns |
 | `--generate` | render a base Ubuntu configuration when the folder ships none |
 | `--tools` | comma-separated catalog tools for a generated container |
@@ -1258,10 +1331,12 @@ primary, and the rest are extra folders (see
 | `--from` | start from another generated container's tools and settings in this workspace |
 | `--no-start` | record the container without starting it |
 
-The mode is fixed when the container is created and kept by `rebuild`; see
+The mode is chosen at create and changed only by `rebuild --mode`; see
 [What a container can do to your git](#what-a-container-can-do-to-your-git). A
-`--no-folder` container takes no mode. `--mode guarded` on a k8s workspace is
-exit 2, since a pod cannot mount your folder live.
+`--no-folder` container takes no mode. `--mode guarded` or `--mode unprotected`
+on a k8s workspace is exit 2, since a pod cannot mount your folder live. A
+local `create --mode unprotected` prints a warning naming
+`rebuild --mode guarded`.
 
 Extra folders are refused, exit 2, when one is given twice, lies inside another
 folder or inside a guarded primary's repository, or would appear at the same
@@ -1356,12 +1431,15 @@ only to a container `dev` generated.
 A rebuild keeps the volume on both providers. To start from an empty workspace,
 `remove` and `create` — which is explicit about destroying the contents.
 
-`--add-folder` and `--remove-folder`, each repeatable, change a guarded
-container's extra folders. The resulting set is checked as `create` checks it
-before anything changes, and the record is written only once the rebuild
-succeeds. `--remove-folder` of the primary, `--add-folder` of a folder already
-there, and either flag on an isolated or legacy container are exit 2; a folder
-gone from the host can still be removed by the path it was added with.
+`--mode` changes the container's mode along the edges in [Changing a container's
+mode](#changing-a-containers-mode); the new mode is written only once the
+rebuild succeeds. `--add-folder` and `--remove-folder`, each repeatable, change
+a guarded or unprotected container's extra folders. The resulting set is checked
+as `create` checks it before anything changes, and the record is written only
+once the rebuild succeeds. `--remove-folder` of the primary, `--add-folder` of a
+folder already there, and either flag on an isolated or legacy container are
+exit 2; a folder gone from the host can still be removed by the path it was
+added with.
 
 A rebuild of a project-owned container first compares its configuration with
 the one the container was last built from — the merged configuration, its

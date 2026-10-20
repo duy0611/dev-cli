@@ -7,17 +7,21 @@ miss, how `dev` stops it, and what is left for you to decide.
 ## The short version
 
 - Choose a mode when you create a container: `dev container create NAME
-  --mode guarded` (the default) or `--mode isolated`. It cannot be changed
-  later.
+  --mode guarded` (the default), `--mode isolated` or `--mode unprotected`.
+  `dev container rebuild NAME --mode MODE` changes it later, except out of
+  isolated.
 - **Guarded:** you see the agent's edits on your machine as it makes them. It
   can read your git history but cannot commit. You review and commit.
 - **Isolated:** the agent works on its own copy of your repository and can
   commit and push. You see its work when you fetch its branches.
+- **Unprotected:** the same live folder as guarded, with `.git` writable. The
+  agent can commit and push, and it can also change what your git runs. It
+  gives up the protection; use it for a task you are watching, then switch back.
 - Pick **isolated** when the repository has submodules, when you use
   `dev worktree`, when the agent needs private dependencies over ssh, or when
   it will run unattended or read untrusted text.
-- Neither mode makes it safe to open the agent's folder as a *trusted*
-  workspace in your editor. See "What neither mode covers".
+- No mode makes it safe to open the agent's folder as a *trusted*
+  workspace in your editor. See "What no mode covers".
 
 ## The risk
 
@@ -39,17 +43,17 @@ Turning off hooks and `core.fsmonitor` on your machine does not close this.
 Dozens of settings run programs, and a repository's own configuration wins over
 your global one.
 
-## The two modes
+## The three modes
 
-| | Guarded | Isolated |
-|---|---|---|
-| Your folder in the container | shared live; `.git` read-only | copied once into a volume; never shared |
-| See the agent's edits on your machine | yes, as they happen | no; fetch its branches |
-| Agent can commit, branch, rebase | no | yes |
-| Agent can push and sign commits | no | yes, through `dev`'s ssh relay |
-| Agent can change what your git runs | no, except through a submodule's or worktree's `.git` file | no |
-| Private dependencies over ssh | no | yes |
-| Works on Kubernetes | no | yes |
+| | Guarded | Unprotected | Isolated |
+|---|---|---|---|
+| Your folder in the container | shared live; `.git` read-only | shared live; `.git` writable | copied once into a volume; never shared |
+| See the agent's edits on your machine | yes, as they happen | yes, as they happen | no; fetch its branches |
+| Agent can commit, branch, rebase | no | yes | yes |
+| Agent can push and sign commits | no | yes, through `dev`'s ssh relay | yes, through `dev`'s ssh relay |
+| Agent can change what your git runs | no, except through a submodule's or worktree's `.git` file | yes | no |
+| Private dependencies over ssh | no | yes | yes |
+| Works on Kubernetes | no | no | yes |
 
 ### Guarded
 
@@ -67,7 +71,7 @@ configuration while the container runs.
 
 Tell the agent that committing is your job — in your project's agent
 instructions — or it will keep trying. [USAGE.md](USAGE.md#what-a-container-can-do-to-your-git)
-has a passage that works in either mode.
+has a passage that works in every mode.
 
 A container can be given several folders (`--folder` repeated). The promise is
 per folder: each repository's `.git` is read-only, and each gap below applies
@@ -75,6 +79,23 @@ to the folder that has it. A folder you did not name is not in the container at
 all, so pointing `--folder` at a parent of several repositories is not the way
 to give an agent more than one — `dev` finds a repository only by walking up
 from the folder, so the repositories below the parent would get no guard.
+
+### Unprotected
+
+The folder is shared live exactly as in guarded, but nothing is mounted over
+`.git`. The agent commits, branches, stashes and pushes in your own checkout,
+and you see it all as it happens. It gives up the protection described under
+"The risk": anything running in the container can write a setting or hook that
+your git then runs on your machine, as you. Use it for a task you are watching,
+in a repository whose agent you trust for that task, not for an agent that is
+unattended or reading untrusted text.
+
+`create --mode unprotected` and a rebuild into it print a warning saying so.
+`dev container rebuild NAME --mode guarded` puts the guard back from that
+rebuild on. It undoes nothing: a hook or setting the container wrote while it
+was unprotected is still in `.git`. After an unprotected stretch you did not
+watch, read `.git/config` and `.git/hooks` before using git in the folder.
+Kubernetes has no unprotected mode, since a pod cannot mount your folder.
 
 ### Isolated
 
@@ -103,7 +124,7 @@ uncommitted, unfetched or unmerged, and deletes the `NAME/*` refs once it
 passes; `--force` removes it anyway and keeps them. `podman machine reset` or deleting the volume by
 hand loses it without asking.
 
-## What neither mode covers
+## What no mode covers
 
 **Reviewing the agent's commits.** Whatever the agent commits is code you have
 not read. If your repository runs hook scripts from its own tree — husky's
@@ -116,9 +137,9 @@ code from it: a linter from `node_modules`, a language server's build scripts,
 a virtual environment's interpreter, tasks in `.vscode/`. Open folders the agent
 has written to in your editor's restricted mode until you trust what is there.
 
-**Your ssh agent, in isolated mode.** While a `dev` command runs, the container
-can ask your ssh agent to sign with any key it holds. Give it an agent holding
-only the key it needs:
+**Your ssh agent, in unprotected and isolated modes.** While a `dev` command
+runs, the container can ask your ssh agent to sign with any key it holds. Give
+it an agent holding only the key it needs:
 
 ```sh
 eval "$(ssh-agent -s)"          # a new agent, in this shell only

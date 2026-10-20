@@ -250,11 +250,18 @@ refer to them by number, so the numbers are stable.
     mounts, and a streamed copy of the object store would drift from the host
     with nothing to push it back.
 
-12. **A container's mode is guarded or isolated, and a guarded `.git` is one
-    read-only directory mount.** The mode is a column, fixed at create and kept
-    by `rebuild` for invariant 10's reason; `legacy` is what migration 0008
-    wrote for every row that predates modes, and those keep the single-file
-    guard they were made with. Nothing else ever writes `legacy`.
+12. **A container's mode is guarded, unprotected or isolated, and a guarded
+    `.git` is one read-only directory mount.** The mode is a column. It changes
+    only through `rebuild --mode`, only along the allowed edges (guarded and
+    unprotected either way, and either into isolated, never out of it), and is
+    written only after a successful rebuild, never by `start` or `exec`, so
+    invariant 10's "mounted on must not change under it" holds. For a switch
+    into isolated, success is the seed, not the lifecycle hooks: from then on
+    the volume holds the only copy. `legacy` is what migration 0008 wrote for
+    every row that predates modes, and those keep the single-file guard they
+    were made with; nothing else ever writes `legacy`, and a legacy row cannot
+    change mode. Unprotected mounts the folder with nothing over `.git`, so none
+    of guarded's checks apply to it.
 
     Never a read-only mount on a single file inside a writable `.git`. git
     replaces its files by writing a lock and renaming it over the original,

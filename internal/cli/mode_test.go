@@ -555,3 +555,142 @@ func TestStartSurvivesAFailedKeyscan(t *testing.T) {
 		t.Fatalf("create failed on a failed keyscan: %v", err)
 	}
 }
+
+func TestCreateUnprotectedStoresTheMode(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+
+	if err := runContainerCreate(t.Context(), a, "", "api", projectWithConfig(t),
+		createOpts{noStart: true, mode: model.ModeUnprotected}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if got := containerRow(t, a, "api").Mode; got != model.ModeUnprotected {
+		t.Errorf("mode = %q, want unprotected", got)
+	}
+}
+
+func TestK8sRefusesUnprotected(t *testing.T) {
+	a, _ := newTestApp(t)
+	if err := runProviderConfigure(a, "kp", "k8s", k8s.Config{Context: "c", Registry: "r"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runWorkspaceInit(a, "ws", "kp", false); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runContainerCreate(t.Context(), a, "", "web", projectWithConfig(t),
+		createOpts{noStart: true, mode: model.ModeUnprotected})
+	if got := exitCodeOf(err); got != exitUsage {
+		t.Errorf("--mode unprotected on k8s: exit code = %d (%v), want %d", got, err, exitUsage)
+	}
+}
+
+func TestUnprotectedMountsNothingOverGit(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	calls, captured := stubCapturingDevcontainer(t)
+	root := gitRepoWithConfig(t, `{"image":"ubuntu"}`)
+
+	if err := runContainerCreate(t.Context(), a, "", "api", root,
+		createOpts{mode: model.ModeUnprotected}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	gitdir := "/workspaces/" + filepath.Base(root) + "/.git"
+	mounts := mountsUsedForUp(t, calls, captured)
+	for _, target := range []string{gitdir, gitdir + "/config"} {
+		if hasMountAt(mounts, target) {
+			t.Errorf("a mount at %s in an unprotected container:\n  %s", target, strings.Join(mounts, "\n  "))
+		}
+	}
+	hooks, _ := hooksCopyDir("ws", "api")
+	if entries, _ := os.ReadDir(hooks); len(entries) > 0 {
+		t.Errorf("an unprotected container got a hooks copy at %s", hooks)
+	}
+}
+
+func TestUnprotectedProjectThatMovesTheWorkspaceIsAccepted(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	stubCapturingDevcontainer(t)
+	root := gitRepoWithConfig(t, `{"image":"ubuntu","workspaceFolder":"/src"}`)
+
+	if err := runContainerCreate(t.Context(), a, "", "api", root,
+		createOpts{mode: model.ModeUnprotected}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+}
+
+func TestUnprotectedWorktreeFolderIsWritable(t *testing.T) {
+	requireGit(t)
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	calls, captured := stubCapturingDevcontainer(t)
+	stubEngineWithMounts(t, "")
+	repo := initRepo(t)
+	wtRepo := initRepo(t)
+	wt := filepath.Join(filepath.Dir(repo), "wt")
+	gitIn(t, wtRepo, "worktree", "add", "-q", "-b", "feat", wt)
+
+	if err := runContainerCreate(t.Context(), a, "", "api", repo, createOpts{generate: true,
+		tools: []string{"yq"}, mode: model.ModeUnprotected, extraFolders: []string{wt}}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	c := containerRow(t, a, "api")
+	if len(c.Folders) != 1 || c.Folders[0].WorktreeRepo == "" {
+		t.Fatalf("folders = %+v, want one worktree folder", c.Folders)
+	}
+	mounts := mountsUsedForUp(t, calls, captured)
+	if r := c.Folders[0].WorktreeRepo; !hasMount(mounts, r, false) {
+		t.Errorf("the repository %s is not mounted writable:\n  %s", r, strings.Join(mounts, "\n  "))
+	}
+	for _, m := range mounts {
+		if strings.Contains(m, "readonly") {
+			t.Errorf("a read-only mount in an unprotected container: %s", m)
+		}
+	}
+}
+
+func TestUnprotectedCreateWarns(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+
+	warnings := captureStderr(t, func() {
+		if err := runContainerCreate(t.Context(), a, "", "api", projectWithConfig(t),
+			createOpts{noStart: true, mode: model.ModeUnprotected}); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+	})
+	if !strings.Contains(warnings, "is unprotected") || !strings.Contains(warnings, "--mode guarded") {
+		t.Errorf("warnings = %q, want the unprotected notice", warnings)
+	}
+}
+
+func TestListShowsUnprotected(t *testing.T) {
+	a, out := newTestApp(t)
+	seedWorkspace(t, a)
+	st, _ := a.store()
+	if err := st.CreateContainer(model.Container{Name: "u", WorkspaceName: "ws",
+		SourceKind: model.SourceFolder, Source: "/src/u", Mode: model.ModeUnprotected}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runContainerList(t.Context(), a, "", false, time.Second); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if !strings.Contains(out.String(), "unprotected") {
+		t.Errorf("list does not show the mode:\n%s", out)
+	}
+}
+
+func TestFetchRefusesUnprotected(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	st, _ := a.store()
+	if err := st.CreateContainer(model.Container{Name: "u", WorkspaceName: "ws",
+		SourceKind: model.SourceFolder, Source: "/src/u", Mode: model.ModeUnprotected}); err != nil {
+		t.Fatal(err)
+	}
+	err := runContainerFetch(t.Context(), a, "", "u")
+	if got := exitCodeOf(err); got != exitUsage {
+		t.Errorf("exit code = %d (%v), want %d", got, err, exitUsage)
+	}
+}
