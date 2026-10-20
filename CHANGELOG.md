@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.18.0](https://github.com/duy0611/dev-cli/compare/v0.17.0...v0.18.0) (2026-10-20)
+
+
+### Features
+
+* **cli:** an unprotected mode, the folder live with .git writable ([dea2525](https://github.com/duy0611/dev-cli/commit/dea252517c240516fc076aabf5829737b0a7372e))
+* **cli:** rebuild --mode changes a container's mode ([b037303](https://github.com/duy0611/dev-cli/commit/b0373036327d13d507ee1fa069dbcfdaa67421d5))
+* **provider:** a rebuild that seeds a fresh isolated workspace ([059ee5d](https://github.com/duy0611/dev-cli/commit/059ee5d34921fc0b532fa377dbd84ea4aeca8331))
+* **store:** record a container's change of mode ([dfc06d2](https://github.com/duy0611/dev-cli/commit/dfc06d2a1eeebb0f44cfd47e05bbb6c042d0bbcf))
+
+
+### Bug Fixes
+
+* **cli:** a mode change is not configuration drift ([339b617](https://github.com/duy0611/dev-cli/commit/339b61741ee43da4a4c2b1dca6f27b6ef0b0a58b))
+
 ## [0.17.0](https://github.com/duy0611/dev-cli/compare/v0.16.0...v0.17.0) (2026-10-19)
 
 
