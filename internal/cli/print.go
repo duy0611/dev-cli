@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"io"
-	"os"
 	"strconv"
 	"strings"
 )
@@ -31,5 +30,5 @@ func onOff(b bool) string {
 // warnf reports something the operator should know about but that did not stop
 // the command. Stderr, so it stays out of a piped list.
 func warnf(a *app, format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "dev: "+format+"\n", args...)
+	fmt.Fprintf(a.stderr(), "dev: "+format+"\n", args...)
 }
