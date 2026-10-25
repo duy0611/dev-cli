@@ -237,8 +237,8 @@ func TestConfigShowPrintsTheContainerRecord(t *testing.T) {
 	a, out := newTestApp(t)
 	seedWorkspace(t, a)
 
-	folder := projectWithAgents(t, claudeAgents)
-	extra := t.TempDir()
+	folder := resolvedPath(t, projectWithAgents(t, claudeAgents))
+	extra := resolvedPath(t, t.TempDir())
 	opts := createOpts{noStart: true, extraFolders: []string{extra}}
 	if err := runContainerCreate(t.Context(), a, "", "owned", folder, opts); err != nil {
 		t.Fatalf("create: %v", err)
@@ -458,6 +458,17 @@ func configShowRecord(t *testing.T, a *app, name string) string {
 		t.Fatalf("config show: %v", err)
 	}
 	return errOut.String()
+}
+
+// resolvedPath is the form create stores for a folder: the physical path, so a
+// temp directory behind a symlink (macOS's /var) reads back expanded.
+func resolvedPath(t *testing.T, path string) string {
+	t.Helper()
+	got, err := xpath.Resolve(path)
+	if err != nil {
+		t.Fatalf("resolving %s: %v", path, err)
+	}
+	return got
 }
 
 // recordFields parses the record into label -> value, joining a repeated label
