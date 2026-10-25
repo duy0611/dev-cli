@@ -50,7 +50,7 @@ func agentConfigFile(c model.Container) (string, error) {
 	case "":
 		// Re-derived each time, not stored: the project may gain or lose the
 		// file.
-		if c.SourceKind != model.SourceFolder {
+		if c.SourceKind != model.SourceFolder || c.Source == "" {
 			return "", nil
 		}
 		p := filepath.Join(c.Source, agentcfg.FileName)

@@ -295,13 +295,25 @@ dev container config show tmp
 `config show` answers the same question for a container whose project ships its
 own `devcontainer.json`, and there the answer is not the file on disk: `dev`
 merges its state mount in on every invocation, so the document the container is
-built from exists only for the length of one command. The path it came from goes
-to stderr and the document to stdout, so `config show NAME | jq` still receives
-JSON and nothing else.
+built from exists only for the length of one command.
+
+The document goes to stdout and nothing else does, so `config show NAME | jq`
+receives JSON. Everything dev knows about the container goes to stderr above it:
+the columns `container list` prints, and the settings that have no column there
+— where the configuration came from, the extra folders, which `agents.yaml`
+applies, the worktree it belongs to, and when it was created.
 
 ```
 ❯ dev container config show api
-dev: merged from ~/code/api/.devcontainer/devcontainer.json
+container api (workspace default)
+  source:       ~/code/api
+  folder:       ~/code/lib -> /workspaces/lib
+  config:       merged from ~/code/api/.devcontainer/devcontainer.json
+  mode:         guarded
+  state:        on
+  host access:  refused
+  agents:       project (.devcontainer/agents.yaml)
+  created:      2026-10-20 10:11:12
 {
   "image": "mcr.microsoft.com/devcontainers/base:1-ubuntu-24.04",
   "mounts": [
@@ -312,7 +324,9 @@ dev: merged from ~/code/api/.devcontainer/devcontainer.json
 ```
 
 A container created with `--no-persist-state` has no merge to show, and says so:
-what the CLI receives really is the project's file, unchanged.
+what the CLI receives really is the project's file, unchanged. Live status is
+not part of the record — that answer comes from the engine, so it stays with
+`container list`.
 
 ### Change what a generated container installs
 
@@ -1503,9 +1517,15 @@ each; `fetch` and commit inside first, or `--force`. It deletes every folder's
 volume.
 
 **`tools`** lists the catalog, marking each entry official or community.
-**`config show`** prints the configuration a container is built from: the
-generated document, or for a project-owned container the merged one, with the
-path it came from on stderr.
+**`config show`** prints what dev recorded about the container — source,
+folders, where its configuration came from, mode, state, host access, the
+`agents.yaml` that applies, worktree and creation time — to stderr, then the
+configuration it is built from to stdout: the generated document, or for a
+project-owned container the merged one. `agents` names the file dev would use,
+or `none`, and adds `, not yet applied` while an apply is still owed and
+`, invalid` when a start or rebuild would refuse the file as it stands. Stdout
+carries the document alone, so the command pipes into `jq`. Live status stays
+with `container list`.
 
 ### worktree
 

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"text/tabwriter"
@@ -18,6 +19,9 @@ import (
 // store opens lazily, so `dev --help` creates no database.
 type app struct {
 	out io.Writer
+	// errw is where everything that is not the command's output goes. Tests
+	// set it; os.Stderr otherwise.
+	errw io.Writer
 
 	st       *store.Store
 	openErr  error
@@ -138,4 +142,13 @@ func (a *app) table(write func(w io.Writer)) error {
 
 func (a *app) printf(format string, args ...any) {
 	fmt.Fprintf(a.out, format, args...)
+}
+
+// stderr is the writer for anything that must not reach a pipe: warnings, and
+// the record `container config show` prints beside its document.
+func (a *app) stderr() io.Writer {
+	if a.errw != nil {
+		return a.errw
+	}
+	return os.Stderr
 }
