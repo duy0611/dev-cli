@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.0](https://github.com/duy0611/dev-cli/compare/v0.18.0...v0.19.0) (2026-10-25)
+
+
+### Features
+
+* **cli:** print the container record in config show ([599c330](https://github.com/duy0611/dev-cli/commit/599c330a6a21463d54cc0aebe702bc2f747d84c8))
+
 ## [0.18.0](https://github.com/duy0611/dev-cli/compare/v0.17.0...v0.18.0) (2026-10-20)
 
 
