@@ -181,40 +181,8 @@ func TestRelayAgentUnreachable(t *testing.T) {
 
 // TestRelayWithRealAgent reaches a real ssh-agent through the relay.
 func TestRelayWithRealAgent(t *testing.T) {
-	for _, bin := range []string{"ssh-agent", "ssh-add", "ssh-keygen"} {
-		if _, err := exec.LookPath(bin); err != nil {
-			t.Skipf("%s not installed", bin)
-		}
-	}
-
-	dir, err := os.MkdirTemp("", "agent")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-
-	agentSocket := filepath.Join(dir, "a")
-	agent := exec.Command("ssh-agent", "-D", "-a", agentSocket)
-	if err := agent.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = agent.Process.Kill()
-		_, _ = agent.Process.Wait()
-	})
-	waitForSocket(t, agentSocket)
-
-	key := filepath.Join(dir, "id_ed25519")
-	if out, err := exec.Command("ssh-keygen",
-		"-t", "ed25519", "-N", "", "-C", "relay-test", "-f", key).CombinedOutput(); err != nil {
-		t.Fatalf("ssh-keygen: %v\n%s", err, out)
-	}
-
-	add := exec.Command("ssh-add", key)
-	add.Env = append(os.Environ(), "SSH_AUTH_SOCK="+agentSocket)
-	if out, err := add.CombinedOutput(); err != nil {
-		t.Fatalf("ssh-add: %v\n%s", err, out)
-	}
+	agentSocket := startAgent(t)
+	addKey(t, agentSocket, "relay-test")
 
 	socket := connect(t, agentSocket)
 

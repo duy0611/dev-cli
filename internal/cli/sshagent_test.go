@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +24,25 @@ func touch(path string) error {
 		return err
 	}
 	return f.Close()
+}
+
+// waitForTestAgent waits until the agent at socket answers. The path existing
+// is not enough: bind(2) creates it a moment before listen(2) makes it accept,
+// and a dial landing in that gap is refused.
+func waitForTestAgent(t *testing.T, socket string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		conn, err := net.DialTimeout("unix", socket, time.Second)
+		if err == nil {
+			_ = conn.Close()
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("ssh agent at %s never accepted a connection: %v", socket, err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // startTestAgent runs a real ssh-agent holding one key and returns its socket.
@@ -50,14 +70,7 @@ func startTestAgent(t *testing.T) string {
 		_ = agent.Process.Kill()
 		_, _ = agent.Process.Wait()
 	})
-
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(socket); err == nil {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	waitForTestAgent(t, socket)
 
 	key := filepath.Join(dir, "id_ed25519")
 	if out, err := exec.Command("ssh-keygen",

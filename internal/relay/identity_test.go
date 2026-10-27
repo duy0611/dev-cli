@@ -1,12 +1,68 @@
 package relay
 
 import (
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
+
+// waitForAgent waits until the agent at socket answers. The path existing is
+// not enough: bind(2) creates it a moment before listen(2) makes it accept, and
+// a dial landing in that gap is refused — which is how this flaked on macOS.
+func waitForAgent(t *testing.T, socket string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		conn, err := net.DialTimeout("unix", socket, time.Second)
+		if err == nil {
+			_ = conn.Close()
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("ssh agent at %s never accepted a connection: %v", socket, err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// The socket file appears at bind(2); only listen(2) makes it an agent.
+func TestWaitForAgentWaitsForListen(t *testing.T) {
+	// Short path: unix socket paths are capped near 100 bytes.
+	dir, err := os.MkdirTemp("", "bindwait")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "a")
+
+	fd, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = syscall.Close(fd) })
+	if err := syscall.Bind(fd, &syscall.SockaddrUnix{Name: socket}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Bound but not listening: the state ssh-agent passes through on the way up.
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		_ = syscall.Listen(fd, 1)
+	}()
+
+	waitForAgent(t, socket)
+
+	conn, err := net.DialTimeout("unix", socket, time.Second)
+	if err != nil {
+		t.Fatalf("waitForAgent returned before the agent was listening: %v", err)
+	}
+	_ = conn.Close()
+}
 
 // startAgent runs a real ssh-agent and returns its socket.
 func startAgent(t *testing.T) string {
@@ -32,7 +88,7 @@ func startAgent(t *testing.T) string {
 		_ = agent.Process.Kill()
 		_, _ = agent.Process.Wait()
 	})
-	waitForSocket(t, socket)
+	waitForAgent(t, socket)
 	return socket
 }
 
