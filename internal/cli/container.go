@@ -42,6 +42,8 @@ func newContainerCmd(a *app) *cobra.Command {
 		newContainerShellCmd(a),
 		newContainerExecCmd(a),
 		newContainerStartAgentCmd(a),
+		newContainerStartAgentTeamCmd(a),
+		newContainerTeamCmd(a),
 		newContainerSyncCmd(a),
 		newContainerFetchCmd(a),
 		newContainerToolsCmd(a),

@@ -7,6 +7,7 @@ command. For what `dev` *is* and how it fits together, read the
 - [Walkthroughs](#walkthroughs)
   - [First setup](#first-setup)
   - [Run an agent on a project](#run-an-agent-on-a-project)
+  - [Run an agent team (experimental)](#run-an-agent-team-experimental)
   - [A scratch sandbox with no project](#a-scratch-sandbox-with-no-project)
   - [A project that ships no devcontainer config](#a-project-that-ships-no-devcontainer-config)
   - [Change what a generated container installs](#change-what-a-generated-container-installs)
@@ -73,6 +74,110 @@ To get a shell instead:
 ```sh
 dev container shell api
 ```
+
+### Run an agent team (experimental)
+
+> **Experimental.** The command, its flags and the team folder may change
+> without a migration.
+
+A team is a lead agent plus one to three workers it hands tasks to. The point is
+cost: an expensive model plans and reviews, cheaper ones implement.
+
+```sh
+dev container start-agent-team api \
+  --lead claude --lead-model opus \
+  --workers opencode \
+  --worker coder=litellm/deepseek-v4.1-flash \
+  --worker reviewer=litellm/claude-sonnet-5-5
+```
+
+`--lead` and `--workers` take `claude` or `opencode`, in any combination, and
+both tools have to be installed in the image already. `hermes` and `codex` are
+refused, exit 2: neither runs unattended the way a worker has to. `--worker` is
+`ROLE=MODEL`, one per role, and repeats up to three times. `coder` implements
+and edits; `reviewer` and `researcher` read and report. The model is passed
+through in the worker tool's own syntax, so opencode wants `provider/model` and
+Claude an alias or a full ID; `dev` does not check it. Without `--lead-model`
+the lead uses its tool's default.
+
+The launch is `start-agent` with team wiring: the same container start,
+settings, ssh agent, kube token and Herdr name, and the same interactive
+session. Nothing is planned for you. You talk to the lead, approve a plan, and
+it breaks the plan into tasks and hands each to a worker. Arguments after `--`
+go to the lead, as for `start-agent`:
+
+```sh
+dev container start-agent-team api --lead claude --workers claude --worker coder=haiku -- --continue
+```
+
+A worker runs headless, with its permissions pre-approved because nobody is
+there to answer a prompt; the container's guarded or isolated mode is the fence,
+as for any agent. Every task stops at its turn cap and wall-clock limit:
+`--worker-max-turns` (default 30) and `--worker-timeout` (default `30m`). The
+cap is counted from the worker's stream and enforced by dispatch, not handed to
+the tool. A task cut off that way comes back to the lead as a failure with the
+tail of its log, and counts as an attempt. The lead is told to retry it at most
+twice, with `dev-team start ROLE --retry ID`, before doing the work itself and
+recording the takeover. Quitting the lead does not stop a worker already
+running: it reaches its limits and leaves its result in the folder. A task's
+cost is recorded when the worker's tool reports one.
+
+The lead gets a standing instruction describing the team it has and how to hand
+work over. It travels in the lead's argv (`--append-system-prompt` for Claude)
+or in a file in the run folder (opencode), never in your working tree.
+`reviewer` and `researcher` are told not to edit, and the edit tools are removed
+where the tool allows it; for opencode the lock also denies the shell, subagent
+and execute tools. The instruction remains the fence, as it is for any agent.
+
+Hand-offs go through a `dev-team` binary installed in the container beside the
+runs. `dev-team start ROLE` takes the task text on stdin and prints an id at
+once; `dev-team start ROLE --retry ID` sends a finished task back to the same
+worker, with the new text from stdin, continuing its session. `dev-team wait ID`
+blocks until the task ends or 60 seconds pass, then prints its status and
+answer; `STATUS: running` means call it again. `dev-team result ID` prints a
+finished task's answer, and `dev-team takeover` takes an id plus `--reason TEXT`
+and records the lead doing the work itself. `dev-team list` lists the run's
+tasks.
+
+The team folder is a base in the container: `/var/dev-state/dev-team` on the
+state volume, `/tmp/dev-team` for a container created with `--no-persist-state`.
+The dispatch binary is at `bin/dev-team` under it, and each launch is a run at
+`runs/<container>-<UTC launch time>/`. A run holds `config.json`,
+`lead-instruction.md` when opencode leads, and `tasks/<id>/` with `task.md`,
+`task.json`, `log.jsonl` and `result.md`. A rebuild keeps the volume, so the
+runs survive it; `container remove` deletes the volume, so nothing outlives its
+container.
+
+Watch it from the host while the lead works:
+
+```sh
+dev container team list api          # runs, newest first, then the newest run's tasks
+dev container team list api --run api-20261026T101500Z
+dev container team logs api -f       # the running task, rendered
+dev container team logs api --task t3
+```
+
+`team list` shows each task's role, status, attempts, cost, takeover and whether
+its result has been collected; a `-` under COST means the worker never reported
+one. A finished task nobody collected still has its result in the folder.
+`team logs` renders a worker's stream as messages, tool calls and edits, and
+`-f` follows it until the task ends. Both need the container running.
+
+Resuming the lead with `--continue` (or `-c`, `--resume`, `-r`) keeps the newest
+run instead of starting another, so its next task lands in the same folder. The
+run's stored team is what dispatches the work: roles, models and limits given
+again on the command line are ignored by dispatch, while the standing
+instruction is built from them. On a stopped container, or one with no run yet,
+`--continue` starts a new run.
+
+With an opencode lead, `--lead-model` goes into its config's top-level `model`,
+because the interactive opencode has no model flag. Give it provider-qualified,
+as `litellm/deepseek-v4.1-flash`; an unprefixed value is probably ignored
+without a word.
+
+The local provider is what this is built for. The team commands reach inside the
+container only through `Provider.Exec`, so nothing depends on how the provider
+runs one; the k8s provider is experimental either way.
 
 ### Review an agent's changes (experimental)
 
@@ -1319,6 +1424,12 @@ dev container logs NAME [-f]
 dev container shell NAME [--kube-token] [--ssh-agent|--no-ssh-agent]
 dev container exec NAME [--kube-token] [--ssh-agent|--no-ssh-agent] -- CMD [ARGS...]
 dev container start-agent NAME [--agent claude|codex|hermes|opencode] [--agent-name NAME] [--kube-token] [--ssh-agent|--no-ssh-agent] [-- ARGS...]
+dev container start-agent-team NAME --lead claude|opencode [--lead-model MODEL]
+                                --workers claude|opencode --worker ROLE=MODEL
+                                [--worker-max-turns N] [--worker-timeout DURATION]
+                                [--agent-name NAME] [--kube-token] [--ssh-agent|--no-ssh-agent] [-- ARGS...]
+dev container team list NAME [--run ID]
+dev container team logs NAME [--run ID] [--task ID] [-f]
 dev container sync NAME
 dev container fetch NAME
 dev container tools
@@ -1493,6 +1604,45 @@ the first forwards the agent even if the workspace does not, the second keeps
 it out even if the workspace forwards it. With neither, the workspace decides.
 Giving both is exit 2. See
 [Push to git from inside a container](#push-to-git-from-inside-a-container).
+
+**`start-agent-team`** runs a lead agent with a team of workers; see
+[Run an agent team](#run-an-agent-team-experimental). It is experimental: its
+flags and the team folder may change without a migration. `--lead`, `--workers`
+and at least one `--worker` are required, and a missing one is exit 2 before the
+container is touched. `hermes` and `codex` are refused as either, exit 2: only
+`claude` and `opencode` run unattended workers. The lead and the workers may be
+different tools; all workers are the same tool.
+
+| Flag | Meaning |
+|---|---|
+| `--lead` | `claude` or `opencode`; required |
+| `--lead-model` | the lead's model; default is the tool's own. For an opencode lead it goes in its config's `model`, provider-qualified (`litellm/NAME`) |
+| `--workers` | `claude` or `opencode`; required. Every worker runs this tool |
+| `--worker` | `ROLE=MODEL`, one to three; `ROLE` is `coder`, `reviewer` or `researcher`, each at most once |
+| `--worker-max-turns` | stop a worker after this many turns; default `30` |
+| `--worker-timeout` | stop a worker after this long, as a Go duration; default `30m` |
+| `--agent-name` | the lead's name in Herdr, as on `start-agent` |
+
+A role is not checked against the model, and `dev` does not validate model
+names. Arguments after `--` go to the lead unchanged, so a lead flag such as
+`--continue` belongs there. `--kube-token`, `--ssh-agent` and `--no-ssh-agent`
+behave as they do on `start-agent`. A lead or a worker that is not installed in
+the image is reported before the session starts, naming the project's
+configuration.
+
+**`team list`** lists the container's runs, newest first, then the newest run's
+tasks; `--run` shows one run's tasks alone. The table gives each task's role,
+status, attempts, cost, takeover and whether its result has been collected. No
+run yet prints a message and exits 0. A run named by `--run` that does not exist
+is exit 3.
+
+**`team logs`** renders one task's worker log as messages, tool calls and edits.
+Without `--task` it reads the run's running task, or its most recent one;
+without `--run`, the newest run. `-f` keeps printing new lines until the task
+finishes and stops on interrupt. An unknown run or task is exit 3.
+
+Neither watch command reads your files: both go through the container, so a
+stopped container is exit 1 for either.
 
 **`sync`** pushes the workspace's settings into a container and never touches
 your files. On k8s it refreshes the Secret the pod is built from, leaving the
@@ -1672,9 +1822,10 @@ container, event, and a summary. See
 | `--json` | the matching records as raw JSON lines, for `jq` |
 
 Events: `create`, `rebuild`, `start`, `stop`, `remove`, `exec`, `shell`,
-`start-agent`, `kube-token`, `relay`, `sync`, `refused` for a command a guard
-stopped (with the reason — `escape`, `drift` or `git` — and what it found), and `accept-config` for a rebuild
-told to take a changed configuration (with what changed).
+`start-agent`, `start-agent-team`, `kube-token`, `relay`, `sync`, `refused` for
+a command a guard stopped (with the reason — `escape`, `drift` or `git` — and
+what it found), and `accept-config` for a rebuild told to take a changed
+configuration (with what changed).
 
 Names are not looked up: a workspace or container that no longer exists still
 has history, so an unknown name prints nothing and exits `0` rather than `3`.

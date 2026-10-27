@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -139,6 +140,7 @@ func TestAskKubeTokenNeedsATerminal(t *testing.T) {
 // went.
 type recordingProvider struct {
 	provider.Provider
+	mu           sync.Mutex
 	execs        []recordedExec
 	noKubectl    bool
 	failExec     bool
@@ -151,13 +153,20 @@ type recordedExec struct {
 	stdin string
 }
 
-func (p *recordingProvider) Exec(_ context.Context, _ model.Container, cmd []string, opts provider.ExecOpts) error {
+// record is safe for the concurrent execs a follow makes.
+func (p *recordingProvider) record(cmd []string, opts provider.ExecOpts) {
 	r := recordedExec{cmd: cmd, env: opts.Env}
 	if opts.Stdin != nil {
 		b, _ := io.ReadAll(opts.Stdin)
 		r.stdin = string(b)
 	}
+	p.mu.Lock()
 	p.execs = append(p.execs, r)
+	p.mu.Unlock()
+}
+
+func (p *recordingProvider) Exec(_ context.Context, _ model.Container, cmd []string, opts provider.ExecOpts) error {
+	p.record(cmd, opts)
 	if p.failExec && strings.Contains(strings.Join(cmd, " "), kubeconfigPath) {
 		return errors.New("exec failed")
 	}
@@ -269,23 +278,64 @@ func init() {
 
 type fakeProvider struct {
 	recordingProvider
+	mu     sync.Mutex
 	status model.Status
 	log    []string
+	upEnv  []provider.EnvVar
+	// outputs answers an exec whose joined argv is a key, as the container's
+	// own command would; anything else stays silent.
+	outputs map[string]string
+	// failCmd fails the execs a test names, before the recording provider's
+	// own filters.
+	failCmd func(cmd []string) error
+	// failStatus, when set, may fail a Status call. The known status is
+	// returned with the error so a caller that ignores it still sees it.
+	failStatus func() error
+	// execFn answers an exec itself, writing to the caller's streams and
+	// blocking as a real command would. handled=false falls through to
+	// outputs and the recording provider.
+	execFn func(ctx context.Context, cmd []string, opts provider.ExecOpts) (handled bool, err error)
+}
+
+func (p *fakeProvider) logf(line string) {
+	p.mu.Lock()
+	p.log = append(p.log, line)
+	p.mu.Unlock()
 }
 
 func (p *fakeProvider) Status(context.Context, model.Container) (model.Status, error) {
-	p.log = append(p.log, "status")
+	p.logf("status")
+	if p.failStatus != nil {
+		if err := p.failStatus(); err != nil {
+			return p.status, err
+		}
+	}
 	return p.status, nil
 }
 
-func (p *fakeProvider) Up(context.Context, model.Container, []provider.EnvVar) error {
-	p.log = append(p.log, "up")
+func (p *fakeProvider) Up(_ context.Context, _ model.Container, env []provider.EnvVar) error {
+	p.logf("up")
+	p.upEnv = env
 	p.status = model.StatusRunning
 	return nil
 }
 
 func (p *fakeProvider) Exec(ctx context.Context, c model.Container, cmd []string, opts provider.ExecOpts) error {
-	p.log = append(p.log, "exec "+strings.Join(cmd, " "))
+	p.logf("exec " + strings.Join(cmd, " "))
+	if p.failCmd != nil {
+		if err := p.failCmd(cmd); err != nil {
+			return err
+		}
+	}
+	if p.execFn != nil {
+		if handled, err := p.execFn(ctx, cmd, opts); handled {
+			p.record(cmd, opts)
+			return err
+		}
+	}
+	if out, ok := p.outputs[strings.Join(cmd, " ")]; ok && opts.Stdout != nil {
+		_, _ = io.WriteString(opts.Stdout, out)
+	}
 	return p.recordingProvider.Exec(ctx, c, cmd, opts)
 }
 

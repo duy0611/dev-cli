@@ -93,10 +93,10 @@ jobs:
       - name: Lint
         run: make lint
 
-      # Builds the relay for both architectures, then dev with them embedded.
-      # Before the tests, because a test asserts the embedded relay is a real
-      # ELF executable and skips when it is absent — so without this the check
-      # that the cross-build works would quietly not run.
+      # Builds the relay and the team dispatch binary for both architectures,
+      # then dev with them embedded. Before the tests, because tests assert each
+      # embedded binary is a real ELF executable and skip when it is absent — so
+      # without this the check that the cross-build works would quietly not run.
       - name: Build
         run: make build
 
@@ -141,10 +141,10 @@ jobs:
       - name: Install the devcontainer CLI
         run: npm install -g @devcontainers/cli
 
-      # The smoke tests compile cmd/dev themselves; the relay has to be there
-      # first or that binary embeds none.
-      - name: Build the relay
-        run: make relay
+      # The smoke tests compile cmd/dev themselves; the relay and the team
+      # dispatch binary have to be there first or that binary embeds none.
+      - name: Build the embedded binaries
+        run: make relay team
 
       - name: Smoke
         run: make smoke

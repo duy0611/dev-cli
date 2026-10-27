@@ -41,6 +41,35 @@ every command resolves the settings afresh, and no copy exists there to drift.
 It is optional for the reason `AgentForwarder` is, not because one provider
 cannot implement it.
 
+## The agent team
+
+`dev container start-agent-team` runs a lead agent that hands tasks to worker
+agents. That lives in `internal/team`, not `internal/agent`: `internal/agent`
+knows how to start one agent interactively, while a team is a worker protocol, a
+run folder and a dispatch binary the lead calls, and none of that is about the
+lead's own invocation. `cmd/dev-team` is that binary. It is cross-built for the
+container's architectures by `make team` and embedded by `internal/teambin`,
+exactly as the ssh relay is by `internal/relaybin`: it runs where there is no Go
+toolchain, and a k8s pod is linux/amd64 whatever the host. For the same reason
+it imports `internal/team` and the standard library only.
+
+A hand-off is call-and-return, not a mailbox: the lead runs `dev-team wait` on a
+task id and gets the task's status and answer in that one call. An idle agent
+does not wake on mail and a team runs unattended, so the channel has to be one
+that blocks. The wait is bounded at 60 s, under the 120 s default that bounds
+Claude's Bash calls, and a task still running answers `STATUS: running` so the
+lead calls wait again instead of reading a timeout as a failed attempt. The
+worker itself runs under a detached supervisor, so it reaches its end and writes
+its result even when the lead is gone.
+
+The team folder is a base inside the container: `/var/dev-state/dev-team` when
+the container persists state and `/tmp/dev-team` otherwise. The dispatch binary
+is `bin/dev-team` under it, and each launch is a run at
+`runs/<container>-<UTC launch time>/` holding `config.json`, the lead
+instruction opencode reads, and one `tasks/<id>/` per task. It is never in the
+operator's working tree, and the host reads it through `Provider.Exec`, the same
+route the dispatch binary travels.
+
 ## Invariants
 
 Violating one of these produces a failure far from its cause. Code comments

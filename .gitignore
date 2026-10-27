@@ -13,6 +13,11 @@
 /internal/relaybin/bin/*
 !/internal/relaybin/bin/README.md
 
+# The in-container dispatch binary, built by `make team` for each architecture
+# and embedded into dev. Same reasoning as the relay above.
+/internal/teambin/bin/*
+!/internal/teambin/bin/README.md
+
 # Go test artefacts.
 *.test
 *.out

@@ -250,3 +250,14 @@ func TestSummariseRelay(t *testing.T) {
 		}
 	}
 }
+
+func TestSummariseStartAgentTeam(t *testing.T) {
+	e := audit.Entry{Event: "start-agent-team", Fields: map[string]any{
+		"argv":      []any{"claude", "--append-system-prompt", "<team instruction>"},
+		"exit_code": float64(0),
+	}}
+	want := "claude --append-system-prompt <team instruction>, exit 0"
+	if got := summarise(e); got != want {
+		t.Errorf("summarise = %q, want %q", got, want)
+	}
+}
