@@ -2,6 +2,7 @@
 #
 #   make build      build dist/dev
 #   make relay      build the in-container agent relay, both architectures
+#   make team       build the in-container team dispatch binary, both architectures
 #   make test       go test ./...
 #   make lint       gofmt, go vet, golangci-lint
 #   make smoke      end-to-end test against a real container engine
@@ -22,12 +23,12 @@ GO      ?= go
 GOBUILD := CGO_ENABLED=0 $(GO) build -ldflags "-X main.version=$(VERSION)"
 
 .DEFAULT_GOAL := help
-.PHONY: help build relay test lint smoke install hooks clean
+.PHONY: help build relay team test lint smoke install hooks clean
 
 help:
-	@sed -n '3,11p' $(MAKEFILE_LIST) | sed 's/^# \{0,1\}//'
+	@sed -n '3,12p' $(MAKEFILE_LIST) | sed 's/^# \{0,1\}//'
 
-build: relay
+build: relay team
 	@mkdir -p dist
 	$(GOBUILD) -o $(BIN) ./cmd/dev
 
@@ -57,6 +58,20 @@ relay:
 	  -o $(RELAY_DIR)/.arm64.tmp ./cmd/dev-relay
 	@mv $(RELAY_DIR)/.amd64.tmp $(RELAY_DIR)/relay-linux-amd64
 	@mv $(RELAY_DIR)/.arm64.tmp $(RELAY_DIR)/relay-linux-arm64
+
+# The in-container dispatch binary the lead calls, embedded into dev by
+# internal/teambin. Both architectures and the stripped flags for the relay's
+# reasons: a k8s container is linux/amd64 whatever the host, and this is copied
+# into a container on every launch.
+TEAM_DIR := internal/teambin/bin
+team:
+	@mkdir -p $(TEAM_DIR)
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -trimpath -ldflags "-s -w" \
+	  -o $(TEAM_DIR)/.amd64.tmp ./cmd/dev-team
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -trimpath -ldflags "-s -w" \
+	  -o $(TEAM_DIR)/.arm64.tmp ./cmd/dev-team
+	@mv $(TEAM_DIR)/.amd64.tmp $(TEAM_DIR)/dev-team-linux-amd64
+	@mv $(TEAM_DIR)/.arm64.tmp $(TEAM_DIR)/dev-team-linux-arm64
 
 # -timeout 120s, not go's 10m default: nothing here is slow, so a package that
 # stops finishing has deadlocked, and the stack should print in a minute rather
@@ -109,9 +124,10 @@ hooks:
 	install -m 0755 .githooks/* "$$(git rev-parse --git-common-dir)/hooks/"
 	@echo "git hooks installed from .githooks"
 
-# The relay binaries go too — they are build output, and gitignored. The README
-# beside them stays: the embed names the directory, and one that matches nothing
-# does not compile.
+# The relay and team binaries go too — they are build output, and gitignored.
+# The READMEs beside them stay: the embeds name the directories, and one that
+# matches nothing does not compile.
 clean:
 	rm -rf dist
 	rm -f $(RELAY_DIR)/relay-linux-amd64 $(RELAY_DIR)/relay-linux-arm64
+	rm -f $(TEAM_DIR)/dev-team-linux-amd64 $(TEAM_DIR)/dev-team-linux-arm64

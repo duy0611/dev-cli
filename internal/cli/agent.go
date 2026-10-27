@@ -91,8 +91,14 @@ type launchOpts struct {
 	herdrName   string
 	kubeToken   bool
 	sshOverride *bool
+	// env reaches the agent's own process and nothing else: not Up, not a
+	// rebuild, not the container's config steps.
+	env []provider.EnvVar
 	// event is the audit event recorded around the run.
 	event string
+	// auditArgv replaces argv in the audit record when set; the exec still runs
+	// argv. For an argument too large or too sensitive to keep in the log.
+	auditArgv []string
 	// onStart runs once every check has passed, immediately before the agent
 	// starts; an error aborts the launch.
 	onStart func() error
@@ -170,18 +176,27 @@ func (a *app) launchAgent(ctx context.Context, t *target, ag agent.Agent, argv [
 	}
 
 	started := time.Now()
+	// Cloned: appending to environ here would write into the slice Up and the
+	// config steps already hold.
+	execEnv := make([]provider.EnvVar, 0, len(environ)+len(o.env))
+	execEnv = append(execEnv, environ...)
+	execEnv = append(execEnv, o.env...)
 	err = a.guardedRun(ctx, t, func() error {
 		return t.provider.Exec(ctx, t.container, argv, provider.ExecOpts{
-			Env:    environ,
+			Env:    execEnv,
 			TTY:    true,
 			Stdin:  os.Stdin,
 			Stdout: os.Stdout,
 			Stderr: os.Stderr,
 		})
 	})
+	recorded := argv
+	if o.auditArgv != nil {
+		recorded = o.auditArgv
+	}
 	a.recordRun(o.event, t, started, map[string]any{
 		"agent":      ag.ID,
-		"argv":       argv,
+		"argv":       recorded,
 		"ssh_agent":  agentForwarded(t, o.sshOverride),
 		"kube_token": kubeReq != nil,
 	}, err)

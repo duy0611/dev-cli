@@ -116,7 +116,7 @@ func summarise(e audit.Entry) string {
 	num := func(k string) (int, bool) { n, ok := e.Fields[k].(float64); return int(n), ok }
 
 	switch e.Event {
-	case "exec", "shell", "start-agent":
+	case "exec", "shell", "start-agent", "start-agent-team":
 		var parts []string
 		if argv := joinArgv(e.Fields["argv"]); argv != "" {
 			parts = append(parts, argv)

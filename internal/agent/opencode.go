@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/duy0611/dev-cli/internal/agentcfg"
+	"github.com/duy0611/dev-cli/internal/provider"
 	"github.com/tailscale/hujson"
 )
 
@@ -26,6 +27,23 @@ func configureOpencode(v agentcfg.View) ([]Step, error) {
 		})
 	}
 	return append(steps, skillSteps("opencode", opencodeDir+"/skills", v.Skills)...), nil
+}
+
+// opencodeLead points opencode's merged config at the instruction file, which
+// lives outside the working tree. The interactive command has no --model flag,
+// so the model travels in the same config rather than argv.
+func opencodeLead(in LeadInput) ([]string, []provider.EnvVar, error) {
+	config, err := json.Marshal(struct {
+		Instructions []string `json:"instructions"`
+		Model        string   `json:"model,omitempty"`
+	}{Instructions: []string{in.InstructionFile}, Model: in.Model})
+	if err != nil {
+		return nil, nil, fmt.Errorf("encoding opencode's lead config: %w", err)
+	}
+	// Without --standalone the background service ignores this env var.
+	return []string{"--standalone"}, []provider.EnvVar{{
+		Key: "OPENCODE_CONFIG_CONTENT", Value: string(config),
+	}}, nil
 }
 
 // mergeOpencode adds declared plugins and sets declared servers by name,

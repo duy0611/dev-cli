@@ -10,9 +10,9 @@
 ##
 ## `dev` is a host-side tool: it shells out to the devcontainer CLI, docker and
 ## kubectl, and reads the macOS Keychain. So it is built for the machines an
-## operator sits at, which is not the same set as the relay's — that one runs
-## inside a Linux container and is always linux/amd64 and linux/arm64, both of
-## which are embedded in every binary here.
+## operator sits at, which is not the same set as the binaries that run inside a
+## Linux container — the relay and the team dispatch binary, always linux/amd64
+## and linux/arm64, both of which are embedded in every binary here.
 name: Release
 
 on:
@@ -89,10 +89,12 @@ jobs:
           fi
           mkdir -p release
 
-          # The relay is built once. It is linux-only whatever the host is,
-          # because it runs inside a container — and it is the same two binaries
-          # embedded into all four of the below.
+          # The relay and the team dispatch binary are built once. They are
+          # linux-only whatever the host is, because they run inside a
+          # container — and they are the same two binaries of each embedded into
+          # all four of the below.
           make relay
+          make team
 
           for platform in darwin/arm64 darwin/amd64 linux/arm64 linux/amd64; do
             os="${platform%/*}"

@@ -42,6 +42,7 @@ This container may be guarded, with `.git` mounted read-only:
 ```sh
 make            # help
 make build      # dist/dev
+make team       # build the in-container team dispatch binary, both architectures
 make test       # go test ./... — never touches a container engine
 make lint       # gofmt (fails on any diff), go vet, golangci-lint
 make smoke      # go test -tags smoke ./test/smoke/... — needs a real engine
@@ -67,6 +68,7 @@ make hooks      # copy .githooks into .git/hooks — once per clone
 ```
 cmd/dev/              main; exits with the code cli.Execute returns
 cmd/dev-relay/        the in-container half of the ssh agent relay
+cmd/dev-team/         the in-container dispatch binary a team lead calls
 internal/cli/         one file per noun; arg parsing and orchestration only
 internal/store/       SQLite, all persistence; schema in migrations/*.sql
 internal/model/       plain persisted types, no behaviour
@@ -88,6 +90,8 @@ internal/gitwt/       git worktrees: add, remove, list, which repository
 internal/wtseed/      copying .worktreeinclude files into a new checkout
 internal/seed/        an isolated container's first contents: tree + bundle
 internal/relay/, relaybin/  the ssh agent relay and its embedded binary
+internal/team/        an agent team's config, workers, run folder and dispatch
+internal/teambin/     the dispatch binary, embedded
 internal/review/       a guarded container's diff, the review file, the message for the agent
 internal/herdr/       optional Herdr registration
 internal/xpath/       physical paths, name and env-key validation

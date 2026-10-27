@@ -8,7 +8,17 @@ import (
 	"strings"
 
 	"github.com/duy0611/dev-cli/internal/agentcfg"
+	"github.com/duy0611/dev-cli/internal/provider"
 )
+
+// LeadInput is what a lead agent needs for its standing instruction. Claude
+// takes the text; opencode reads InstructionFile, which the launcher writes into
+// the run folder so the text never reaches argv.
+type LeadInput struct {
+	Instruction     string
+	InstructionFile string
+	Model           string
+}
 
 // Agent describes one coding agent.
 type Agent struct {
@@ -27,6 +37,10 @@ type Agent struct {
 	Prompt func(text string, resume bool) []string
 	// Resumes says Prompt honours resume.
 	Resumes bool
+	// Lead renders the arguments and environment that give the agent its
+	// standing instruction as a team lead. Nil when the agent has no channel
+	// for one.
+	Lead func(in LeadInput) ([]string, []provider.EnvVar, error)
 }
 
 // PromptCommand is the full argv that starts the agent with text as its first
@@ -38,6 +52,22 @@ func (a Agent) PromptCommand(text string, resume bool) (argv []string, resumed b
 	}
 	resumed = resume && a.Resumes
 	return append([]string{a.Binary}, a.Prompt(text, resumed)...), resumed, nil
+}
+
+// LeadCommand is the full argv that runs the agent as a team lead, extra
+// following the lead's own arguments. An agent without Lead is an error
+// naming it.
+func (a Agent) LeadCommand(in LeadInput, extra []string) (argv []string, env []provider.EnvVar, err error) {
+	if a.Lead == nil {
+		return nil, nil, fmt.Errorf("agent %q cannot lead a team: no way to give it a standing instruction", a.ID)
+	}
+	lead, env, err := a.Lead(in)
+	if err != nil {
+		return nil, nil, err
+	}
+	cmd := a.Command(nil)
+	cmd = append(cmd, lead...)
+	return append(cmd, extra...), env, nil
 }
 
 // Command renders the argv to run inside the container.
@@ -52,11 +82,11 @@ func (a Agent) Command(extra []string) []string {
 var registry = map[string]Agent{
 	"claude": {
 		ID: "claude", Binary: "claude", Configure: configureClaude,
-		Prompt: claudePrompt, Resumes: true,
+		Prompt: claudePrompt, Resumes: true, Lead: claudeLead,
 	},
 	"opencode": {
 		ID: "opencode", Binary: "opencode", Configure: configureOpencode,
-		Prompt: opencodePrompt, Resumes: true,
+		Prompt: opencodePrompt, Resumes: true, Lead: opencodeLead,
 	},
 	"codex": {ID: "codex", Binary: "codex"},
 	"hermes": {
@@ -70,6 +100,16 @@ func claudePrompt(text string, resume bool) []string {
 		return []string{"--continue", text}
 	}
 	return []string{text}
+}
+
+// claudeLead gives Claude the instruction as an appended system prompt, which
+// leaves the working tree untouched.
+func claudeLead(in LeadInput) ([]string, []provider.EnvVar, error) {
+	var args []string
+	if in.Model != "" {
+		args = append(args, "--model", in.Model)
+	}
+	return append(args, "--append-system-prompt", in.Instruction), nil, nil
 }
 
 func opencodePrompt(text string, resume bool) []string {
