@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.20.0](https://github.com/duy0611/dev-cli/compare/v0.19.0...v0.20.0) (2026-10-27)
+
+
+### Features
+
+* **agentcfg:** seed opencode.json from agents.yaml ([27155dd](https://github.com/duy0611/dev-cli/commit/27155dd6866df68c00876d0c6df153a238545627))
+* **team:** add start-agent-team with dev-team dispatch, team list and team logs ([ff9ba63](https://github.com/duy0611/dev-cli/commit/ff9ba63321829e4f7d6318a3b5359bb381ddbde0))
+
+
+### Bug Fixes
+
+* **relay:** make the agent-readiness test independent of accept-queue limits ([70329db](https://github.com/duy0611/dev-cli/commit/70329db9cf9b7e9dd9a6dd5c2f8cd6c5ca839d80))
+* **relay:** wait for the test agent to listen, not for its socket file ([9c5b460](https://github.com/duy0611/dev-cli/commit/9c5b46096d16577877c1979e9861dd3d205cc443))
+
 ## [0.19.0](https://github.com/duy0611/dev-cli/compare/v0.18.0...v0.19.0) (2026-10-25)
 
 
