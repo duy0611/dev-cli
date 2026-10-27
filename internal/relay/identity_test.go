@@ -50,18 +50,22 @@ func TestWaitForAgentWaitsForListen(t *testing.T) {
 	}
 
 	// Bound but not listening: the state ssh-agent passes through on the way up.
+	// The signal is sent before listen(2) so a successful dial, which cannot
+	// happen before it, is proof it was seen rather than a race with it.
+	listening := make(chan struct{})
 	go func() {
 		time.Sleep(100 * time.Millisecond)
+		close(listening)
 		_ = syscall.Listen(fd, 1)
 	}()
 
 	waitForAgent(t, socket)
 
-	conn, err := net.DialTimeout("unix", socket, time.Second)
-	if err != nil {
-		t.Fatalf("waitForAgent returned before the agent was listening: %v", err)
+	select {
+	case <-listening:
+	default:
+		t.Fatal("waitForAgent returned before the agent listened")
 	}
-	_ = conn.Close()
 }
 
 // startAgent runs a real ssh-agent and returns its socket.
