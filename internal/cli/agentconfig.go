@@ -117,7 +117,8 @@ func (a *app) applyAgentConfig(ctx context.Context, p provider.Provider, c model
 	}
 	for _, name := range spec.Refs() {
 		if !defined[name] {
-			warnf(a, "agents.yaml references ${%s}, which no workspace setting defines; "+
+			// No ${} or {env:}: the reference may come from either syntax.
+			warnf(a, "agents.yaml needs the variable %s, which no workspace setting defines; "+
 				"set it with: dev workspace set %s SPEC", name, name)
 		}
 	}

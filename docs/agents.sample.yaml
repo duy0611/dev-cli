@@ -86,8 +86,13 @@ claude:
   # mcp: {}
 
 opencode:
-  # npm packages, added to the `plugin` list in opencode.json; opencode
-  # installs them itself when it starts. Plugins already listed stay listed.
+  # A JSON or JSONC document that becomes the container's opencode.json on
+  # create and rebuild. Declared plugins and mcp entries are added to it. When
+  # set, it replaces the container's copy: edit this file and rebuild, and a
+  # key you delete here disappears at that rebuild. Relative to this file.
+  # config_file: ./opencode.json
+  # npm packages or git specs, added to opencode.json's plugin list (`plugins`
+  # in a V2 file, `plugin` in a V1 one). opencode installs them when it starts.
   plugins: []
   # skills: []
   # mcp: {}

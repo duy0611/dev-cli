@@ -3,6 +3,7 @@ package agentcfg
 import (
 	"archive/tar"
 	"bytes"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -176,6 +177,84 @@ skills:
 	}
 }
 
+func TestOpencodeConfigFile(t *testing.T) {
+	s, err := Load(write(t, `version: 1
+opencode:
+  config_file: ./opencode.json
+`, map[string]string{"opencode.json": `{
+  // opencode reads JSONC
+  "$schema": "https://opencode.ai/config.json",
+  "model": "litellm/deepseek-v4.1-flash",
+  "providers": {"litellm": {"settings": {"apiKey": "{env:LITELLM_API_KEY}"}}},
+}`}))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	v, ok := s.View("opencode")
+	if !ok {
+		t.Fatal("opencode has a config file but no view")
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(v.Config, &doc); err != nil {
+		t.Fatalf("Config is not JSON: %v\n%s", err, v.Config)
+	}
+	if doc["model"] != "litellm/deepseek-v4.1-flash" {
+		t.Errorf("Config lost the model: %s", v.Config)
+	}
+	if _, ok := doc["providers"]; !ok {
+		t.Errorf("Config lost the providers: %s", v.Config)
+	}
+	if got := s.Refs(); !slices.Equal(got, []string{"LITELLM_API_KEY"}) {
+		t.Errorf("Refs = %v, want the {env:} reference", got)
+	}
+}
+
+func TestOpencodeConfigFileAbsolute(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "oc.json")
+	if err := os.WriteFile(file, []byte(`{"model":"m"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(write(t, "version: 1\nopencode:\n  config_file: \""+file+"\"\n", nil))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if v, _ := s.View("opencode"); !bytes.Contains(v.Config, []byte(`"m"`)) {
+		t.Errorf("Config = %s", v.Config)
+	}
+}
+
+func TestOpencodeConfigFileRejects(t *testing.T) {
+	cases := []struct {
+		name  string
+		yaml  string
+		extra map[string]string
+		want  string
+	}{
+		{"missing", "version: 1\nopencode:\n  config_file: ./gone.json\n", nil, "gone.json"},
+		{"invalid json", "version: 1\nopencode:\n  config_file: ./oc.json\n",
+			map[string]string{"oc.json": "{"}, "oc.json"},
+		{"array", "version: 1\nopencode:\n  config_file: ./oc.json\n",
+			map[string]string{"oc.json": "[]"}, "object"},
+		{"null", "version: 1\nopencode:\n  config_file: ./oc.json\n",
+			map[string]string{"oc.json": "null"}, "object"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := write(t, c.yaml, c.extra)
+			_, err := Load(p)
+			if err == nil {
+				t.Fatal("Load accepted it")
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("error %q does not mention %q", err, c.want)
+			}
+			if !strings.Contains(err.Error(), p) {
+				t.Errorf("error %q does not name the agents.yaml", err)
+			}
+		})
+	}
+}
+
 func TestViewWithNothingForTheAgent(t *testing.T) {
 	s, err := Load(write(t, "version: 1\nclaude:\n  plugins: [a@b]\n", nil))
 	if err != nil {
@@ -210,6 +289,8 @@ func TestLoadRejects(t *testing.T) {
 		{"codex", "version: 1\ncodex: {}\n", "codex"},
 		{"hermes plugins", "version: 1\nhermes:\n  plugins: [x]\n", "plugins"},
 		{"opencode marketplaces", "version: 1\nopencode:\n  marketplaces: {a: b}\n", "marketplaces"},
+		{"claude config_file", "version: 1\nclaude:\n  config_file: ./oc.json\n", "config_file"},
+		{"hermes config_file", "version: 1\nhermes:\n  config_file: ./oc.json\n", "config_file"},
 		{"mcp both", "version: 1\nmcp:\n  x: {command: a, url: b}\n", "not both"},
 		{"mcp neither", "version: 1\nmcp:\n  x: {args: [a]}\n", "command"},
 		{"mcp headers on local", "version: 1\nmcp:\n  x: {command: a, headers: {A: b}}\n", "headers"},

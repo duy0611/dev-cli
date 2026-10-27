@@ -5,6 +5,7 @@ package agentcfg
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/duy0611/dev-cli/internal/xpath"
+	"github.com/tailscale/hujson"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -59,6 +61,9 @@ type View struct {
 	MCP          map[string]MCPServer
 	Plugins      []string
 	Marketplaces map[string]string
+	// Config is opencode's own config document, used as the base for its
+	// opencode.json. Nil when no config_file was declared.
+	Config []byte
 }
 
 // Spec is a loaded, validated agents.yaml.
@@ -72,6 +77,7 @@ type section struct {
 	mcp          map[string]MCPServer
 	plugins      []string
 	marketplaces map[string]string
+	config       []byte
 }
 
 // The raw shapes. Load decodes with KnownFields, so a key an agent lacks (such
@@ -92,9 +98,10 @@ type rawClaude struct {
 }
 
 type rawOpencode struct {
-	Plugins []string             `yaml:"plugins"`
-	Skills  []rawSkill           `yaml:"skills"`
-	MCP     map[string]MCPServer `yaml:"mcp"`
+	ConfigFile string               `yaml:"config_file"`
+	Plugins    []string             `yaml:"plugins"`
+	Skills     []rawSkill           `yaml:"skills"`
+	MCP        map[string]MCPServer `yaml:"mcp"`
 }
 
 type rawHermes struct {
@@ -159,6 +166,11 @@ func Load(file string) (*Spec, error) {
 			return nil, err
 		}
 		sec.plugins = o.Plugins
+		if o.ConfigFile != "" {
+			if sec.config, err = loadConfigFile(file, base, o.ConfigFile); err != nil {
+				return nil, err
+			}
+		}
 		s.sections["opencode"] = &sec
 	}
 	if h := raw.Hermes; h != nil {
@@ -184,6 +196,36 @@ func Load(file string) (*Spec, error) {
 		}
 	}
 	return s, nil
+}
+
+// loadConfigFile reads one agent's own config document. It is validated here,
+// before anything is created, so a typo fails create rather than a later exec.
+func loadConfigFile(file, base, written string) ([]byte, error) {
+	p := written
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(base, p)
+	}
+	resolved, err := xpath.ResolveFile(p)
+	if err != nil {
+		return nil, fmt.Errorf("%s: opencode.config_file: %s: %w", file, written, err)
+	}
+	b, err := os.ReadFile(resolved)
+	if err != nil {
+		return nil, fmt.Errorf("%s: opencode.config_file: %s: %w", file, written, err)
+	}
+	std, err := hujson.Standardize(b)
+	if err != nil {
+		return nil, fmt.Errorf("%s: opencode.config_file: %s does not parse: %w", file, written, err)
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(std, &doc); err != nil {
+		return nil, fmt.Errorf("%s: opencode.config_file: %s is not a JSON object: %w", file, written, err)
+	}
+	// JSON null unmarshals into a nil map without an error.
+	if doc == nil {
+		return nil, fmt.Errorf("%s: opencode.config_file: %s is not a JSON object", file, written)
+	}
+	return std, nil
 }
 
 func buildSection(file, base, prefix string, skills []rawSkill, mcp map[string]MCPServer) (section, error) {
@@ -337,6 +379,7 @@ func (s *Spec) View(agent string) (View, bool) {
 		maps.Copy(v.MCP, sec.mcp)
 		v.Plugins = sec.plugins
 		v.Marketplaces = sec.marketplaces
+		v.Config = sec.config
 	}
 	return v, true
 }
@@ -345,8 +388,11 @@ func (s *Spec) View(agent string) (View, bool) {
 // ${A:-b}, so those are left alone.
 var refPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
-// Refs lists the variables the file's MCP servers reference, for warning about
-// ones no workspace setting defines.
+// envRefPattern is opencode's own reference syntax, used in a config_file.
+var envRefPattern = regexp.MustCompile(`\{env:([A-Za-z_][A-Za-z0-9_]*)\}`)
+
+// Refs lists the variables the file's MCP servers and opencode's config
+// document reference, for warning about ones no workspace setting defines.
 func (s *Spec) Refs() []string {
 	seen := map[string]bool{}
 	collect := func(v string) {
@@ -370,6 +416,9 @@ func (s *Spec) Refs() []string {
 			for _, v := range m.Headers {
 				collect(v)
 			}
+		}
+		for _, m := range envRefPattern.FindAllSubmatch(sec.config, -1) {
+			seen[string(m[1])] = true
 		}
 	}
 	return slices.Sorted(maps.Keys(seen))

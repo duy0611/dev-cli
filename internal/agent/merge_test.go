@@ -17,7 +17,7 @@ var testServers = map[string]agentcfg.MCPServer{
 
 func TestMergeOpencode(t *testing.T) {
 	current := []byte(`{"theme": "dark", "plugin": ["mine"], "mcp": {"hand": {"type": "local", "command": ["x"]}}}`)
-	out, err := mergeOpencode(current, []string{"opencode-wakatime", "mine"}, testServers)
+	out, err := mergeOpencode(current, nil, []string{"opencode-wakatime", "mine"}, testServers)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestMergeOpencode(t *testing.T) {
 
 func TestMergeOpencodeAcceptsJSONC(t *testing.T) {
 	current := []byte("{\n  // mine\n  \"theme\": \"dark\",\n}\n")
-	out, err := mergeOpencode(current, []string{"p"}, nil)
+	out, err := mergeOpencode(current, nil, []string{"p"}, nil)
 	if err != nil {
 		t.Fatalf("JSONC refused: %v", err)
 	}
@@ -67,19 +67,187 @@ func TestMergeOpencodeAcceptsJSONC(t *testing.T) {
 	}
 }
 
-func TestMergeOpencodeFromNothing(t *testing.T) {
-	out, err := mergeOpencode(nil, []string{"p"}, nil)
+// A config_file is authoritative: it replaces the container's document, so a
+// key deleted from the file is gone after the next apply.
+func TestMergeOpencodeAuthoritative(t *testing.T) {
+	current := []byte(`{"theme":"dark","model":"old","plugin":["mine"],"mcp":{"hand":{"type":"local","command":["x"]}}}`)
+	base := []byte(`{"model":"new","providers":{"litellm":{"models":{"a":{}}}}}`)
+	out, err := mergeOpencode(current, base, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(out, []byte(`"plugin"`)) {
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out)
+	}
+	for _, gone := range []string{"theme", "plugin", "mcp"} {
+		if _, ok := doc[gone]; ok {
+			t.Errorf("%s survived an authoritative apply:\n%s", gone, out)
+		}
+	}
+	if string(doc["model"]) != `"new"` {
+		t.Errorf("model = %s", doc["model"])
+	}
+	if _, ok := doc["providers"]; !ok {
+		t.Errorf("providers lost:\n%s", out)
+	}
+}
+
+// The container's copy is replaced, not parsed, so a corrupt one is no
+// obstacle.
+func TestMergeOpencodeAuthoritativeIgnoresABrokenCurrent(t *testing.T) {
+	out, err := mergeOpencode([]byte("{"), []byte(`{"model":"m"}`), nil, nil)
+	if err != nil {
+		t.Fatalf("a broken current file was read: %v", err)
+	}
+	if !bytes.Contains(out, []byte(`"model": "m"`)) {
+		t.Errorf("out = %s", out)
+	}
+}
+
+// Fresh files get the V2 key; a file already using a key keeps it.
+func TestMergeOpencodePluginShape(t *testing.T) {
+	cases := []struct {
+		name       string
+		base       []byte
+		wantKey    string
+		notWantKey string
+	}{
+		{"fresh", nil, "plugins", "plugin"},
+		{"v2", []byte(`{"plugins":["a"]}`), "plugins", "plugin"},
+		{"legacy", []byte(`{"plugin":["a"]}`), "plugin", "plugins"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out, err := mergeOpencode(nil, c.base, []string{"a", "b"}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var doc map[string]json.RawMessage
+			if err := json.Unmarshal(out, &doc); err != nil {
+				t.Fatalf("output is not JSON: %v\n%s", err, out)
+			}
+			raw, ok := doc[c.wantKey]
+			if !ok {
+				t.Fatalf("no %q key:\n%s", c.wantKey, out)
+			}
+			var got []string
+			if err := json.Unmarshal(raw, &got); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Join(got, ",") != "a,b" {
+				t.Errorf("%s = %v, want a,b", c.wantKey, got)
+			}
+			if _, ok := doc[c.notWantKey]; ok {
+				t.Errorf("wrote %q as well:\n%s", c.notWantKey, out)
+			}
+		})
+	}
+}
+
+// MCP follows the shape of the document it is added to.
+func TestMergeOpencodeMCPShape(t *testing.T) {
+	cases := []struct {
+		name        string
+		base        []byte
+		wantServers bool
+	}{
+		{"fresh", nil, true},
+		{"v2", []byte(`{"mcp":{"servers":{"hand":{"type":"local","command":["x"]}}}}`), true},
+		{"v2 timeout only", []byte(`{"mcp":{"timeout":{"catalog":1000}}}`), true},
+		{"legacy", []byte(`{"mcp":{"hand":{"type":"local","command":["x"]}}}`), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out, err := mergeOpencode(nil, c.base, nil, testServers)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var doc map[string]json.RawMessage
+			if err := json.Unmarshal(out, &doc); err != nil {
+				t.Fatalf("output is not JSON: %v\n%s", err, out)
+			}
+			var mcp map[string]json.RawMessage
+			if err := json.Unmarshal(doc["mcp"], &mcp); err != nil {
+				t.Fatal(err)
+			}
+			if c.wantServers {
+				if _, ok := mcp["servers"]; !ok {
+					t.Fatalf("no mcp.servers:\n%s", out)
+				}
+				var servers map[string]json.RawMessage
+				if err := json.Unmarshal(mcp["servers"], &servers); err != nil {
+					t.Fatal(err)
+				}
+				if _, ok := servers["ctx"]; !ok {
+					t.Errorf("ctx is not under mcp.servers:\n%s", out)
+				}
+				if _, ok := mcp["ctx"]; ok {
+					t.Errorf("ctx was also written as a legacy direct server:\n%s", out)
+				}
+				return
+			}
+			if _, ok := mcp["servers"]; ok {
+				t.Errorf("added mcp.servers to a legacy file:\n%s", out)
+			}
+			if _, ok := mcp["ctx"]; !ok {
+				t.Errorf("ctx is not a legacy direct server:\n%s", out)
+			}
+		})
+	}
+}
+
+// A V2 object entry and a legacy [package, options] pair are not ours to
+// rewrite; declared strings are added beside them and deduped by package.
+func TestMergeOpencodeKeepsRicherPluginEntries(t *testing.T) {
+	cases := []struct {
+		name string
+		base string
+		key  string
+	}{
+		{"v2 objects", `{"plugins":[{"package":"x","options":{"a":1}},"y"]}`, "plugins"},
+		{"legacy tuples", `{"plugin":[["x",{"a":1}],"y"]}`, "plugin"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out, err := mergeOpencode(nil, []byte(c.base), []string{"y", "z"}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var doc map[string]json.RawMessage
+			if err := json.Unmarshal(out, &doc); err != nil {
+				t.Fatalf("output is not JSON: %v\n%s", err, out)
+			}
+			var entries []json.RawMessage
+			if err := json.Unmarshal(doc[c.key], &entries); err != nil {
+				t.Fatalf("%s is not a list: %v", c.key, err)
+			}
+			if len(entries) != 3 {
+				t.Fatalf("%s has %d entries, want the two existing plus z:\n%s", c.key, len(entries), out)
+			}
+			if string(entries[2]) != `"z"` {
+				t.Errorf("z was not appended as a string: %s", entries[2])
+			}
+			if !bytes.Contains(entries[0], []byte("x")) {
+				t.Errorf("the richer entry was rewritten: %s", entries[0])
+			}
+		})
+	}
+}
+
+func TestMergeOpencodeFromNothing(t *testing.T) {
+	out, err := mergeOpencode(nil, nil, []string{"p"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(out, []byte(`"plugins"`)) {
 		t.Errorf("out = %s", out)
 	}
 }
 
 func TestMergeOpencodeRejectsAWrongShape(t *testing.T) {
 	for _, current := range []string{`[1]`, `{"plugin": "x"}`, `{"mcp": []}`, `{`} {
-		if _, err := mergeOpencode([]byte(current), []string{"p"}, testServers); err == nil {
+		if _, err := mergeOpencode([]byte(current), nil, []string{"p"}, testServers); err == nil {
 			t.Errorf("accepted %s", current)
 		}
 	}
@@ -131,16 +299,29 @@ func TestMergeHermesFromNothingAndFromNull(t *testing.T) {
 
 // A rebuild re-applies over a file the last apply wrote.
 func TestMergesAreIdempotent(t *testing.T) {
-	once, err := mergeOpencode([]byte(`{"plugin":["a"]}`), []string{"a", "b"}, testServers)
+	once, err := mergeOpencode([]byte(`{"plugin":["a"]}`), nil, []string{"a", "b"}, testServers)
 	if err != nil {
 		t.Fatal(err)
 	}
-	twice, err := mergeOpencode(once, []string{"a", "b"}, testServers)
+	twice, err := mergeOpencode(once, nil, []string{"a", "b"}, testServers)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(once, twice) {
 		t.Errorf("opencode drifted:\n%s\n---\n%s", once, twice)
+	}
+
+	base := []byte(`{"model":"m"}`)
+	auth1, err := mergeOpencode(nil, base, []string{"a"}, testServers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth2, err := mergeOpencode(auth1, base, []string{"a"}, testServers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(auth1, auth2) {
+		t.Errorf("an authoritative opencode apply drifted:\n%s\n---\n%s", auth1, auth2)
 	}
 
 	h1, err := mergeHermes([]byte("model: x\n"), testServers)
@@ -184,12 +365,18 @@ func TestOpencodeAndHermesSteps(t *testing.T) {
 	if len(o) != 0 || len(h) != 0 {
 		t.Errorf("empty views produced steps: %+v %+v", o, h)
 	}
+
+	// A config document alone still writes the file.
+	o, _ = configureOpencode(agentcfg.View{Config: []byte(`{"model":"m"}`)})
+	if len(o) != 1 || o[0].File != "${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/opencode.json" {
+		t.Errorf("config-only steps = %+v", o)
+	}
 }
 
 // JSON null must not leave the map nil, or a write to it panics.
 func TestMergeOpencodeTreatsNullAsEmpty(t *testing.T) {
 	for _, current := range []string{`null`, `{"mcp": null}`, `{"plugin": null}`} {
-		out, err := mergeOpencode([]byte(current), []string{"p"}, testServers)
+		out, err := mergeOpencode([]byte(current), nil, []string{"p"}, testServers)
 		if err != nil {
 			t.Errorf("%s: %v", current, err)
 			continue

@@ -981,16 +981,24 @@ dev container create api --folder ~/code/api
 ```
 
 `create` applies the file once the container is running — Claude Code through
-its own CLI, opencode and hermes by merging into `opencode.json` and
-`config.yaml` — and `rebuild` applies it again. `start` does not: like a
-`devcontainer.json`, an edit waits for a rebuild. After `create --no-start`, the
-first `start` applies it.
+its own CLI, opencode and hermes by writing their config files — and `rebuild`
+applies it again. `start` does not: like a `devcontainer.json`, an edit waits
+for a rebuild. After `create --no-start`, the first `start` applies it. An
+`opencode.config_file` replaces the container's `opencode.json` when it is
+applied; without one, the declared entries are merged into the existing file.
 
 - **Top level vs. per agent.** `skills` and `mcp` at the top reach every agent
   installed in the container; each agent's own section adds more. `plugins`
   exists only under `claude` and `opencode`, `marketplaces` only under `claude`.
   hermes has no plugins. A per-agent MCP server with a top-level server's name
   replaces it for that agent.
+- **An opencode document can be the whole file.** `opencode.config_file` names
+  a JSON or JSONC document, relative to this file or absolute; `~` is not
+  expanded. On create and on every rebuild it replaces the container's
+  `opencode.json`, then the `plugins` and `mcp` entries declared here are added.
+  The document is authoritative: edit it and rebuild, and anything you added to
+  the container's copy — or deleted from this file — is gone at that rebuild.
+  Without `config_file`, the existing merge behavior stands.
 - **One repository, several skills.** `paths` lists subdirectories of a git
   skill, each named after its last segment; `path` takes one. The repository is
   cloned once per agent, and skills from the same repository and `ref` share
@@ -998,14 +1006,18 @@ first `start` applies it.
   repository's skills is replaced.
 - **`${NAME}` is a reference, never a value.** The file is committed, so `dev`
   never substitutes it; each agent resolves it when it starts, from the
-  workspace's settings. A reference no setting defines is a warning.
+  workspace's settings. A reference no setting defines is a warning. An
+  opencode `config_file` uses opencode's own `{env:NAME}` for the same thing;
+  both read the same workspace settings.
 - **An agent the container lacks is skipped with a warning**, so one file works
   across containers with different tools. A step that fails — a plugin that
   does not exist, a marketplace that cannot be reached — fails the command; the
   container stays running and the next `start` retries.
-- **Nothing is removed.** A declared entry or skill directory is replaced; a
-  plugin you drop from the file stays installed until the container is
-  recreated. Things you added by hand are left alone.
+- **Nothing is removed, unless an opencode `config_file` says so.** A declared
+  entry or skill directory is replaced; a plugin you drop from the file stays
+  installed until the container is recreated. Things you added by hand are left
+  alone. A `config_file` document is the exception: it replaces the whole file,
+  so a key removed from it disappears at the next rebuild.
 - **`dev` only reads the file.** It never writes into the project.
 
 [`docs/agents.sample.yaml`](agents.sample.yaml) lists every key the file
@@ -1018,6 +1030,106 @@ reads the same file without being told again.
 
 Both providers support this; on k8s (experimental) the steps run through
 `kubectl exec`.
+
+#### An opencode config document
+
+opencode takes more than plugins and MCP servers: providers, models, agent
+overrides, permissions. Point `opencode.config_file` at a JSON or JSONC
+document and `dev` puts it at `opencode.json` for you:
+
+```yaml
+# .devcontainer/agents.yaml
+version: 1
+opencode:
+  config_file: ./opencode.json        # next to this file
+  plugins:
+    - superpowers@git+https://github.com/obra/superpowers.git
+```
+
+```jsonc
+// .devcontainer/opencode.json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "litellm/deepseek-v4.1-flash",
+  "providers": {
+    "litellm": {
+      "name": "LiteLLM",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": {
+        "baseURL": "{env:LITELLM_BASE_URL}/v1",
+        "apiKey": "{env:LITELLM_API_KEY}"
+      },
+      "compatibility": { "cacheFormat": "anthropic" },
+      "models": {
+        "claude-opus-5-5": {
+          "name": "Claude Opus 5.5",
+          "limit": { "context": 1000000 },
+          "cost": {
+            "input": 4,
+            "output": 20,
+            "cache": { "read": 0.2 }
+          }
+        },
+        "claude-sonnet-5-5": {
+          "name": "Claude Sonnet 5.5",
+          "limit": { "context": 1000000 },
+          "cost": {
+            "input": 2,
+            "output": 10,
+            "cache": { "read": 0.2 }
+          }
+        },
+        "claude-haiku-5-5": {
+          "name": "Claude Haiku 5.5",
+          "limit": { "context": 1000000 },
+          "cost": {
+            "input": 0.1,
+            "output": 0.5
+          }
+        },
+        "deepseek-v4.1-flash": {
+          "name": "DeepSeek 4.1 Flash",
+          "limit": { "context": 1000000 },
+          "cost": {
+            "input": 0.3,
+            "output": 1.2,
+            "cache": { "read": 0.003 }
+          }
+        }
+      }
+    }
+  },
+  "agents": {
+    "title": { "model": "litellm/deepseek-v4.1-flash" }
+  }
+}
+```
+
+That is the V2 shape: `providers` with a `package`, `settings` and `models`,
+and `agents.title.model` for the small model opencode uses for titles. Each
+model carries `limit.context: 1000000` — opencode needs it to know when to
+compact — and a `cost` in USD per million tokens, where `cache.read` is the
+cached-input price; omit `cache` for a model that does not charge for cached
+input. `compatibility.cacheFormat: "anthropic"` says the proxy speaks
+Anthropic-style cache markers; drop it if yours does not.
+
+`{env:NAME}` is opencode's own reference syntax, resolved from the workspace
+setting when opencode starts, so no token is in the file. The example appends
+`/v1` to the host, so the setting names the host only:
+
+```sh
+dev workspace set LITELLM_BASE_URL https://litellm.example
+dev workspace set LITELLM_API_KEY keychain:litellm
+```
+
+The document is authoritative. `dev` replaces the container's `opencode.json`
+with it on create and on every rebuild, then adds the declared `plugins` and
+`mcp` entries. Edit this file and rebuild; editing the copy inside the
+container is lost at the next rebuild, and a key you delete here is gone then
+too. The file is read and validated on the host before the container is
+created or recreated, so a missing or malformed document fails the command
+before anything changes. Comments and trailing commas are accepted here; the
+copy written to the container is plain JSON.
 
 ### Commit a devcontainer.json that also works under dev
 

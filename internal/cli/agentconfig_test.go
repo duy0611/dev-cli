@@ -402,6 +402,137 @@ func TestRebuildWithAMissingAgentConfigFailsBeforeRebuilding(t *testing.T) {
 	}
 }
 
+// projectWithOpencodeConfig is a project whose agents.yaml points at a V2
+// opencode document.
+func projectWithOpencodeConfig(t *testing.T) (folder, file string) {
+	t.Helper()
+	folder = projectWithConfig(t)
+	file = filepath.Join(folder, ".devcontainer", "opencode.json")
+	writeFile(t, file, `{"model":"litellm/first"}`)
+	writeFile(t, filepath.Join(folder, ".devcontainer", "agents.yaml"), `version: 1
+opencode:
+  config_file: ./opencode.json
+  plugins: [superpowers@git+https://github.com/obra/superpowers.git]
+`)
+	return folder, file
+}
+
+func TestCreateSeedsTheOpencodeConfig(t *testing.T) {
+	a, out := newTestApp(t)
+	seedWorkspace(t, a)
+	log := stubDevcontainer(t, "")
+	folder, _ := projectWithOpencodeConfig(t)
+
+	if err := runContainerCreate(t.Context(), a, "", "api", folder, createOpts{}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// One read and one write of the file.
+	if got := strings.Count(callsIn(t, log), "opencode.json"); got < 2 {
+		t.Errorf("the config was touched %d times:\n%s", got, callsIn(t, log))
+	}
+	if !strings.Contains(out.String(), "opencode: config, plugins and mcp in opencode.json") {
+		t.Errorf("no progress line:\n%s", out)
+	}
+}
+
+func TestCreateNoStartSeedsTheOpencodeConfigOnFirstStart(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	log := stubDevcontainer(t, "")
+	folder, _ := projectWithOpencodeConfig(t)
+
+	if err := runContainerCreate(t.Context(), a, "", "api", folder, createOpts{noStart: true}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if strings.Contains(callsIn(t, log), "opencode.json") {
+		t.Fatal("--no-start applied the config with no container to apply it to")
+	}
+
+	if err := a.start(t.Context(), "ws", containerRow(t, a, "api")); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if got := strings.Count(callsIn(t, log), "opencode.json"); got < 2 {
+		t.Errorf("the first start touched the config %d times:\n%s", got, callsIn(t, log))
+	}
+}
+
+func TestEditingTheOpencodeConfigWaitsForARebuild(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	log := stubDevcontainer(t, "")
+	folder, file := projectWithOpencodeConfig(t)
+	if err := runContainerCreate(t.Context(), a, "", "api", folder, createOpts{}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	before := strings.Count(callsIn(t, log), "opencode.json")
+
+	writeFile(t, file, `{"model":"litellm/second"}`)
+	if err := a.start(t.Context(), "ws", containerRow(t, a, "api")); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if got := strings.Count(callsIn(t, log), "opencode.json"); got != before {
+		t.Errorf("an ordinary start re-applied the config: %d -> %d", before, got)
+	}
+
+	if err := runIn(t, a, "container", "rebuild", "api"); err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+	if got := strings.Count(callsIn(t, log), "opencode.json"); got <= before {
+		t.Errorf("rebuild did not read the edited config: %d -> %d", before, got)
+	}
+}
+
+func TestRebuildWithAMissingOpencodeConfigFailsBeforeRebuilding(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	log := stubDevcontainer(t, "")
+	folder, file := projectWithOpencodeConfig(t)
+	if err := runContainerCreate(t.Context(), a, "", "api", folder, createOpts{noStart: true}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := os.Remove(file); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runIn(t, a, "container", "rebuild", "api")
+	if exitCodeOf(err) != exitUsage {
+		t.Fatalf("exit %d (%v), want %d", exitCodeOf(err), err, exitUsage)
+	}
+	if !strings.Contains(err.Error(), "opencode.json") {
+		t.Errorf("error %q does not name the config file", err)
+	}
+	if strings.Contains(callsIn(t, log), "--remove-existing-container") {
+		t.Error("the container was recreated before the missing config was noticed")
+	}
+}
+
+func TestUndefinedOpencodeEnvRefWarns(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	stubDevcontainer(t, "")
+	folder := projectWithConfig(t)
+	writeFile(t, filepath.Join(folder, ".devcontainer", "opencode.json"),
+		`{"providers":{"litellm":{"settings":{"apiKey":"{env:OPENCODE_TEST_KEY}"}}}}`)
+	writeFile(t, filepath.Join(folder, ".devcontainer", "agents.yaml"),
+		"version: 1\nopencode:\n  config_file: ./opencode.json\n")
+
+	var err error
+	stderr := captureStderr(t, func() {
+		err = runContainerCreate(t.Context(), a, "", "api", folder, createOpts{})
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	for _, want := range []string{"OPENCODE_TEST_KEY", "no workspace setting defines"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("warning does not mention %q:\n%s", want, stderr)
+		}
+	}
+	if strings.Contains(stderr, "${") {
+		t.Errorf("the warning prints the MCP syntax for a config_file reference:\n%s", stderr)
+	}
+}
+
 func TestRebuildOfAProjectThatDroppedItsFileClearsThePendingFlag(t *testing.T) {
 	a, _ := newTestApp(t)
 	seedWorkspace(t, a)

@@ -41,7 +41,7 @@ Checked against each vendor's documentation on 2026-09-23.
 | | Plugins | Skills | MCP servers |
 |---|---|---|---|
 | Claude Code | marketplace plugins; `enabledPlugins` in `settings.json` enables but does **not** install, so `claude plugin marketplace add` and `claude plugin install --scope user` are required | `SKILL.md` under `$CLAUDE_CONFIG_DIR/skills/<name>/` | `claude mcp add-json --scope user` |
-| opencode | npm packages in the `plugin` array of `opencode.json` | `SKILL.md` under `$OPENCODE_CONFIG_DIR/skills/<name>/` | `mcp` key in `opencode.json`; no CLI |
+| opencode | npm packages or git specs in the `plugins` array of `opencode.json` (V2; `plugin` in a file that already uses it) | `SKILL.md` under `$OPENCODE_CONFIG_DIR/skills/<name>/` | `mcp.servers` in a V2 `opencode.json` (direct members in a legacy one); no CLI |
 | hermes | none | `SKILL.md` under `$HERMES_HOME/skills/<name>/` | `mcp_servers` in `$HERMES_HOME/config.yaml`; no CLI |
 
 Three consequences shape the file:
@@ -85,6 +85,7 @@ claude:
   skills: []
   mcp: {}
 opencode:
+  config_file: ./opencode.json    # optional; replaces the container's copy
   plugins: [opencode-wakatime]
   skills: []
   mcp: {}
@@ -100,6 +101,14 @@ Rules:
   top-level one replaces it for that agent; that is the only override.
 - **`plugins` exists only where the agent has plugins**, and `marketplaces`
   only under `claude`. `hermes.plugins` is an unknown key.
+- **`opencode.config_file` is opencode's whole document.** A JSON or JSONC
+  object, relative to the file or absolute (`~` is not expanded), read and
+  validated on the host at every create and rebuild. It replaces the
+  container's `opencode.json`, then the declared `plugins` and `mcp` entries
+  are added. It is authoritative: a key deleted from it is gone at the next
+  rebuild, and an edit made inside the container is lost. JSONC comments and
+  trailing commas are accepted here; the copy is standard JSON. Without it,
+  the existing merge stands. No other agent has `config_file`.
 - **A marketplace's key is its own name**, the one `claude plugin marketplace
   list` reports; the value is passed as-is to `claude plugin marketplace add`
   (`owner/repo`, a git URL, a path). A key that does not match what the source
@@ -141,6 +150,10 @@ apply time, not an error: the operator may set it afterwards.
 
 `${NAME}` is recognised only in MCP `env` values, `headers` values, `args` and
 `url`. Anywhere else it is literal text.
+
+An `opencode.config_file` uses opencode's own `{env:NAME}` instead, in any
+string in the document. It is collected into the same warning and resolved from
+the same workspace settings; `dev` does not rewrite either syntax.
 
 ## Choosing the file
 
@@ -229,12 +242,18 @@ one adapter; nothing in `internal/cli` names one.
   --scope user` per plugin; `claude mcp add-json --scope user NAME JSON` per
   server, preceded by `claude mcp remove --scope user NAME` so a changed
   definition replaces the old one.
-- **opencode** — read `$OPENCODE_CONFIG_DIR/opencode.json` (absent is an empty
-  object), add each declared package to the `plugin` array if absent, set each
-  declared server under `mcp` by name, write it back. Per entry, not per key:
-  a server or plugin the operator added by hand is left where it is, exactly as
-  `claude mcp add-json` leaves other servers alone. Every other key round-trips
-  untouched, the rule `--override-config` already follows.
+- **opencode** — with a `config_file`, write that document as the whole
+  `$OPENCODE_CONFIG_DIR/opencode.json` and do not read the container's copy;
+  without one, read the existing file (absent is an empty object) as the base.
+  Then add each declared package to the plugin array if absent and set each
+  declared server by name. A new file gets V2's `plugins` and `mcp.servers`; a
+  file already using `plugin` or direct `mcp` servers keeps that shape, so a
+  container still on opencode 1 sees the keys it reads. Entries may be strings,
+  V2 `{package, options}` objects or legacy `[package, options]` pairs; only a
+  matching package is considered present. Per entry, not per key: a server or
+  plugin the operator added by hand is left where it is, exactly as `claude
+  mcp add-json` leaves other servers alone. Every other key round-trips
+  untouched in merge mode; in `config_file` mode the document is the base.
 - **hermes** — the same over `$HERMES_HOME/config.yaml`, setting declared
   servers under `mcp_servers` by name.
 - **skills, all agents** — each skill directory under the agent's skills
@@ -258,11 +277,12 @@ each agent's default location with no branch in `dev`.
 
 - **`internal/agentcfg`** (new) — parses and validates `agents.yaml` into a
   `Spec`, and projects it per agent into an `AgentView` with the layers merged.
-  No exec, no cobra, no filesystem beyond reading the file and its local
-  skills. Adds `go.yaml.in/yaml/v3`, decoding with `KnownFields(true)`; the
-  hermes merge needs a YAML library regardless.
+  No exec, no cobra, no filesystem beyond reading the file, its local skills
+  and an `opencode.config_file`. Adds `go.yaml.in/yaml/v3`, decoding with
+  `KnownFields(true)`; the hermes merge needs a YAML library regardless.
 - **`internal/agent`** — `Configure` per agent, and the opencode/hermes
-  merge functions.
+  merge functions; opencode's takes the config document as the base when one
+  was declared.
 - **`internal/cli`** — flag handling on `create`, resolving the file, the
   apply loop over `Provider.Exec`, and the pending flag on `start`.
 - **Migration `0006_agent_config.sql`**:
@@ -279,22 +299,26 @@ each agent's default location with no branch in `dev`.
 | Situation | Result |
 |---|---|
 | Malformed file, unknown key, invalid entry | exit 2, before any container work |
+| `opencode.config_file` missing, unreadable, not JSON/JSONC, or not an object | exit 2, before create writes the row or rebuild recreates |
 | `--agent-config` and `--no-agent-config` together | exit 2 |
 | `--agent-config PATH` does not exist | exit 3 |
 | Agent not installed in the container | warning, agent skipped |
 | A step fails | exit 1 naming the step; container left running; pending flag stays set |
-| `${NAME}` with no matching workspace setting | warning |
+| `${NAME}` or `{env:NAME}` with no matching workspace setting | warning |
 
 ## Testing
 
 - **`agentcfg`** — table tests: valid files, each rejection, layer merge,
-  per-agent MCP override, skill naming and duplicates, `${NAME}` recognition.
+  per-agent MCP override, skill naming and duplicates, `${NAME}` recognition,
+  a `config_file` relative and absolute, and its missing/malformed shapes.
 - **Adapters** — golden `[]Step` per agent; merge tests proving unowned keys
-  survive, in the style of `internal/dcgen/overlay_test.go`; env-reference
-  rewriting per agent.
+  survive and an authoritative base is not merged with the container's copy;
+  V2 and legacy key shapes; env-reference rewriting per agent.
 - **CLI** — stub executables on `PATH`: a probe miss warns and skips; a failing
   step exits 1 and leaves the flag set; `create --no-start` then `start`
-  applies once; `rebuild` re-reads the stored path; flag conflicts exit 2.
+  applies once; `rebuild` re-reads the stored path and the config document; an
+  ordinary `start` does not; a missing config fails before the old container is
+  removed; flag conflicts exit 2.
 - **Smoke** — a generated container with `claude-code` and one local skill:
   the skill is in place and `claude plugin list` shows the declared plugin.
 
@@ -307,10 +331,11 @@ each agent's default location with no branch in `dev`.
 
 ## Out of scope
 
-- Removing what a line no longer declares. Application is additive: a named
-  entry or skill directory the file declares is replaced, and nothing else is
-  touched, so a plugin dropped from the file stays installed until the
-  container is recreated.
+- Removing what a line no longer declares, without a `config_file`. Application
+  is additive: a named entry or skill directory the file declares is replaced,
+  and nothing else is touched, so a plugin dropped from the file stays installed
+  until the container is recreated. A `config_file` document is authoritative,
+  so what it omits is removed from `opencode.json` at the next rebuild.
 - Codex. It is in the agent registry but has no adapter; a `codex:` section is
   an unknown key. It gets one when there is a reason to write it.
 - A command that writes or edits `agents.yaml` (invariant 9).
@@ -319,10 +344,13 @@ each agent's default location with no branch in `dev`.
 
 ## Confirmed while planning
 
-1. opencode installs the packages in `plugin` itself at startup (with Bun,
-   into its cache), so writing the name is the whole job. Its environment
-   reference is `{env:NAME}`; a stdio server is `{"type": "local", "command":
-   [argv], "environment": {}}`, a remote one `{"type": "remote", "url", "headers"}`.
+1. opencode installs the packages in its plugin array itself at startup (with
+   Bun, into its cache), so writing the name is the whole job. V2 calls the
+   array `plugins` and accepts strings, `{package, options}` objects, or legacy
+   `[package, options]` pairs; V1 calls it `plugin`. Its environment reference
+   is `{env:NAME}`; a stdio server is `{"type": "local", "command": [argv],
+   "environment": {}}`, a remote one `{"type": "remote", "url", "headers"}`,
+   under `mcp.servers` in V2.
 2. hermes expands `${NAME}` in `config.yaml` at load, so references pass
    through unchanged.
 3. `claude plugin install` of an installed plugin exits 0. `claude mcp
