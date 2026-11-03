@@ -7,9 +7,11 @@ package smoke
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -455,9 +457,17 @@ func TestSmokeCreateFromCopy(t *testing.T) {
 
 	dev("container", "create", clone, "--no-folder", "--from", src, "--copy", "image,state")
 
+	// The devcontainer CLI may add a thin UID-adjustment layer on top of an
+	// image when it starts a container, so the image IDs can differ. The clone
+	// must still sit on the source's image, with at most a couple of layers
+	// added on top.
 	srcImage, cloneImage := imageOf(src), imageOf(clone)
-	if srcImage != cloneImage {
-		t.Errorf("clone image = %s, want the source's %s: something was built", cloneImage, srcImage)
+	srcLayers, cloneLayers := imageLayers(t, srcImage), imageLayers(t, cloneImage)
+	if len(cloneLayers) < len(srcLayers) || !slices.Equal(cloneLayers[:len(srcLayers)], srcLayers) {
+		t.Errorf("clone image %s is not built on the source image %s: layers %v, want a prefix of %v",
+			cloneImage, srcImage, cloneLayers, srcLayers)
+	} else if extra := len(cloneLayers) - len(srcLayers); extra > 2 {
+		t.Errorf("clone image adds %d layers to the source's image, want at most 2: something was built", extra)
 	}
 	if out := dev("container", "exec", clone, "--", "cat", "/var/dev-state/marker"); !strings.Contains(out, "marker") {
 		t.Errorf("the state was not copied: %q", out)
@@ -475,6 +485,20 @@ func TestSmokeCreateFromCopy(t *testing.T) {
 
 	dev("container", "remove", clone)
 	dev("container", "remove", src)
+}
+
+// imageLayers returns the RootFS layer digests of an image, base first.
+func imageLayers(t *testing.T, image string) []string {
+	t.Helper()
+	out, err := exec.Command("docker", "image", "inspect", "--format", "{{json .RootFS.Layers}}", image).Output()
+	if err != nil {
+		t.Fatalf("docker image inspect %s: %v", image, err)
+	}
+	var layers []string
+	if err := json.Unmarshal(out, &layers); err != nil {
+		t.Fatalf("decoding the layers of %s: %v", image, err)
+	}
+	return layers
 }
 
 // dockerImages returns the image IDs a reference names.
