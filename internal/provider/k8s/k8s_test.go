@@ -222,7 +222,7 @@ func TestRemoveDeletesAllThreeObjects(t *testing.T) {
 	s := clusterStubs(t, true)
 	c := model.Container{Name: "api", WorkspaceName: "ws"}
 
-	if err := testProvider().Remove(context.Background(), c); err != nil {
+	if err := testProvider().Remove(context.Background(), c, provider.RemoveOpts{}); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
 	calls := kubectlCalls(t, s)

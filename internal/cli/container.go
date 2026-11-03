@@ -889,7 +889,7 @@ func runContainerRemove(ctx context.Context, a *app, workspace, name string, for
 		}
 	}
 
-	if err := t.provider.Remove(ctx, t.container); err != nil {
+	if err := t.provider.Remove(ctx, t.container, provider.RemoveOpts{}); err != nil {
 		if !force {
 			return err
 		}

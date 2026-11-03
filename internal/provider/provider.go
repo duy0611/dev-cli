@@ -34,6 +34,13 @@ type RebuildOpts struct {
 	Seed bool
 }
 
+// RemoveOpts are the choices a removal takes beyond the container itself.
+type RemoveOpts struct {
+	// KeepState leaves the agent-state volume behind for a container of the
+	// same name to reattach.
+	KeepState bool
+}
+
 // LifecycleError is a lifecycle hook failing after a seeded rebuild: the
 // volumes now hold the container's copy, so the mode has changed.
 type LifecycleError struct{ Err error }
@@ -59,7 +66,7 @@ type Provider interface {
 
 	// Remove deletes the container. Removing one that is absent is not an
 	// error.
-	Remove(ctx context.Context, c model.Container) error
+	Remove(ctx context.Context, c model.Container, opts RemoveOpts) error
 
 	Status(ctx context.Context, c model.Container) (model.Status, error)
 
