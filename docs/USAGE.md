@@ -453,39 +453,80 @@ the project's `devcontainer.json` and run `dev container rebuild NAME`.
 ### Start another container like an existing one
 
 `--from` starts a new container from the setup of one you already have in the
-workspace, so you do not retype its tools:
+workspace, so you do not retype its tools. `--copy` goes further and reuses the
+source's image and its agent state. The usual case is a git worktree: a second
+checkout of the same repository, set up the same way.
 
 ```sh
-dev container create scratch --from api --no-folder
-dev container create other   --from api --folder ~/src/other
-dev container create fix     --from api --folder ~/wt/api-fix   # a worktree checkout
+dev worktree create feat-x --branch feat-x --path ../feat-x
+dev container create feat-x --folder ../feat-x --from web --copy image,state
 ```
 
-It copies three things from the source: its tool list, whether it keeps agent
-state on a volume, and which agents.yaml it applies. `--tools` then takes only
-`+`/`-` changes to that list (`--tools +helm,-yq`), since a replacement list
-would throw away what `--from` copied. `--no-persist-state`, `--agent-config` and
-`--no-agent-config` override what is inherited. A source that applies its own
-project's agents.yaml passes that on as "the new folder's own agents.yaml", not
-as the source's file.
+Plain `--from` copies three things from the source: its tool list, whether it
+keeps agent state on a volume, and which agents.yaml it applies. If the source
+is generated, its tools come with it, and `--tools` then takes only `+`/`-`
+changes to that list (`--tools +helm,-yq`), since a replacement list would throw
+away what `--from` copied. If the source uses its project's own config, it
+supplies no tools: the new container uses its own folder's `.devcontainer`,
+which must exist, and `--tools` is refused. Its agents.yaml choice then means the
+new folder's own agents.yaml. `--no-persist-state`, `--agent-config` and
+`--no-agent-config` override what is inherited.
+
+`--copy` takes `image`, `state` or `image,state`, and needs `--from`. Both are
+local provider only.
+
+- **`image`** starts the new container from the image `web`'s container was
+  created from. Nothing is built, so the first start skips the build. The new
+  container's `onCreateCommand`, `updateContentCommand` and `postCreateCommand`
+  still run, since they set ownership on its new volumes. Its mounts, labels and
+  environment come from its own config, as for any create. Refused, exit 2:
+  - a project-owned source, when the new folder's configuration would not
+    produce the same image. dev compares `image`, `build`, `dockerFile`,
+    `context` and `features`, and the Dockerfile, and names what differs. It
+    also refuses when `web` has no recorded configuration, which is the case
+    when it was never started. The fix is to drop `--copy image` and build;
+  - `--tools` with `image`, since the tools are already in the image;
+  - a config that uses `dockerComposeFile`, on either side;
+  - `web` with no container in the engine (start it once), or whose image is
+    gone locally (rebuild it).
+- **`state`** copies `web`'s `/var/dev-state` volume into a new state volume
+  before the new container first starts. The copy is everything: logins,
+  settings, plugins, MCP config, gitconfig, Claude history and memory, and
+  `dev-team` run folders. Nothing is filtered, and ownership and modes are kept.
+  - Logins are duplicated, not moved. Both containers hold the same tokens, so
+    revoking one does not revoke the other.
+  - Claude keys history and memory by path. A worktree at `../feat-x` is a
+    different project to it, so the copied history and memory stay under `web`'s
+    path, and the new folder starts as a new project.
+  - If `web` is running, its files may change during the copy, and one may come
+    out torn. `create` warns on stderr. For a clean copy, stop `web` first
+    (`dev container stop web`); dev never stops `web` itself.
+  - Refused, exit 2, if either container was made with `--no-persist-state`, or
+    `web` has no state volume in the engine.
+
+`--copy` is refused, exit 2, when either `web` or the new container is isolated.
+The new container's mode is `--mode`, which defaults to guarded. Isolated
+containers cannot share an image or state; see
+[SECURITY.md](SECURITY.md#isolated). On the experimental k8s provider every
+container is isolated and `--copy` needs the local provider, so it is refused
+there too. Plain `--from` still works on k8s.
 
 These are never copied:
 
+- **Mode.** The new container's mode is its own, set by `--mode`.
+- **Folders.** The new container's folders are this command's `--folder` flags.
 - **Volumes and mounts.** The configuration is rendered afresh for the new
   container, so it gets its own workspace volume, its own state volume and, for a
-  worktree, bind mounts for its own checkout. The two containers share nothing
-  on disk.
-- **Work.** Files, agent state and history stay with the source.
-- **A project's own configuration.** Only a container `dev` generated can be a
-  source. One built from a project's `devcontainer.json` is refused (exit 2),
-  because that file belongs to its project. Point `--folder` at a project that
-  ships the same file instead. A target folder that ships a configuration of its
-  own is refused too, as with `--generate`.
+  worktree, bind mounts for its own checkout. The two containers share nothing on
+  disk.
+- **Work.** Files, uncommitted changes and ignored files stay with the source's
+  checkout. `dev worktree create` copies ignored files listed in
+  `.worktreeinclude`, as it always does.
 
-The source is only read, it does not need to be running, and its later changes
-do not reach the clone. After create, the new container is an ordinary generated
-container. On local the same tools give the same image layers, so the build is
-expected to come from Docker's cache. Each container still gets its own image.
+After create, the two containers are independent. A rebuild of either leaves the
+other's image alone, and removing `web` does not affect the copy. The source is
+only read. Plain `--from` needs no running source, and `--copy image` needs a
+container for the source to exist, started at least once.
 
 ### Add a secret and rotate it
 
@@ -1524,7 +1565,8 @@ dev container create NAME [--folder PATH]...
 dev container create NAME --no-folder [--tools LIST] [--no-persist-state]
                          [--agent-config PATH | --no-agent-config] [--no-start]
 dev container create NAME --from SOURCE [--folder PATH | --no-folder] [--tools +ID,-ID]
-                         [--no-persist-state] [--agent-config PATH | --no-agent-config] [--no-start]
+                         [--copy image,state] [--no-persist-state]
+                         [--agent-config PATH | --no-agent-config] [--no-start]
 dev container list [--all] [--timeout DURATION]
 dev container start NAME
 dev container stop NAME
@@ -1565,7 +1607,8 @@ primary, and the rest are extra folders (see
 | `--no-persist-state` | do not give the container a volume for its agents' configuration |
 | `--agent-config` | apply this agents.yaml instead of the project's `.devcontainer/agents.yaml` |
 | `--no-agent-config` | apply no agents.yaml, even if the project has one |
-| `--from` | start from another generated container's tools and settings in this workspace |
+| `--from` | start from another container's settings in this workspace: its tools if it is generated, its state and agents.yaml choices always |
+| `--copy` | with `--from`: `image` reuses the image SOURCE was created from, `state` copies SOURCE's state volume, `image,state` both. Local provider only; refused when SOURCE or the new container is isolated |
 | `--no-start` | record the container without starting it |
 
 The mode is chosen at create and changed only by `rebuild --mode`; see
@@ -1581,9 +1624,12 @@ container path as another — the message names both. More than one `--folder`
 on the experimental k8s provider, or alongside `--no-folder`, is exit 2 too.
 `--from` never carries folders: this command's `--folder` flags decide them.
 
-With `--from`, `--generate` is implied and `--tools` takes only `+`/`-` changes.
-A source that does not exist is exit 3. A source built from a project's own
-configuration, or a plain `--tools` list, is exit 2. See
+With `--from` on a generated source, `--generate` is implied and `--tools` takes
+only `+`/`-` changes. A source that uses its project's own config uses the
+folder's own `.devcontainer`, which must exist, and `--tools` is refused. A
+plain `--tools` list is exit 2 either way. A source that does not exist is
+exit 3. `--copy` without `--from` is exit 2, and so is an entry that is neither
+`image` nor `state`. See
 [Start another container like an existing one](#start-another-container-like-an-existing-one).
 
 The folder is resolved to a physical path before it is stored or mounted. On
