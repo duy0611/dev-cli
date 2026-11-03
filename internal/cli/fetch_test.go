@@ -106,7 +106,7 @@ func TestRemoveRefusesUnfetchedIsolatedWork(t *testing.T) {
 	gitIn(t, inside, "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "--allow-empty", "-m", "unfetched")
 	stubContainerRepo(t, inside)
 
-	err := runContainerRemove(t.Context(), a, "", "iso", false)
+	err := runContainerRemove(t.Context(), a, "", "iso", false, false)
 	if got := exitCodeOf(err); got != exitUsage {
 		t.Fatalf("exit code = %d (%v), want %d", got, err, exitUsage)
 	}
@@ -117,7 +117,7 @@ func TestRemoveRefusesUnfetchedIsolatedWork(t *testing.T) {
 	if err := runContainerFetch(t.Context(), a, "", "iso"); err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
-	err = runContainerRemove(t.Context(), a, "", "iso", false)
+	err = runContainerRemove(t.Context(), a, "", "iso", false, false)
 	if got := exitCodeOf(err); got != exitUsage {
 		t.Fatalf("remove after fetch, before merge: exit code = %d (%v), want %d", got, err, exitUsage)
 	}
@@ -127,7 +127,7 @@ func TestRemoveRefusesUnfetchedIsolatedWork(t *testing.T) {
 	}
 
 	gitIn(t, folder, "merge", "-q", "--ff-only", "iso/"+branch)
-	if err := runContainerRemove(t.Context(), a, "", "iso", false); err != nil {
+	if err := runContainerRemove(t.Context(), a, "", "iso", false, false); err != nil {
 		t.Fatalf("remove after merge: %v", err)
 	}
 	if refs := gitOutput(t, folder, "for-each-ref", "refs/remotes/iso/"); refs != "" {
@@ -154,7 +154,7 @@ func TestRemoveAcceptsWorkPushedToARemote(t *testing.T) {
 	stubContainerRepo(t, inside)
 
 	gitIn(t, folder, "fetch", "-q", "upstream")
-	if err := runContainerRemove(t.Context(), a, "", "iso", false); err != nil {
+	if err := runContainerRemove(t.Context(), a, "", "iso", false, false); err != nil {
 		t.Errorf("remove with the branch on a remote: %v", err)
 	}
 }
@@ -174,7 +174,7 @@ func TestRemoveForceKeepsTheFetchedRefs(t *testing.T) {
 	if err := runContainerFetch(t.Context(), a, "", "iso"); err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
-	if err := runContainerRemove(t.Context(), a, "", "iso", true); err != nil {
+	if err := runContainerRemove(t.Context(), a, "", "iso", true, false); err != nil {
 		t.Fatalf("remove --force: %v", err)
 	}
 	if refs := gitOutput(t, folder, "for-each-ref", "refs/remotes/iso/"); refs == "" {
@@ -194,14 +194,14 @@ func TestRemoveRefusesUncommittedIsolatedWork(t *testing.T) {
 	writeFile(t, filepath.Join(inside, "half-done"), "work")
 	stubContainerRepo(t, inside)
 
-	err := runContainerRemove(t.Context(), a, "", "iso", false)
+	err := runContainerRemove(t.Context(), a, "", "iso", false, false)
 	if got := exitCodeOf(err); got != exitUsage {
 		t.Fatalf("exit code = %d (%v), want %d", got, err, exitUsage)
 	}
 	if !strings.Contains(err.Error(), "uncommitted") {
 		t.Errorf("error %q does not say there are uncommitted changes", err)
 	}
-	if err := runContainerRemove(t.Context(), a, "", "iso", true); err != nil {
+	if err := runContainerRemove(t.Context(), a, "", "iso", true, false); err != nil {
 		t.Errorf("remove --force: %v", err)
 	}
 }
@@ -235,7 +235,7 @@ func TestRemoveLeavesARealRemotesRefs(t *testing.T) {
 	gitIn(t, inside, "clone", "-q", folder, ".")
 	stubContainerRepo(t, inside)
 
-	if err := runContainerRemove(t.Context(), a, "", "upstream", false); err != nil {
+	if err := runContainerRemove(t.Context(), a, "", "upstream", false, false); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
 	if refs := gitOutput(t, folder, "for-each-ref", "refs/remotes/upstream/"); refs == "" {

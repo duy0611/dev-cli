@@ -453,7 +453,7 @@ func TestFetchAndRemoveLoopOverFolders(t *testing.T) {
 	}
 	stubContainerFolders(t, inside)
 
-	err := runContainerRemove(t.Context(), a, "", "iso", false)
+	err := runContainerRemove(t.Context(), a, "", "iso", false, false)
 	if got := exitCodeOf(err); got != exitUsage {
 		t.Fatalf("remove before fetch: exit code = %d (%v), want %d", got, err, exitUsage)
 	}
@@ -480,14 +480,14 @@ func TestFetchAndRemoveLoopOverFolders(t *testing.T) {
 	}
 
 	// Fetched but not merged: still refused, naming the folder.
-	err = runContainerRemove(t.Context(), a, "", "iso", false)
+	err = runContainerRemove(t.Context(), a, "", "iso", false, false)
 	if exitCodeOf(err) != exitUsage || !strings.Contains(err.Error(), "repo-2: branch work-repo-2 is fetched") {
 		t.Fatalf("remove after fetch = %v, want a refusal naming repo-2", err)
 	}
 	for _, host := range []string{repo1, repo2} {
 		gitIn(t, host, "branch", "kept", "refs/remotes/iso/work-"+filepath.Base(host))
 	}
-	if err := runContainerRemove(t.Context(), a, "", "iso", false); err != nil {
+	if err := runContainerRemove(t.Context(), a, "", "iso", false, false); err != nil {
 		t.Fatalf("remove after merge: %v", err)
 	}
 	for _, host := range []string{repo1, repo2} {
@@ -537,5 +537,120 @@ func TestFailedRebuildKeepsTheFolders(t *testing.T) {
 	}
 	if c := containerRow(t, a, "multi"); len(c.Folders) != 1 {
 		t.Errorf("folders = %v after a failed rebuild, want repo-2 kept", c.Folders)
+	}
+}
+
+// stubDockerLog installs a docker that logs its argv, one call per line, and
+// finds no container.
+func stubDockerLog(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	log := filepath.Join(dir, "calls")
+	stubBin(t, dir, "docker", `echo "$*" >> '`+log+`'`)
+	return log
+}
+
+func createStateContainer(t *testing.T, a *app, persist bool) {
+	t.Helper()
+	opts := createOpts{noFolder: true, noStart: true, noPersistState: !persist}
+	if err := runContainerCreate(t.Context(), a, "", "scratch", "", opts); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+}
+
+func TestRemoveKeepStateLeavesTheStateVolume(t *testing.T) {
+	a, out := newTestApp(t)
+	seedWorkspace(t, a)
+	createStateContainer(t, a, true)
+	log := stubDockerLog(t)
+	out.Reset()
+
+	if err := runContainerRemove(t.Context(), a, "", "scratch", false, true); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	calls, _ := os.ReadFile(log)
+	if !strings.Contains(string(calls), "volume rm --force dev-ws-scratch\n") {
+		t.Errorf("the workspace volume was not removed:\n%s", calls)
+	}
+	if strings.Contains(string(calls), "-state") {
+		t.Errorf("the state volume was touched:\n%s", calls)
+	}
+	if !strings.Contains(out.String(), "kept volume dev-ws-scratch-state") {
+		t.Errorf("output %q does not name the kept volume", out)
+	}
+}
+
+func TestRemoveWithoutKeepStateDeletesTheStateVolume(t *testing.T) {
+	a, out := newTestApp(t)
+	seedWorkspace(t, a)
+	createStateContainer(t, a, true)
+	log := stubDockerLog(t)
+	out.Reset()
+
+	if err := runContainerRemove(t.Context(), a, "", "scratch", false, false); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	calls, _ := os.ReadFile(log)
+	if !strings.Contains(string(calls), "volume rm --force dev-ws-scratch-state\n") {
+		t.Errorf("the state volume was not removed:\n%s", calls)
+	}
+	if strings.Contains(out.String(), "kept volume") {
+		t.Errorf("output %q claims a kept volume", out)
+	}
+}
+
+func TestRemoveKeepStateNotesAContainerWithoutState(t *testing.T) {
+	a, out := newTestApp(t)
+	seedWorkspace(t, a)
+	createStateContainer(t, a, false)
+	stubDockerLog(t)
+	out.Reset()
+
+	if err := runContainerRemove(t.Context(), a, "", "scratch", false, true); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if strings.Contains(out.String(), "kept volume") {
+		t.Errorf("output %q claims a kept volume", out)
+	}
+	if !strings.Contains(out.String(), "no state volume") {
+		t.Errorf("output %q does not say there was nothing to keep", out)
+	}
+	if !strings.Contains(out.String(), "container scratch removed") {
+		t.Errorf("the container was not removed: %q", out)
+	}
+}
+
+func TestRemoveKeepStateRefusedOnK8sBeforeRemoving(t *testing.T) {
+	a, _ := newTestApp(t)
+	if err := runProviderConfigure(a, "kp", "k8s", k8s.Config{Context: "c", Registry: "r"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runWorkspaceInit(a, "ws", "kp", false); err != nil {
+		t.Fatal(err)
+	}
+	st, err := a.store()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateContainer(model.Container{
+		Name: "web", WorkspaceName: "ws", SourceKind: model.SourceNone, PersistState: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	log := stubDockerLog(t)
+
+	err = runContainerRemove(t.Context(), a, "", "web", false, true)
+	if got := exitCodeOf(err); got != exitUsage {
+		t.Fatalf("exit code = %d (%v), want %d", got, err, exitUsage)
+	}
+	if !strings.Contains(err.Error(), "k8s") {
+		t.Errorf("error %q does not name the provider", err)
+	}
+	if _, err := st.GetContainer("ws", "web"); err != nil {
+		t.Errorf("the record was removed: %v", err)
+	}
+	if _, err := os.Stat(log); err == nil {
+		t.Error("an engine call was made before the refusal")
 	}
 }

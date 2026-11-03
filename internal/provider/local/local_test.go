@@ -365,7 +365,7 @@ func TestStopAndRemoveAreNoOpsWhenAbsent(t *testing.T) {
 	if err := p.Stop(context.Background(), c); err != nil {
 		t.Errorf("Stop on an absent container: %v", err)
 	}
-	if err := p.Remove(context.Background(), c); err != nil {
+	if err := p.Remove(context.Background(), c, provider.RemoveOpts{}); err != nil {
 		t.Errorf("Remove on an absent container: %v", err)
 	}
 }
@@ -374,7 +374,7 @@ func TestRemoveForcesWhenPresent(t *testing.T) {
 	f := newFakePath(t)
 	f.install(t, dockerBin, "abc123\n", 0)
 
-	if err := (&Provider{}).Remove(context.Background(), testContainer()); err != nil {
+	if err := (&Provider{}).Remove(context.Background(), testContainer(), provider.RemoveOpts{}); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
 	// The id lookup comes first, so the removal is a later call.
@@ -444,7 +444,7 @@ func TestRemoveDeletesTheVolumeOfAFolderlessContainer(t *testing.T) {
 	f := newFakePath(t)
 	f.install(t, dockerBin, "abc123\n", 0)
 
-	if err := (&Provider{}).Remove(context.Background(), folderlessContainer()); err != nil {
+	if err := (&Provider{}).Remove(context.Background(), folderlessContainer(), provider.RemoveOpts{}); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
 	if !f.calledWith(t, dockerBin, []string{"volume", "rm", "--force", "dev-ws-scratch"}) {
@@ -458,7 +458,7 @@ func TestRemoveDoesNotDeleteAVolumeForAFolderContainer(t *testing.T) {
 	f := newFakePath(t)
 	f.install(t, dockerBin, "abc123\n", 0)
 
-	if err := (&Provider{}).Remove(context.Background(), testContainer()); err != nil {
+	if err := (&Provider{}).Remove(context.Background(), testContainer(), provider.RemoveOpts{}); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
 	if contains(f.argv(t, dockerBin), []string{"volume"}) {
@@ -582,13 +582,32 @@ func TestRemoveDeletesTheStateVolume(t *testing.T) {
 	f := newFakePath(t)
 	f.install(t, dockerBin, "abc123\n", 0)
 
-	if err := (&Provider{}).Remove(context.Background(), stateContainer()); err != nil {
+	if err := (&Provider{}).Remove(context.Background(), stateContainer(), provider.RemoveOpts{}); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
 	want := []string{"volume", "rm", "--force", "dev-ws-demo-state"}
 	if !f.calledWith(t, dockerBin, want) {
 		t.Errorf("Remove did not delete the state volume; docker calls were %v",
 			f.argvAll(t, dockerBin))
+	}
+}
+
+func TestRemoveKeepStateLeavesOnlyTheStateVolume(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, dockerBin, "abc123\n", 0)
+
+	c := stateContainer()
+	c.SourceKind = model.SourceNone
+	if err := (&Provider{}).Remove(context.Background(), c, provider.RemoveOpts{KeepState: true}); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if !f.calledWith(t, dockerBin, []string{"volume", "rm", "--force", VolumeName("ws", "demo")}) {
+		t.Errorf("the workspace volume was not removed: %v", f.argvAll(t, dockerBin))
+	}
+	for _, argv := range f.argvAll(t, dockerBin) {
+		if slices.Contains(argv, StateVolumeName("ws", "demo")) {
+			t.Errorf("KeepState touched the state volume: %v", argv)
+		}
 	}
 }
 
@@ -710,7 +729,7 @@ func TestRemoveDeletesTheVolumeOfAnIsolatedContainer(t *testing.T) {
 	f := newFakePath(t)
 	f.install(t, dockerBin, "abc123\n", 0)
 
-	if err := (&Provider{}).Remove(context.Background(), isolatedContainer(t)); err != nil {
+	if err := (&Provider{}).Remove(context.Background(), isolatedContainer(t), provider.RemoveOpts{}); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
 	if !f.calledWith(t, dockerBin, []string{"volume", "rm", "--force", "dev-ws-demo"}) {
@@ -775,7 +794,7 @@ func TestRemoveDeletesEveryFolderVolume(t *testing.T) {
 
 	c := isolatedContainer(t)
 	c.Folders = []model.Folder{{HostPath: "/src/extra", ContainerPath: "/workspaces/extra"}}
-	if err := (&Provider{}).Remove(context.Background(), c); err != nil {
+	if err := (&Provider{}).Remove(context.Background(), c, provider.RemoveOpts{}); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
 	for _, v := range []string{"dev-ws-demo", FolderVolumeName("ws", "demo", "/src/extra")} {

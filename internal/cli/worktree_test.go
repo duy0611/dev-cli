@@ -481,7 +481,7 @@ func TestContainerRemoveLeavesTheWorktree(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "wt")
 	worktreeWithContainer(t, a, "feat", repo, path, createOpts{})
 
-	if err := runContainerRemove(t.Context(), a, "", "feat", true); err != nil {
+	if err := runContainerRemove(t.Context(), a, "", "feat", true, false); err != nil {
 		t.Fatalf("container remove: %v", err)
 	}
 	if _, err := os.Stat(path); err != nil {
