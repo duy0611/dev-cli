@@ -17,6 +17,7 @@ import (
 	"github.com/duy0611/dev-cli/internal/guard"
 	"github.com/duy0611/dev-cli/internal/model"
 	"github.com/duy0611/dev-cli/internal/provider"
+	"github.com/duy0611/dev-cli/internal/provider/local"
 	"github.com/duy0611/dev-cli/internal/store"
 	"github.com/duy0611/dev-cli/internal/xpath"
 	"github.com/spf13/cobra"
@@ -846,6 +847,7 @@ func newContainerRemoveCmd(a *app) *cobra.Command {
 	var (
 		workspace string
 		force     bool
+		keepState bool
 	)
 
 	cmd := &cobra.Command{
@@ -855,18 +857,38 @@ func newContainerRemoveCmd(a *app) *cobra.Command {
 			"The project folder is never touched. If the engine refuses to remove\n" +
 			"the container the record is kept, so the command can be retried;\n" +
 			"--force drops the record anyway, which is how an orphan left by a\n" +
-			"vanished engine is cleaned up.",
+			"vanished engine is cleaned up.\n\n" +
+			"--keep-state leaves the agent-state volume in place and prints its name;\n" +
+			"a container created later with the same name in the same workspace\n" +
+			"mounts it again. The workspace volume is removed either way.",
 		Args: exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runContainerRemove(cmd.Context(), a, workspace, args[0], force)
+			return runContainerRemove(cmd.Context(), a, workspace, args[0], force, keepState)
 		},
 	}
 	addWorkspaceFlag(cmd, &workspace)
 	cmd.Flags().BoolVar(&force, "force", false, "forget the container even if the engine removal fails")
+	cmd.Flags().BoolVar(&keepState, "keep-state", false,
+		"keep the agent-state volume for a container of the same name to reattach (local provider only)")
 	return cmd
 }
 
-func runContainerRemove(ctx context.Context, a *app, workspace, name string, force bool) error {
+func runContainerRemove(ctx context.Context, a *app, workspace, name string, force, keepState bool) error {
+	if keepState {
+		wsName, err := a.workspaceName(workspace)
+		if err != nil {
+			return err
+		}
+		kind, err := a.providerKind(wsName)
+		if err != nil {
+			return err
+		}
+		if kind == model.KindK8s {
+			return usageErrorf("--keep-state is not supported on the k8s provider: " +
+				"the state shares the workspace's claim, so it cannot outlive the container")
+		}
+	}
+
 	t, err := a.resolve(ctx, workspace, name)
 	if err != nil {
 		return err
@@ -889,7 +911,7 @@ func runContainerRemove(ctx context.Context, a *app, workspace, name string, for
 		}
 	}
 
-	if err := t.provider.Remove(ctx, t.container, provider.RemoveOpts{}); err != nil {
+	if err := t.provider.Remove(ctx, t.container, provider.RemoveOpts{KeepState: keepState}); err != nil {
 		if !force {
 			return err
 		}
@@ -919,6 +941,13 @@ func runContainerRemove(ctx context.Context, a *app, workspace, name string, for
 	}
 	a.record("remove", t.workspace.Name, name, nil)
 	a.printf("container %s removed\n", name)
+	if keepState {
+		if t.container.PersistState {
+			a.printf("kept volume %s\n", local.StateVolumeName(t.workspace.Name, name))
+		} else {
+			a.printf("container %s has no state volume; nothing kept\n", name)
+		}
+	}
 	return nil
 }
 

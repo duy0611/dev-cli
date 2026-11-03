@@ -339,7 +339,7 @@ func (p *Provider) Remove(ctx context.Context, c model.Container, opts provider.
 			volumes = append(volumes, FolderVolumeName(c.WorkspaceName, c.Name, f.HostPath))
 		}
 	}
-	if c.PersistState {
+	if c.PersistState && !opts.KeepState {
 		volumes = append(volumes, StateVolumeName(c.WorkspaceName, c.Name))
 	}
 	for _, name := range volumes {

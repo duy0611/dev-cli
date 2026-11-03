@@ -169,7 +169,10 @@ func (p *Provider) Stop(ctx context.Context, c model.Container) error {
 // Remove deletes everything belonging to the container, the volume included.
 //
 // Leaving the claim behind would keep billing for storage nothing references.
-func (p *Provider) Remove(ctx context.Context, c model.Container, _ provider.RemoveOpts) error {
+func (p *Provider) Remove(ctx context.Context, c model.Container, opts provider.RemoveOpts) error {
+	if opts.KeepState {
+		return errors.New("the k8s provider cannot keep state: it shares the workspace's claim")
+	}
 	name := objectName(c)
 	for _, target := range []struct{ kind, name string }{
 		{"deployment", name},

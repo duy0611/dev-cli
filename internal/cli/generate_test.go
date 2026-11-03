@@ -14,6 +14,7 @@ import (
 	"github.com/duy0611/dev-cli/internal/dcgen"
 	"github.com/duy0611/dev-cli/internal/model"
 	"github.com/duy0611/dev-cli/internal/provider/k8s"
+	"github.com/duy0611/dev-cli/internal/provider/local"
 	"github.com/duy0611/dev-cli/internal/xpath"
 )
 
@@ -1148,7 +1149,7 @@ func TestRemoveSucceedsWithAnUnparseableProjectFile(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	// --force: no engine on PATH, so only the parse-error path is under test.
-	if err := runContainerRemove(t.Context(), a, "", "c1", true); err != nil {
+	if err := runContainerRemove(t.Context(), a, "", "c1", true, false); err != nil {
 		t.Fatalf("a broken project file stranded the container: %v", err)
 	}
 }
@@ -1193,5 +1194,18 @@ func TestListRefusesANonPositiveTimeout(t *testing.T) {
 	err := runContainerList(t.Context(), a, "", true, 0)
 	if got := exitCodeOf(err); got != exitUsage {
 		t.Errorf("exit code = %d, want %d (err: %v)", got, exitUsage, err)
+	}
+}
+
+// A recreated container mounts the kept volume because its name is a function
+// of workspace and container alone.
+func TestRecreatedContainerMountsTheSameStateVolume(t *testing.T) {
+	first := stateFor(true, "ws", "scratch")
+	again := stateFor(true, "ws", "scratch")
+	if first.Volume == "" || first != again {
+		t.Fatalf("state volume differs between creates: %q, %q", first.Volume, again.Volume)
+	}
+	if first.Volume != local.StateVolumeName("ws", "scratch") {
+		t.Errorf("volume = %q, want %q", first.Volume, local.StateVolumeName("ws", "scratch"))
 	}
 }

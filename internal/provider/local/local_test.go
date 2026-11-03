@@ -592,6 +592,25 @@ func TestRemoveDeletesTheStateVolume(t *testing.T) {
 	}
 }
 
+func TestRemoveKeepStateLeavesOnlyTheStateVolume(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, dockerBin, "abc123\n", 0)
+
+	c := stateContainer()
+	c.SourceKind = model.SourceNone
+	if err := (&Provider{}).Remove(context.Background(), c, provider.RemoveOpts{KeepState: true}); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if !f.calledWith(t, dockerBin, []string{"volume", "rm", "--force", VolumeName("ws", "demo")}) {
+		t.Errorf("the workspace volume was not removed: %v", f.argvAll(t, dockerBin))
+	}
+	for _, argv := range f.argvAll(t, dockerBin) {
+		if slices.Contains(argv, StateVolumeName("ws", "demo")) {
+			t.Errorf("KeepState touched the state volume: %v", argv)
+		}
+	}
+}
+
 // A project-owned container's state dir is claimed by up, with a follow-up
 // exec.
 func TestUpClaimsTheStateDirForAProjectOwnedContainer(t *testing.T) {
