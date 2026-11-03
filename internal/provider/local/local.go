@@ -81,18 +81,32 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 		seeding = id == ""
 	}
 
+	configPath, overridePath := c.ConfigPath, c.OverrideConfigPath
+	fromSnapshot := false
+	if !recreate {
+		rewritten, cleanup, ok, err := p.snapshotConfig(ctx, c)
+		if err != nil {
+			return err
+		}
+		if ok {
+			defer cleanup()
+			fromSnapshot = true
+			configPath, overridePath = rewritten.config, rewritten.override
+		}
+	}
+
 	args := []string{"up", "--workspace-folder", c.Source}
 	args = append(args, idLabelArgs(c)...)
 	// Passed explicitly: a generated config lives in a temporary directory the
 	// CLI's own lookup never reaches.
-	if c.ConfigPath != "" {
-		args = append(args, "--config", c.ConfigPath)
+	if configPath != "" {
+		args = append(args, "--config", configPath)
 	}
 	// --override-config replaces the document rather than merging, so dev does
 	// the merge. --config stays alongside: it anchors a relative "dockerfile"
 	// to the project.
-	if c.OverrideConfigPath != "" {
-		args = append(args, "--override-config", c.OverrideConfigPath)
+	if overridePath != "" {
+		args = append(args, "--override-config", overridePath)
 	}
 	if recreate {
 		args = append(args, "--remove-existing-container")
@@ -117,6 +131,9 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 			p.discardSeed(ctx, c)
 		}
 		return err
+	}
+	if fromSnapshot {
+		p.dropSnapshotTag(ctx, c)
 	}
 	if err := p.claimStateDir(ctx, c); err != nil {
 		if opts.Seed {
@@ -327,6 +344,10 @@ func (p *Provider) Remove(ctx context.Context, c model.Container) error {
 			return err
 		}
 	}
+
+	// Only a --no-start container still has its snapshot. Not an error: the
+	// source may hold the image's last other reference.
+	p.dropSnapshotTag(ctx, c)
 
 	// docker rm leaves named volumes behind, so they are removed here. Last,
 	// because a volume still referenced by a container cannot be removed.

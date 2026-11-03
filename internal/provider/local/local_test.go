@@ -827,7 +827,7 @@ func TestUpKeepsTheOperatorsPlatform(t *testing.T) {
 	if got, _ := f.env(t, devcontainerBin, platformEnv); got != "linux/amd64" {
 		t.Errorf("up saw %s=%q, want the operator's linux/amd64", platformEnv, got)
 	}
-	if _, err := os.Stat(filepath.Join(f.dir, dockerBin+".argv")); err == nil {
+	if _, err := os.Stat(filepath.Join(f.dir, dockerBin+".argv")); err == nil && f.calledWith(t, dockerBin, []string{"version"}) {
 		t.Errorf("docker was probed despite an operator platform: %v", f.argvAll(t, dockerBin))
 	}
 }

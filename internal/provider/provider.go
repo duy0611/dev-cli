@@ -4,6 +4,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -148,4 +149,36 @@ type Mount struct {
 // the engine has no such container.
 type MountReader interface {
 	Mounts(ctx context.Context, c model.Container) (mounts []Mount, exists bool, err error)
+}
+
+// Errors a Copier reports for a source it cannot copy from, so a caller can
+// tell the operator what to do.
+var (
+	// ErrNoContainer: the source has no container in the engine.
+	ErrNoContainer = errors.New("the source has no container")
+	// ErrNoImage: the source's image is no longer present locally.
+	ErrNoImage = errors.New("the source's image no longer exists locally")
+	// ErrNoStateVolume: the source has no state volume.
+	ErrNoStateVolume = errors.New("the source has no state volume")
+)
+
+// Copier is a provider that can start a container from another one's image and
+// state. The local provider only.
+type Copier interface {
+	// SourceImage returns the ID of the image src's container was created from.
+	// It wraps ErrNoContainer or ErrNoImage.
+	SourceImage(ctx context.Context, src model.Container) (string, error)
+
+	// SnapshotImage tags imageID under a name owned by dst. Up starts dst from
+	// that tag while the engine has no container for it, then deletes the tag.
+	SnapshotImage(ctx context.Context, dst model.Container, imageID string) error
+
+	// CopyState creates dst's state volume and fills it with a copy of src's,
+	// through a short-lived container of helperImage, which must be present
+	// locally. It wraps ErrNoStateVolume.
+	CopyState(ctx context.Context, src, dst model.Container, helperImage string) error
+
+	// DiscardCopy removes dst's snapshot tag and state volume, whichever
+	// exist. For rollback.
+	DiscardCopy(ctx context.Context, dst model.Container) error
 }
