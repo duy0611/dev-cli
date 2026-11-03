@@ -720,11 +720,13 @@ func TestCheckTarget(t *testing.T) {
 	for name, c := range map[string]struct {
 		script string
 		exists bool
+		volume bool
 	}{
-		"volume": {`[ "$1" = image ] && exit 1`, true},
-		"tag":    {`[ "$1" = volume ] && exit 1; printf 'sha256:x\n'`, true},
-		"kept":   {`[ "$1" = volume ] && exit 1; [ "$5" = ` + keptTag + ` ] && printf 'sha256:x\n' || exit 1`, true},
-		"none":   {`exit 1`, false},
+		"volume": {`[ "$1" = image ] && exit 1`, true, true},
+		"tag":    {`[ "$1" = volume ] && exit 1; printf 'sha256:x\n'`, true, false},
+		"kept":   {`[ "$1" = volume ] && exit 1; [ "$5" = ` + keptTag + ` ] && printf 'sha256:x\n' || exit 1`, true, false},
+		"both":   {`printf 'sha256:x\n'`, true, false},
+		"none":   {`exit 1`, false, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFakePath(t)
@@ -732,6 +734,9 @@ func TestCheckTarget(t *testing.T) {
 			err := (&Provider{}).CheckTarget(context.Background(), dst)
 			if c.exists != errors.Is(err, provider.ErrTargetExists) || (!c.exists && err != nil) {
 				t.Fatalf("err = %v, exists = %v", err, c.exists)
+			}
+			if errors.Is(err, provider.ErrTargetVolumeExists) != c.volume {
+				t.Fatalf("err = %v, want volume = %v", err, c.volume)
 			}
 			for _, a := range f.argvAll(t, dockerBin) {
 				if a[0] != "volume" && a[0] != "image" || a[1] != "inspect" {

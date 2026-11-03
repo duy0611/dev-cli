@@ -284,8 +284,12 @@ Every validation step runs before anything is created, in roughly this order:
 5. Engine lookups: SOURCE's container, image and state volume.
 6. The target check: first that no container row of that name exists (the usual
    "already exists" error), then that the new container's state volume and
-   snapshot tag do not. A leftover is exit 2, naming `docker volume rm` and
-   `docker rmi`.
+   snapshot tag do not. A leftover is exit 2. A leftover state volume
+   may be one `remove --keep-state` kept, so its message says `--copy state`
+   will not overwrite it and offers creating without `--copy state` to reattach
+   it, or `docker volume rm` if unwanted; a leftover image tag names
+   `docker rmi`. Under `--copy image` alone the state volume is allowed and
+   reattached, and a rollback keeps it; the tag check still applies.
 7. The config match for `image`.
 
 Then:

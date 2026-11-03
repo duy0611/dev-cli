@@ -14,6 +14,7 @@ import (
 	"github.com/duy0611/dev-cli/internal/guard"
 	"github.com/duy0611/dev-cli/internal/model"
 	"github.com/duy0611/dev-cli/internal/provider"
+	"github.com/duy0611/dev-cli/internal/provider/local"
 )
 
 // copyKinds is what --copy asked to carry over from the source.
@@ -70,6 +71,9 @@ type copyPlan struct {
 	imageID string
 	p       provider.Provider
 	copier  provider.Copier
+	// keptVolume: the target's state volume existed before this create and is
+	// reused (image-only), so a rollback must not delete it.
+	keptVolume bool
 }
 
 // planCopy runs every check and engine lookup --copy needs, so a refusal
@@ -273,6 +277,17 @@ func (cp *copyPlan) matchFeatures(ctx context.Context, want []string) error {
 // attempt left behind: the copy would write into it or silently reuse it.
 func (cp *copyPlan) checkTarget(ctx context.Context, c model.Container) error {
 	err := cp.copier.CheckTarget(ctx, c)
+	if errors.Is(err, provider.ErrTargetVolumeExists) && !cp.kinds.state {
+		cp.keptVolume = true
+		return nil
+	}
+	if errors.Is(err, provider.ErrTargetVolumeExists) {
+		vol := local.StateVolumeName(c.WorkspaceName, c.Name)
+		return usageErrorf("--copy: the state volume %s already exists; it may have been kept by "+
+			"dev container remove --keep-state, and --copy state will not overwrite it. "+
+			"Create %s without --copy state to reattach the kept state, or remove the volume "+
+			"with docker volume rm %s if it is not wanted", vol, c.Name, vol)
+	}
 	if errors.Is(err, provider.ErrTargetExists) {
 		return usageErrorf("--copy: a leftover from an earlier create of %s already exists (%v); "+
 			"clear it with docker volume rm for the state volume or docker rmi for the image tag, "+
@@ -312,7 +327,7 @@ const undoTimeout = 2 * time.Minute
 func (cp *copyPlan) undo(ctx context.Context, a *app, c model.Container, cause error) error {
 	// A state volume that appeared after the target check is not this run's to
 	// delete: both removals below would take it.
-	foreign := errors.Is(cause, provider.ErrTargetExists)
+	foreign := cp.keptVolume || errors.Is(cause, provider.ErrTargetExists)
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), undoTimeout)
 	defer cancel()
 

@@ -238,14 +238,16 @@ func (p *Provider) CheckTarget(ctx context.Context, dst model.Container) error {
 	if err := requireBinary(dockerBin); err != nil {
 		return err
 	}
-	to := StateVolumeName(dst.WorkspaceName, dst.Name)
-	if exec.CommandContext(ctx, dockerBin, "volume", "inspect", to).Run() == nil {
-		return fmt.Errorf("volume %s: %w", to, provider.ErrTargetExists)
-	}
+	// Tags first: an image-only copy tolerates the volume, so the caller must
+	// see a tag leftover even when the volume exists too.
 	for _, tag := range snapshotTags(dst) {
 		if hasImage(ctx, tag) {
 			return fmt.Errorf("image %s: %w", tag, provider.ErrTargetExists)
 		}
+	}
+	to := StateVolumeName(dst.WorkspaceName, dst.Name)
+	if exec.CommandContext(ctx, dockerBin, "volume", "inspect", to).Run() == nil {
+		return fmt.Errorf("volume %s: %w", to, provider.ErrTargetVolumeExists)
 	}
 	return nil
 }
@@ -267,7 +269,7 @@ func (p *Provider) CopyState(ctx context.Context, src, dst model.Container, help
 	// docker's volume create succeeds on an existing name and would merge into
 	// it, and a rollback would then delete a volume that was never ours.
 	if exec.CommandContext(ctx, dockerBin, "volume", "inspect", to).Run() == nil {
-		return fmt.Errorf("volume %s: %w", to, provider.ErrTargetExists)
+		return fmt.Errorf("volume %s: %w", to, provider.ErrTargetVolumeExists)
 	}
 	if err := runDocker(ctx, "volume", "create", to); err != nil {
 		return err

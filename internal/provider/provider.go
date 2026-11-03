@@ -170,6 +170,9 @@ var (
 	// ErrTargetExists: the new container's state volume or snapshot tag is
 	// already in the engine, so a copy would merge into or replace leftovers.
 	ErrTargetExists = errors.New("the new container's state volume or snapshot tag already exists")
+	// ErrTargetVolumeExists is the ErrTargetExists whose object is the state
+	// volume, which remove --keep-state leaves on purpose.
+	ErrTargetVolumeExists = fmt.Errorf("the new container's state volume already exists: %w", ErrTargetExists)
 )
 
 // Copier is a provider that can start a container from another one's image and

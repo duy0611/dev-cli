@@ -45,7 +45,7 @@ func stubCopyEngine(t *testing.T, merged string) *copyEngine {
 		"  'inspect --type container'*) echo sha256:srcimage; exit 0;;\n"+
 		"  'image inspect --format {{json .Config.Labels}}'*) cat '"+e.labels+"'; exit 0;;\n"+
 		"  'image inspect --format {{.Id}} sha256:srcimage') [ -z \"$STUB_NO_IMAGE\" ]; exit $?;;\n"+
-		"  'image inspect'*) grep -qx \"$4\" '"+tagged+"' 2>/dev/null && echo sha256:srcimage; exit 0;;\n"+
+		"  'image inspect'*) [ -n \"$STUB_TAG_EXISTS\" ] && { echo sha256:leftover; exit 0; }; grep -qx \"$4\" '"+tagged+"' 2>/dev/null && echo sha256:srcimage; exit 0;;\n"+
 		"  tag*) echo \"$3\" >> '"+tagged+"'; exit 0;;\n"+
 		"  'volume inspect'*web-state*) [ -z \"$STUB_NO_VOLUME\" ]; exit $?;;\n"+
 		"  'volume inspect'*) [ -n \"$STUB_TARGET_EXISTS\" ] && exit 0; [ -n \"$STUB_TARGET_LATE\" ] && [ -f '"+tagged+".seen' ] && exit 0; : > '"+tagged+".seen'; exit 1;;\n"+
@@ -832,11 +832,29 @@ func TestCopyRefusesALeftoverTarget(t *testing.T) {
 	t.Setenv("STUB_TARGET_EXISTS", "1")
 
 	err := copyCreate(t, a, "feat", createOpts{copy: []string{"state"}, noStart: true})
-	assertUsage(t, err, "docker volume rm", "docker rmi")
+	assertUsage(t, err, "--keep-state", "will not overwrite", "without --copy state", "docker volume rm dev-ws-feat-state")
+	if strings.Contains(err.Error(), "docker rmi") {
+		t.Errorf("advised docker rmi for a state volume: %v", err)
+	}
 	assertNoRow(t, a, "feat")
 	if e.index(t, "docker volume create") >= 0 {
 		t.Error("created over a leftover")
 	}
+}
+
+func TestCopyRefusesALeftoverSnapshotTag(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	stubCopyEngine(t, `{}`)
+	copySource(t, a)
+	t.Setenv("STUB_TAG_EXISTS", "1")
+
+	err := copyCreate(t, a, "feat", createOpts{copy: []string{"image"}, noStart: true})
+	assertUsage(t, err, "docker rmi", "leftover")
+	if strings.Contains(err.Error(), "--keep-state") {
+		t.Errorf("mentioned --keep-state for a snapshot tag: %v", err)
+	}
+	assertNoRow(t, a, "feat")
 }
 
 func TestCopyDropAdviceNamesWhatIsDropped(t *testing.T) {
@@ -986,4 +1004,48 @@ func TestSrcBuilds(t *testing.T) {
 	if (&copyPlan{src: c}).srcBuilds() {
 		t.Error("an image-only config reported as building")
 	}
+}
+
+func TestCopyImageAloneReattachesAnExistingStateVolume(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	e := stubCopyEngine(t, `{}`)
+	copySource(t, a)
+	t.Setenv("STUB_TARGET_EXISTS", "1")
+
+	if err := copyCreate(t, a, "feat", createOpts{copy: []string{"image"}, noStart: true}); err != nil {
+		t.Fatal(err)
+	}
+	if e.index(t, "docker tag") < 0 || e.index(t, "volume create") >= 0 {
+		t.Errorf("log:\n%s", e.log(t))
+	}
+}
+
+func TestFailedImageOnlyCopyKeepsAnExistingStateVolume(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	e := stubCopyEngine(t, `{}`)
+	copySource(t, a)
+	t.Setenv("STUB_TARGET_EXISTS", "1")
+	t.Setenv("STUB_FAIL_UP", "1")
+
+	if err := copyCreate(t, a, "feat", createOpts{copy: []string{"image"}}); err == nil {
+		t.Fatal("create succeeded")
+	}
+	assertNoRow(t, a, "feat")
+	if e.index(t, "volume rm --force dev-ws-feat-state") >= 0 {
+		t.Errorf("deleted a state volume that was not this run's:\n%s", e.log(t))
+	}
+}
+
+func TestCopyImageAloneStillRefusesALeftoverTagBesideAVolume(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	stubCopyEngine(t, `{}`)
+	copySource(t, a)
+	t.Setenv("STUB_TARGET_EXISTS", "1")
+	t.Setenv("STUB_TAG_EXISTS", "1")
+
+	err := copyCreate(t, a, "feat", createOpts{copy: []string{"image"}, noStart: true})
+	assertUsage(t, err, "docker rmi")
 }

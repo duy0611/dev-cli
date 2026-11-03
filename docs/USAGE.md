@@ -525,8 +525,13 @@ local provider only.
     `web` has no state volume in the engine.
 
 A leftover state volume or image tag from an earlier create of the same name
-refuses the create, exit 2; the message says to clear it with `docker volume rm`
-or `docker rmi`.
+refuses the create, exit 2. For an image tag the message says to clear it with
+`docker rmi`. For the state volume it says the volume may have been kept by
+`dev container remove --keep-state` and that `--copy state` will not overwrite
+it; create without `--copy state` to reattach the kept state, or remove the
+volume with `docker volume rm` if it is not wanted. With `--copy image` alone
+an existing state volume is not a leftover: the new container reattaches it, and
+a failed create leaves it in place. An existing image tag still refuses.
 
 `--copy` is refused, exit 2, when either `web` or the new container is isolated.
 The new container's mode is `--mode`, which defaults to guarded. Isolated
