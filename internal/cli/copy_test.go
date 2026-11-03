@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -23,12 +24,15 @@ import (
 type copyEngine struct {
 	calls  string
 	merged string
+	labels string
 }
 
 func stubCopyEngine(t *testing.T, merged string) *copyEngine {
 	t.Helper()
 	dir := t.TempDir()
-	e := &copyEngine{calls: filepath.Join(dir, "calls"), merged: filepath.Join(dir, "merged.json")}
+	e := &copyEngine{calls: filepath.Join(dir, "calls"), merged: filepath.Join(dir, "merged.json"),
+		labels: filepath.Join(dir, "labels.json")}
+	e.setFeatures(t, "ghcr.io/devcontainers/features/go:1")
 	writeFile(t, e.merged, `{"mergedConfiguration":`+merged+`}`)
 	tagged := filepath.Join(dir, "tagged")
 	writeFile(t, filepath.Join(dir, "devcontainer"), "#!/bin/sh\nprintf 'devcontainer %s\\n' \"$*\" >> '"+e.calls+"'\n"+
@@ -39,12 +43,12 @@ func stubCopyEngine(t *testing.T, merged string) *copyEngine {
 		"  *'dev.container=web'*'{{.State}}'*|*'{{.State}}'*'dev.container=web'*) [ -n \"$STUB_RUNNING\" ] && echo running || echo exited; exit 0;;\n"+
 		"  ps*'dev.container=web'*) [ -z \"$STUB_NO_CONTAINER\" ] && echo abc123; exit 0;;\n"+
 		"  'inspect --type container'*) echo sha256:srcimage; exit 0;;\n"+
-		"  'image inspect --format {{json .Config.Labels}}'*) echo '{}'; exit 0;;\n"+
+		"  'image inspect --format {{json .Config.Labels}}'*) cat '"+e.labels+"'; exit 0;;\n"+
 		"  'image inspect --format {{.Id}} sha256:srcimage') [ -z \"$STUB_NO_IMAGE\" ]; exit $?;;\n"+
 		"  'image inspect'*) grep -qx \"$4\" '"+tagged+"' 2>/dev/null && echo sha256:srcimage; exit 0;;\n"+
 		"  tag*) echo \"$3\" >> '"+tagged+"'; exit 0;;\n"+
 		"  'volume inspect'*web-state*) [ -z \"$STUB_NO_VOLUME\" ]; exit $?;;\n"+
-		"  'volume inspect'*) [ -n \"$STUB_TARGET_EXISTS\" ]; exit $?;;\n"+
+		"  'volume inspect'*) [ -n \"$STUB_TARGET_EXISTS\" ] && exit 0; [ -n \"$STUB_TARGET_LATE\" ] && [ -f '"+tagged+".seen' ] && exit 0; : > '"+tagged+".seen'; exit 1;;\n"+
 		"  ps*'dev.container=feat'*) [ -n \"$STUB_FEAT_CONTAINER\" ] && echo feat123; exit 0;;\n"+
 		"  'rm -f'*) [ -z \"$STUB_FAIL_RM\" ] || { echo busy >&2; exit 1; };;\n"+
 		"  run*) [ -n \"$STUB_FAIL_RUN\" ] && { echo boom >&2; exit 1; }; exit 0;;\n"+
@@ -56,6 +60,21 @@ func stubCopyEngine(t *testing.T, merged string) *copyEngine {
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return e
+}
+
+// setFeatures sets the Feature ids the engine reports in the image's
+// devcontainer.metadata label.
+func (e *copyEngine) setFeatures(t *testing.T, ids ...string) {
+	t.Helper()
+	var entries []string
+	for _, id := range ids {
+		entries = append(entries, `{"id":"`+id+`"}`)
+	}
+	meta, err := json.Marshal("[" + strings.Join(entries, ",") + "]")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, e.labels, `{"devcontainer.metadata":`+string(meta)+`}`)
 }
 
 func (e *copyEngine) log(t *testing.T) string { return callsIn(t, e.calls) }
@@ -853,5 +872,92 @@ func TestMissingSourceBeatsABadCopyList(t *testing.T) {
 	err := copyCreate(t, a, "feat", createOpts{copy: []string{"bogus"}})
 	if got := exitCodeOf(err); got != exitNotFound {
 		t.Errorf("exit = %d (%v), want %d", got, err, exitNotFound)
+	}
+}
+
+func TestCopyImageRefusesFeaturesTheImageLacks(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	e := stubCopyEngine(t, `{}`)
+	copySource(t, a)
+	// What a failed rebuild --tools leaves: both documents list the new tools,
+	// the image has the old ones.
+	e.setFeatures(t, "ghcr.io/devcontainers/features/other:1")
+
+	err := copyCreate(t, a, "feat", createOpts{copy: []string{"image"}, noStart: true})
+	assertUsage(t, err, "ghcr.io/devcontainers/features/go:1", "drop --copy image and build")
+	assertNoRow(t, a, "feat")
+	if e.index(t, "docker tag") >= 0 {
+		t.Error("tagged despite the missing Feature")
+	}
+}
+
+func TestCopyImageAcceptsExtraFeaturesInTheImage(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	e := stubCopyEngine(t, `{}`)
+	copySource(t, a)
+	e.setFeatures(t, "ghcr.io/devcontainers/features/go:1", "ghcr.io/devcontainers/features/extra:1")
+	if err := copyCreate(t, a, "feat", createOpts{copy: []string{"image"}, noStart: true}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCopyImageChecksAProjectTargetsFeaturesAgainstTheImage(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	e := stubCopyEngine(t, `{"image":"ubuntu","features":{"ghcr.io/x/f:1":{},"./local":{},"../up":{}}}`)
+	projectSource(t, a, projectWithConfig(t))
+	e.setFeatures(t)
+
+	err := runContainerCreate(t.Context(), a, "", "feat", projectWithConfig(t),
+		createOpts{from: "web", copy: []string{"image"}, noStart: true})
+	assertUsage(t, err, "ghcr.io/x/f:1", "drop --copy image and build")
+	if strings.Contains(err.Error(), "local") || strings.Contains(err.Error(), "../up") {
+		t.Errorf("a local Feature was checked: %v", err)
+	}
+	assertNoRow(t, a, "feat")
+
+	e.setFeatures(t, "ghcr.io/x/f:1")
+	if err := runContainerCreate(t.Context(), a, "", "feat", projectWithConfig(t),
+		createOpts{from: "web", copy: []string{"image"}, noStart: true}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCopyOntoAnExistingContainerIsNotALeftover(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	stubCopyEngine(t, `{}`)
+	copySource(t, a)
+	createSource(t, a, "web2", createOpts{tools: []string{"go"}})
+	t.Setenv("STUB_TARGET_EXISTS", "1")
+
+	err := runContainerCreate(t.Context(), a, "", "web2", "", createOpts{
+		from: "web", noFolder: true, copy: []string{"state"}, noStart: true})
+	assertUsage(t, err, "already exists")
+	if strings.Contains(err.Error(), "docker volume rm") {
+		t.Errorf("advised destroying a live container's state: %v", err)
+	}
+	_ = containerRow(t, a, "web2")
+}
+
+func TestUndoKeepsAVolumeThatAppearedAfterTheCheck(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	e := stubCopyEngine(t, `{}`)
+	copySource(t, a)
+	t.Setenv("STUB_TARGET_LATE", "1")
+
+	err := copyCreate(t, a, "feat", createOpts{copy: []string{"image", "state"}})
+	if err == nil {
+		t.Fatal("create succeeded")
+	}
+	assertNoRow(t, a, "feat")
+	if e.index(t, "volume rm --force dev-ws-feat-state") >= 0 {
+		t.Errorf("removed a volume this run did not create:\n%s", e.log(t))
+	}
+	if e.index(t, "rmi") < 0 {
+		t.Logf("snapshot tag not removed (stub has no tag record):\n%s", e.log(t))
 	}
 }

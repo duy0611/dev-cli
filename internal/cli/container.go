@@ -345,6 +345,13 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 	// check there.
 	guarded := false
 	if plan != nil {
+		// First: for a name that is taken, the volume checkTarget would call a
+		// leftover is the live container's own state.
+		if _, err := st.GetContainer(wsName, name); err == nil {
+			return usageErrorf("container %s already exists in workspace %s", name, wsName)
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
 		if err := plan.checkTarget(ctx, c); err != nil {
 			return err
 		}
@@ -353,15 +360,24 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 		if err := plan.matchGenerated(c.GeneratedConfig); err != nil {
 			return err
 		}
+		if err := plan.matchFeatures(ctx, featureKeys([]byte(c.GeneratedConfig))); err != nil {
+			return err
+		}
 	}
 	if plan != nil && kinds.image && plan.src.GeneratedConfig == "" {
 		// A probe, so --no-start still leaves the digest to the first start.
 		probe := c
-		if err := a.guardNewContainer(ctx, wsName, &probe); err != nil {
+		cc, err := a.guardNewContainerConfig(ctx, wsName, &probe)
+		if err != nil {
 			return err
 		}
 		if err := plan.matchImage(probe); err != nil {
 			return err
+		}
+		if cc != nil {
+			if err := plan.matchFeatures(ctx, featureKeys(cc.merged)); err != nil {
+				return err
+			}
 		}
 		if !opts.noStart {
 			c, guarded = probe, true

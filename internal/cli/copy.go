@@ -2,9 +2,11 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -183,9 +185,10 @@ func (cp *copyPlan) matchImage(probe model.Container) error {
 }
 
 // matchGenerated refuses a generated target whose document, rendered with the
-// current catalog, would not have produced the source's image: the catalog may
-// have changed since, or a rebuild --tools may have failed after rewriting the
-// source's row.
+// current catalog, differs from the one stored for the source: the catalog may
+// have changed since. It cannot see a rebuild --tools that failed after
+// rewriting the source's row, as both documents then list the new tools;
+// matchFeatures checks the image itself.
 func (cp *copyPlan) matchGenerated(target string) error {
 	digest := func(doc string) (guard.Digest, error) {
 		// A generated document names no Dockerfile, so the path is never read.
@@ -202,6 +205,49 @@ func (cp *copyPlan) matchGenerated(target string) error {
 	if diff := guard.ImageDiff(src, dst); len(diff) > 0 {
 		return usageErrorf("--copy image: the tools %s was built from differ from what dev renders now (%s); "+
 			"drop --copy image and build", cp.src.Name, strings.Join(diff, ", "))
+	}
+	return nil
+}
+
+// featureKeys is the Feature references a configuration document names, bar
+// the local ones, whose ids the image's label may record differently. A
+// document that does not parse names none.
+func featureKeys(doc []byte) []string {
+	var d struct {
+		Features map[string]json.RawMessage `json:"features"`
+	}
+	_ = json.Unmarshal(doc, &d)
+	var keys []string
+	for k := range d.Features {
+		if !strings.HasPrefix(k, "./") && !strings.HasPrefix(k, "../") {
+			keys = append(keys, k)
+		}
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+// matchFeatures refuses a target whose Features the source's image does not
+// carry. The stored configurations cannot show that: a rebuild --tools that
+// failed has already rewritten the source's. Extra Features in the image are
+// not refused.
+func (cp *copyPlan) matchFeatures(ctx context.Context, want []string) error {
+	if len(want) == 0 {
+		return nil
+	}
+	have, err := cp.copier.ImageFeatureIDs(ctx, cp.imageID)
+	if err != nil {
+		return fmt.Errorf("reading %s's image Features: %w", cp.src.Name, err)
+	}
+	var missing []string
+	for _, k := range want {
+		if !slices.Contains(have, k) {
+			missing = append(missing, k)
+		}
+	}
+	if len(missing) > 0 {
+		return usageErrorf("--copy image: %s's image lacks Features this configuration lists (%s); "+
+			"drop --copy image and build", cp.src.Name, strings.Join(missing, ", "))
 	}
 	return nil
 }
@@ -247,18 +293,28 @@ const undoTimeout = 2 * time.Minute
 // without ctx's cancellation: Ctrl-C is the commonest reason to be here, and
 // a cancelled context would fail every engine call.
 func (cp *copyPlan) undo(ctx context.Context, a *app, c model.Container, cause error) error {
+	// A state volume that appeared after the target check is not this run's to
+	// delete: both removals below would take it.
+	foreign := errors.Is(cause, provider.ErrTargetExists)
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), undoTimeout)
 	defer cancel()
 
 	// The container and its volumes first: the engine refuses to remove a
 	// volume a container still references.
-	if err := cp.p.Remove(ctx, c); err != nil {
+	rm := c
+	if foreign {
+		rm.PersistState = false
+	}
+	if err := cp.p.Remove(ctx, rm); err != nil {
 		// Keep the row, the only handle remove has on what is left.
 		warnf(a, "removing container %s: %v", c.Name, err)
 		return fmt.Errorf("%w; the partial container %s was kept: run dev container remove %s", cause, c.Name, c.Name)
 	}
-	if err := cp.copier.DiscardCopy(ctx, c); err != nil {
-		warnf(a, "removing the copy made for %s: %v", c.Name, err)
+	// Remove has dropped the snapshot tag already.
+	if !foreign {
+		if err := cp.copier.DiscardCopy(ctx, c); err != nil {
+			warnf(a, "removing the copy made for %s: %v", c.Name, err)
+		}
 	}
 	if st, err := a.store(); err == nil {
 		if err := st.DeleteContainer(c.WorkspaceName, c.Name); err != nil {

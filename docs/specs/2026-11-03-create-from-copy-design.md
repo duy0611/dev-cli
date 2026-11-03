@@ -134,10 +134,10 @@ found by its `dev.workspace`/`dev.container` labels. It is **not** a
 **Snapshot.** dev builds a new image for the new container, for example
 tagged `dev-<ws>-<name>:from-image`; the exact name is left to the builder. It
 is made from SOURCE's image ID with `docker create` and `docker commit`, with
-the `devcontainer.metadata` label filtered to the Feature and base entries.
-SOURCE's own per-container entries (mounts, lifecycle commands, privileges,
-`remoteUser`, `containerEnv` from its project) are dropped, so nothing of
-SOURCE's config reaches the new container but what its Features contributed.
+the `devcontainer.metadata` label keeping the Features' entries and the base
+image's own (such as `remoteUser`) and dropping only SOURCE's own config entry
+(mounts, lifecycle commands, privileges, `containerEnv` from its project), so
+nothing of SOURCE's config reaches the new container.
 The snapshot is the new container's own image, not a bridge: it lives until
 `dev container remove`, and a rebuild replaces it. SOURCE can be removed and its
 image pruned at any time. From the first creation nothing ties the two
@@ -162,12 +162,13 @@ before relying on it.
 In neither case is it stored: `GeneratedConfig` and `ConfigPath` stay exactly
 what they would be without `--copy`.
 
-The rewrite applies when the snapshot tag exists and the engine has no
-container for the row. That means the first start after `create`, including a
-later `start` after `--no-start`. After that the container exists, and a
-rebuild goes through the normal path, building afresh and replacing the
-snapshot. If the container is removed out from under dev, the next start
-starts from the snapshot again.
+The rewrite applies only to the first start: when the snapshot tag exists and
+the engine has no container for the row. That means the first start after
+`create`, including a later `start` after `--no-start`. Once the first start
+has used it, the tag is renamed to `:copied`, so a later start (after a failed
+rebuild, say) builds or uses the clone's kept image and never re-applies the
+rewrite. A rebuild goes through the normal path, building afresh and replacing
+the snapshot.
 
 **What still runs.** The new container's own `onCreateCommand`,
 `updateContentCommand` and `postCreateCommand` still run on first start. They
@@ -183,11 +184,20 @@ would have produced it:
 - *Generated source:* `--tools` with `--copy image` is exit 2, whatever its form,
   because the tools are baked into the image. The target cannot have its own
   `.devcontainer`, but its document is rendered with the current catalog, which
-  may differ from what SOURCE's image was built from (a dev upgrade, a failed
-  `rebuild --tools`). So SOURCE's stored `GeneratedConfig` and the new
+  may differ from what SOURCE's image was built from (a dev upgrade). So SOURCE's stored `GeneratedConfig` and the new
   container's rendered one are digested (`guard.DigestOf`) and compared on the
   same image-deciding entries (`guard.ImageDiff`). A mismatch is exit 2 with the
-  same advice to drop `--copy image` and build.
+  same advice to drop `--copy image` and build. This cannot see a failed
+  `rebuild --tools`, which rewrites SOURCE's row before building, so both
+  documents list the new tools while SOURCE's image has the old ones; the
+  Feature check below covers that.
+- *Features in the image* (both kinds of source): the Feature ids in SOURCE's
+  image's `devcontainer.metadata` label (`Copier.ImageFeatureIDs`, on the source
+  image ID) must include every key of the target configuration's `features`
+  (generated: the rendered document; project-owned: the target's merged config).
+  Local `./` and `../` keys are skipped, since the label may record their ids
+  differently. Any missing is exit 2 naming them, with the same advice. Extra
+  Features in the image are not refused.
 - *Project-owned source:* compare only what decides the image. The full
   `ConfigDigest` cannot be compared, because it covers the merged config **with**
   dev's per-container overlays: the state volume name and the worktree binds
@@ -263,8 +273,10 @@ Every validation step runs before anything is created, in roughly this order:
 3. Mode checks.
 4. Persist-state and compose checks.
 5. Engine lookups: SOURCE's container, image and state volume.
-6. The target check: the new container's state volume and snapshot tag must not
-   exist. A leftover is exit 2, naming `docker volume rm` and `docker rmi`.
+6. The target check: first that no container row of that name exists (the usual
+   "already exists" error), then that the new container's state volume and
+   snapshot tag do not. A leftover is exit 2, naming `docker volume rm` and
+   `docker rmi`.
 7. The config match for `image`.
 
 Then:
@@ -278,7 +290,9 @@ Then:
 If step 2, 3 or 4 fails, everything created so far is removed, under a
 context that outlives Ctrl-C or SIGTERM and with a timeout: first the
 container and its volumes through the provider's remove, then the snapshot image
-and the new state volume, then the row. Removal goes first because the engine
+and the new state volume, then the row. When the copy fails because the state
+volume appeared after the target check, that volume is not this run's: rollback
+removes the row and the snapshot tag and leaves the volume. Removal goes first because the engine
 refuses a volume a container still uses. If the container cannot be removed, the
 row is kept and the error tells the operator to run `dev container remove NAME`.
 With `--no-start`, the snapshot and the filled volume remain until the first
@@ -345,7 +359,7 @@ one exists, the way forward ("drop `--copy image`", "stop SOURCE first",
 - Refusing `--copy image` when configs differ, rather than warning.
 - Refusing `--copy` for compose projects.
 - Allowing a running source for `--copy state`, with a warning.
-- The snapshot being the new container's own image until remove or rebuild, with SOURCE's per-container metadata filtered out.
+- The snapshot being the new container's own image until remove or rebuild, with only SOURCE's own config entry filtered out.
 - The first-start config rewrite (image swapped, build fields dropped), never
   stored.
 - The project-owned config match comparing only image-deciding entries from
