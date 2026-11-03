@@ -231,6 +231,13 @@ refer to them by number, so the numbers are stable.
     variables ride `--remote-env` and so reach both commands. k8s ignores all
     of it and grows a PVC subPath instead.
 
+    `Remove` deletes the state volume unless `RemoveOpts.KeepState` is set
+    (`remove --keep-state`, local only). The volume's name is a function of
+    workspace and container, so a later container of the same name mounts it
+    again with no further logic. k8s refuses the option in the CLI and in
+    `Remove`: its state is a subPath of the PVC the workspace lives on, which
+    cannot be kept apart from it.
+
     Credentials stay out. Agents authenticate from workspace settings resolved
     per invocation, which is what keeps the ssh relay's "nothing worth stealing
     rests in the container" true of this volume too.

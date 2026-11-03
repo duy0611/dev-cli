@@ -340,7 +340,7 @@ func (p *Provider) Stop(ctx context.Context, c model.Container) error {
 	return runDocker(ctx, "stop", id)
 }
 
-func (p *Provider) Remove(ctx context.Context, c model.Container) error {
+func (p *Provider) Remove(ctx context.Context, c model.Container, opts provider.RemoveOpts) error {
 	id, err := p.containerID(ctx, c)
 	if err != nil {
 		return err
@@ -365,7 +365,7 @@ func (p *Provider) Remove(ctx context.Context, c model.Container) error {
 			volumes = append(volumes, FolderVolumeName(c.WorkspaceName, c.Name, f.HostPath))
 		}
 	}
-	if c.PersistState {
+	if c.PersistState && !opts.KeepState {
 		volumes = append(volumes, StateVolumeName(c.WorkspaceName, c.Name))
 	}
 	for _, name := range volumes {

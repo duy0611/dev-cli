@@ -146,7 +146,7 @@ The dispatch binary is at `bin/dev-team` under it, and each launch is a run at
 `lead-instruction.md` when opencode leads, and `tasks/<id>/` with `task.md`,
 `task.json`, `log.jsonl` and `result.md`. A rebuild keeps the volume, so the
 runs survive it; `container remove` deletes the volume, so nothing outlives its
-container.
+container unless you pass `--keep-state`.
 
 Watch it from the host while the lead works:
 
@@ -1010,7 +1010,8 @@ identically.
 ### Declare a project's agent setup
 
 The state volume keeps what you install in one container across its rebuilds.
-It does nothing for the next container. To stop typing the same `claude plugin
+It does nothing for the next container, unless you recreate one of the same
+name after `container remove --keep-state`. To stop typing the same `claude plugin
 install` in every new one, declare it in the project:
 
 ```yaml
@@ -1363,7 +1364,8 @@ agent's own transcript.
 ### Clean up
 
 ```sh
-dev container remove scratch        # engine object and record, volume included
+dev container remove scratch        # engine object and record, volumes included
+dev container remove scratch --keep-state   # same, but the state volume stays
 dev workspace remove personal       # refused while it still holds containers
 dev provider remove local           # refused while a workspace still names it
 ```
@@ -1374,6 +1376,16 @@ Remove the containers first.
 
 `container remove --force` drops the record even when the engine removal fails,
 which is how you clean up after an engine that no longer exists.
+
+`container remove --keep-state` removes the container and its workspace volume
+but leaves the agent-state volume (`dev-<workspace>-<container>-state`) and
+prints `kept volume <name>`. Creating a container with the same name in the
+same workspace mounts that volume again, with the plugins, settings and team
+runs it held. A container made with `--no-persist-state` has nothing to keep;
+the command says so and removes it as usual. The flag is local-only: on the
+experimental k8s provider the state shares the workspace's claim, so the
+command refuses it before removing anything. The kept volume is yours to
+delete with `docker volume rm`.
 
 ## Troubleshooting
 
@@ -1594,7 +1606,7 @@ dev container create NAME --from SOURCE [--folder PATH | --no-folder] [--tools +
 dev container list [--all] [--timeout DURATION]
 dev container start NAME
 dev container stop NAME
-dev container remove NAME [--force]
+dev container remove NAME [--force] [--keep-state]
 dev container rebuild NAME [--no-cache] [--tools LIST] [--accept-config]
                           [--add-folder PATH]... [--remove-folder PATH]...
                           [--mode guarded|unprotected|isolated]
@@ -1724,7 +1736,8 @@ A legacy container that was guarded prints a warning on every `start`, `exec`,
 
 **`remove`** never touches the project folder's files. For a folderless
 container it also deletes the volume, matching the k8s provider deleting its
-PVC. For an isolated one it first checks that nothing would be lost (see
+PVC; `--keep-state` leaves the state volume (local only, see
+[Clean up](#clean-up)). For an isolated one it first checks that nothing would be lost (see
 [What a container can do to your git](#what-a-container-can-do-to-your-git)), then deletes the `NAME/*` refs `fetch` wrote. If the
 engine refuses, the record is kept so the command can be retried; `--force`
 drops it anyway.
