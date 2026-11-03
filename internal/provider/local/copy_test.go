@@ -211,7 +211,9 @@ case "$1" in
   ps) ;;
 esac`
 	run := map[string]func(*Provider, model.Container) error{
-		"remove": func(p *Provider, c model.Container) error { return p.Remove(context.Background(), c) },
+		"remove": func(p *Provider, c model.Container) error {
+			return p.Remove(context.Background(), c, provider.RemoveOpts{})
+		},
 		"rebuild": func(p *Provider, c model.Container) error {
 			return p.Rebuild(context.Background(), c, nil, provider.RebuildOpts{})
 		},
@@ -374,7 +376,7 @@ func TestRemoveDeletesTheSnapshotTag(t *testing.T) {
 	f := newFakePath(t)
 	copyDocker(f, t, false)
 
-	if err := (&Provider{}).Remove(context.Background(), testContainer()); err != nil {
+	if err := (&Provider{}).Remove(context.Background(), testContainer(), provider.RemoveOpts{}); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
 	if !f.calledWith(t, dockerBin, []string{"rmi", snapTag}) {
@@ -386,7 +388,7 @@ func TestRemoveDeletesTheSnapshotAfterTheContainer(t *testing.T) {
 	f := newFakePath(t)
 	copyDocker(f, t, true)
 
-	if err := (&Provider{}).Remove(context.Background(), testContainer()); err != nil {
+	if err := (&Provider{}).Remove(context.Background(), testContainer(), provider.RemoveOpts{}); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
 	rm, rmi := -1, -1
@@ -407,7 +409,7 @@ func TestRemoveWithoutATagIsQuiet(t *testing.T) {
 	f := newFakePath(t)
 	f.installScripted(t, dockerBin, `[ "$1" = image ] && exit 1`)
 
-	if err := (&Provider{}).Remove(context.Background(), testContainer()); err != nil {
+	if err := (&Provider{}).Remove(context.Background(), testContainer(), provider.RemoveOpts{}); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
 	if f.calledWith(t, dockerBin, []string{"rmi", snapTag}) {

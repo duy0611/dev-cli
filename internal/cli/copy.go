@@ -318,11 +318,7 @@ func (cp *copyPlan) undo(ctx context.Context, a *app, c model.Container, cause e
 
 	// The container and its volumes first: the engine refuses to remove a
 	// volume a container still references.
-	rm := c
-	if foreign {
-		rm.PersistState = false
-	}
-	if err := cp.p.Remove(ctx, rm); err != nil {
+	if err := cp.p.Remove(ctx, c, provider.RemoveOpts{KeepState: foreign}); err != nil {
 		// Keep the row, the only handle remove has on what is left.
 		warnf(a, "removing container %s: %v", c.Name, err)
 		return fmt.Errorf("%w; the partial container %s was kept: run dev container remove %s", cause, c.Name, c.Name)
