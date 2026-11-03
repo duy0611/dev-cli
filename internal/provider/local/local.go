@@ -82,7 +82,6 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 	}
 
 	configPath, overridePath := c.ConfigPath, c.OverrideConfigPath
-	fromSnapshot := false
 	if !recreate {
 		rewritten, cleanup, ok, err := p.snapshotConfig(ctx, c)
 		if err != nil {
@@ -90,7 +89,6 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 		}
 		if ok {
 			defer cleanup()
-			fromSnapshot = true
 			configPath, overridePath = rewritten.config, rewritten.override
 		}
 	}
@@ -132,7 +130,7 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 		}
 		return err
 	}
-	if fromSnapshot {
+	if recreate {
 		p.dropSnapshotTag(ctx, c)
 	}
 	if err := p.claimStateDir(ctx, c); err != nil {
@@ -345,8 +343,7 @@ func (p *Provider) Remove(ctx context.Context, c model.Container) error {
 		}
 	}
 
-	// Only a --no-start container still has its snapshot. Not an error: the
-	// source may hold the image's last other reference.
+	// After the container: an image in use cannot be removed.
 	p.dropSnapshotTag(ctx, c)
 
 	// docker rm leaves named volumes behind, so they are removed here. Last,

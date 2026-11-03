@@ -818,7 +818,8 @@ func TestRebuildBuildsForTheEnginePlatform(t *testing.T) {
 func TestUpKeepsTheOperatorsPlatform(t *testing.T) {
 	f := newFakePath(t)
 	f.install(t, devcontainerBin, "", 0)
-	f.install(t, dockerBin, "linux/arm64", 0)
+	// No snapshot tag, and "linux/arm64" must not be reachable as an answer.
+	f.installScripted(t, dockerBin, `[ "$1" = image ] && exit 1; printf 'linux/arm64\n'`)
 	t.Setenv(platformEnv, "linux/amd64")
 
 	if err := (&Provider{}).Up(context.Background(), testContainer(), nil); err != nil {
@@ -827,8 +828,10 @@ func TestUpKeepsTheOperatorsPlatform(t *testing.T) {
 	if got, _ := f.env(t, devcontainerBin, platformEnv); got != "linux/amd64" {
 		t.Errorf("up saw %s=%q, want the operator's linux/amd64", platformEnv, got)
 	}
-	if _, err := os.Stat(filepath.Join(f.dir, dockerBin+".argv")); err == nil && f.calledWith(t, dockerBin, []string{"version"}) {
-		t.Errorf("docker was probed despite an operator platform: %v", f.argvAll(t, dockerBin))
+	for _, a := range f.argvAll(t, dockerBin) {
+		if !contains(a, []string{"image", "inspect"}) || a[len(a)-1] != SnapshotTag("ws", "demo") {
+			t.Errorf("docker was called despite an operator platform: %v", a)
+		}
 	}
 }
 

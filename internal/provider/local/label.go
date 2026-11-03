@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"regexp"
 
 	"github.com/duy0611/dev-cli/internal/model"
 )
@@ -81,18 +80,10 @@ func FolderVolumeName(workspace, container, host string) string {
 	return fmt.Sprintf("dev-%s-%s-f-%s", workspace, container, hex.EncodeToString(sum[:])[:8])
 }
 
-// plainReference is a repository name that is a valid image reference as it
-// stands: lowercase, with single separators between alphanumerics.
-var plainReference = regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*$`)
-
-// SnapshotTag is the image tag that holds a copied image for a container until
-// its first start. Container names allow uppercase and a trailing separator,
-// which a reference does not, so such a name falls back to a hash.
+// SnapshotTag is the image tag that holds a container's copied image. Always a
+// hash: joining workspace and name with a separator is ambiguous, and names
+// allow characters a reference does not.
 func SnapshotTag(workspace, container string) string {
-	repo := fmt.Sprintf("dev-%s-%s", workspace, container)
-	if !plainReference.MatchString(repo) {
-		sum := sha256.Sum256([]byte(workspace + "/" + container))
-		repo = "dev-copy-" + hex.EncodeToString(sum[:])[:16]
-	}
-	return repo + ":from-image"
+	sum := sha256.Sum256([]byte(workspace + "\x00" + container))
+	return "dev-copy-" + hex.EncodeToString(sum[:])[:16] + ":from-image"
 }

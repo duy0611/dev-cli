@@ -2,7 +2,6 @@ package local
 
 import (
 	"regexp"
-	"strings"
 	"testing"
 )
 
@@ -23,19 +22,17 @@ func TestFolderVolumeName(t *testing.T) {
 }
 
 func TestSnapshotTag(t *testing.T) {
-	ref := regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*:from-image$`)
-	if got, want := SnapshotTag("ws", "feat-x"), "dev-ws-feat-x:from-image"; got != want {
-		t.Errorf("SnapshotTag = %q, want %q", got, want)
-	}
+	ref := regexp.MustCompile(`^dev-copy-[0-9a-f]{16}:from-image$`)
 	seen := map[string]string{}
-	for _, name := range []string{"Feat", "feat", "x-", "x.", "a..b", "a__b", "_a", "A_B"} {
-		tag := SnapshotTag("ws", name)
-		if !strings.Contains(tag, ":from-image") || !ref.MatchString(tag) && !regexp.MustCompile(`^dev-ws-a__b:`).MatchString(tag) {
-			t.Errorf("SnapshotTag(%q) = %q is not a valid reference", name, tag)
+	for _, c := range [][2]string{{"a-b", "c"}, {"a", "b-c"}, {"ws", "Feat"}, {"ws", "feat"}, {"ws", "x-"}, {"ws", "_a"}} {
+		tag := SnapshotTag(c[0], c[1])
+		if !ref.MatchString(tag) {
+			t.Errorf("SnapshotTag(%q, %q) = %q is not a valid reference", c[0], c[1], tag)
 		}
+		key := c[0] + "/" + c[1]
 		if prev, dup := seen[tag]; dup {
-			t.Errorf("%q and %q share tag %q", prev, name, tag)
+			t.Errorf("%q and %q share tag %q", prev, key, tag)
 		}
-		seen[tag] = name
+		seen[tag] = key
 	}
 }

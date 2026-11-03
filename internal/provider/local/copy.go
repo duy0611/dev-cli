@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/tailscale/hujson"
 
@@ -43,12 +44,92 @@ func (p *Provider) SourceImage(ctx context.Context, src model.Container) (string
 	return image, nil
 }
 
-// SnapshotImage tags imageID for dst.
-func (p *Provider) SnapshotImage(ctx context.Context, dst model.Container, imageID string) error {
+// metadataLabel is where the devcontainer CLI records an image's Feature and
+// config metadata.
+const metadataLabel = "devcontainer.metadata"
+
+// SnapshotImage makes imageID available as dst's snapshot tag. When the image
+// carries the CLI's metadata label, the snapshot is a new image whose label
+// keeps only the entries with an id (the base image and each Feature): the
+// entry without one is the source's own materialised config, which the CLI
+// would merge into dst's, carrying the source's mounts, privileges and
+// lifecycle commands along.
+func (p *Provider) SnapshotImage(ctx context.Context, dst model.Container, imageID string) (err error) {
 	if err := requireBinary(dockerBin); err != nil {
 		return err
 	}
-	return runDocker(ctx, "tag", imageID, SnapshotTag(dst.WorkspaceName, dst.Name))
+	tag := SnapshotTag(dst.WorkspaceName, dst.Name)
+	out, err := output(ctx, dockerBin, "image", "inspect", "--format", "{{json .Config.Labels}}", imageID)
+	if err != nil {
+		return err
+	}
+	var labels map[string]string
+	if err := json.Unmarshal([]byte(out), &labels); err != nil {
+		return fmt.Errorf("reading the labels of %s: %w", imageID, err)
+	}
+	meta, ok := labels[metadataLabel]
+	if !ok {
+		return runDocker(ctx, "tag", imageID, tag)
+	}
+	filtered, err := featureMetadata(meta)
+	if err != nil {
+		return fmt.Errorf("reading %s of %s: %w", metadataLabel, imageID, err)
+	}
+
+	// create leaves the filesystem as the image has it; commit keeps the image's
+	// config and replaces the one label.
+	cid, err := output(ctx, dockerBin, "create", "--pull=never", imageID)
+	if err != nil {
+		return err
+	}
+	cid = first(cid)
+	if cid == "" {
+		return errors.New("docker create printed no container ID")
+	}
+	defer func() {
+		if rmErr := runDocker(context.WithoutCancel(ctx), "rm", cid); rmErr != nil && err == nil {
+			err = rmErr
+		}
+	}()
+	return runDocker(ctx, "commit", "--change", "LABEL "+metadataLabel+"="+dockerfileString(filtered), cid, tag)
+}
+
+// featureMetadata keeps the entries of a devcontainer.metadata value that have
+// an id. The CLI writes an array; an older one wrote a single object.
+func featureMetadata(raw string) (string, error) {
+	var entries []json.RawMessage
+	if strings.HasPrefix(strings.TrimSpace(raw), "{") {
+		entries = []json.RawMessage{json.RawMessage(raw)}
+	} else if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		return "", err
+	}
+	kept := []json.RawMessage{}
+	for _, e := range entries {
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(e, &m); err != nil {
+			return "", err
+		}
+		if _, ok := m["id"]; ok {
+			kept = append(kept, e)
+		}
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(kept); err != nil {
+		return "", err
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, buf.Bytes()); err != nil {
+		return "", err
+	}
+	return compact.String(), nil
+}
+
+// dockerfileString quotes s as one double-quoted Dockerfile word: LABEL values
+// are variable-expanded, so a literal $ is escaped too.
+func dockerfileString(s string) string {
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`, `$`, `\$`).Replace(s) + `"`
 }
 
 // CheckState reports whether src has a state volume to copy, so a caller can
@@ -60,6 +141,21 @@ func (p *Provider) CheckState(ctx context.Context, src model.Container) error {
 	from := StateVolumeName(src.WorkspaceName, src.Name)
 	if exec.CommandContext(ctx, dockerBin, "volume", "inspect", from).Run() != nil {
 		return fmt.Errorf("volume %s: %w", from, provider.ErrNoStateVolume)
+	}
+	return nil
+}
+
+// CheckTarget reports whether dst already has a state volume or snapshot tag.
+func (p *Provider) CheckTarget(ctx context.Context, dst model.Container) error {
+	if err := requireBinary(dockerBin); err != nil {
+		return err
+	}
+	to := StateVolumeName(dst.WorkspaceName, dst.Name)
+	if exec.CommandContext(ctx, dockerBin, "volume", "inspect", to).Run() == nil {
+		return fmt.Errorf("volume %s: %w", to, provider.ErrTargetExists)
+	}
+	if p.hasSnapshotTag(ctx, dst) {
+		return fmt.Errorf("image %s: %w", SnapshotTag(dst.WorkspaceName, dst.Name), provider.ErrTargetExists)
 	}
 	return nil
 }
@@ -78,10 +174,15 @@ func (p *Provider) CopyState(ctx context.Context, src, dst model.Container, help
 	if exec.CommandContext(ctx, dockerBin, "volume", "inspect", from).Run() != nil {
 		return fmt.Errorf("volume %s: %w", from, provider.ErrNoStateVolume)
 	}
+	// docker's volume create succeeds on an existing name and would merge into
+	// it, and a rollback would then delete a volume that was never ours.
+	if exec.CommandContext(ctx, dockerBin, "volume", "inspect", to).Run() == nil {
+		return fmt.Errorf("volume %s: %w", to, provider.ErrTargetExists)
+	}
 	if err := runDocker(ctx, "volume", "create", to); err != nil {
 		return err
 	}
-	return runDocker(ctx, "run", "--rm", "--pull=never", "--user", "0",
+	return runDocker(ctx, "run", "--rm", "--pull=never", "--user", "0", "--network", "none",
 		"--entrypoint", "cp",
 		"-v", from+":/from:ro", "-v", to+":/to",
 		helperImage, "-a", "/from/.", "/to/")
@@ -111,9 +212,9 @@ func (p *Provider) hasSnapshotTag(ctx context.Context, c model.Container) bool {
 	return err == nil && first(out) != ""
 }
 
-// dropSnapshotTag untags the snapshot. A failure is only reported: docker
-// refuses to remove the last tag of an image a container uses, and by now the
-// container is up and the tag is a leftover.
+// dropSnapshotTag deletes the snapshot image once its container is gone or has
+// been rebuilt from a normal config. A failure is only reported: the image may
+// still be a parent of an image the CLI layered on top.
 func (p *Provider) dropSnapshotTag(ctx context.Context, c model.Container) {
 	if !p.hasSnapshotTag(ctx, c) {
 		return

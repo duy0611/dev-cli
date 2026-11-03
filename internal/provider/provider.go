@@ -160,6 +160,9 @@ var (
 	ErrNoImage = errors.New("the source's image no longer exists locally")
 	// ErrNoStateVolume: the source has no state volume.
 	ErrNoStateVolume = errors.New("the source has no state volume")
+	// ErrTargetExists: the new container's state volume or snapshot tag is
+	// already in the engine, so a copy would merge into or replace leftovers.
+	ErrTargetExists = errors.New("the new container's state volume or snapshot tag already exists")
 )
 
 // Copier is a provider that can start a container from another one's image and
@@ -169,17 +172,25 @@ type Copier interface {
 	// It wraps ErrNoContainer or ErrNoImage.
 	SourceImage(ctx context.Context, src model.Container) (string, error)
 
-	// SnapshotImage tags imageID under a name owned by dst. Up starts dst from
-	// that tag while the engine has no container for it, then deletes the tag.
+	// SnapshotImage makes imageID available under a name owned by dst, as an
+	// image of its own that carries the source's Features' metadata but not the
+	// source's own config. Up starts dst from that tag while the engine has no
+	// container for it. The tag stays: it is dst's own image, and Remove deletes
+	// it.
 	SnapshotImage(ctx context.Context, dst model.Container, imageID string) error
 
 	// CheckState reports, creating nothing, whether src has a state volume. It
 	// wraps ErrNoStateVolume.
 	CheckState(ctx context.Context, src model.Container) error
 
+	// CheckTarget reports, creating nothing, whether dst's state volume or
+	// snapshot tag already exists. It wraps ErrTargetExists.
+	CheckTarget(ctx context.Context, dst model.Container) error
+
 	// CopyState creates dst's state volume and fills it with a copy of src's,
 	// through a short-lived container of helperImage, which must be present
-	// locally. It wraps ErrNoStateVolume.
+	// locally. It wraps ErrNoStateVolume and ErrTargetExists, and deletes nothing
+	// when it refuses.
 	CopyState(ctx context.Context, src, dst model.Container, helperImage string) error
 
 	// DiscardCopy removes dst's snapshot tag and state volume, whichever
