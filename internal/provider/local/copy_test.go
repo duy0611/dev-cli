@@ -401,3 +401,30 @@ func TestDiscardCopyIsIdempotent(t *testing.T) {
 		t.Error("rmi ran with no tag")
 	}
 }
+
+func TestCheckStateReportsAMissingVolumeAndCreatesNothing(t *testing.T) {
+	f := newFakePath(t)
+	f.installScripted(t, dockerBin, `[ "$1" = volume ] && [ "$2" = inspect ] && exit 1`)
+	src, _ := copyPair()
+	err := (&Provider{}).CheckState(context.Background(), src)
+	if !errors.Is(err, provider.ErrNoStateVolume) {
+		t.Fatalf("err = %v, want ErrNoStateVolume", err)
+	}
+	if !f.calledWith(t, dockerBin, []string{"volume", "inspect", "dev-ws-web-state"}) {
+		t.Errorf("calls: %v", f.argvAll(t, dockerBin))
+	}
+	for _, a := range f.argvAll(t, dockerBin) {
+		if a[0] != "volume" || a[1] != "inspect" {
+			t.Errorf("unexpected call %v", a)
+		}
+	}
+}
+
+func TestCheckStatePassesWhenTheVolumeExists(t *testing.T) {
+	f := newFakePath(t)
+	f.installScripted(t, dockerBin, ``)
+	src, _ := copyPair()
+	if err := (&Provider{}).CheckState(context.Background(), src); err != nil {
+		t.Fatal(err)
+	}
+}

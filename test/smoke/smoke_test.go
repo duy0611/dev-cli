@@ -404,3 +404,85 @@ func TestSmokePersistState(t *testing.T) {
 		t.Errorf("remove left the state volume behind: %v", out)
 	}
 }
+
+// A copy shares no image tag with its source: it starts from the image ID the
+// source's container used, and a rebuild of either leaves the other alone.
+func TestSmokeCreateFromCopy(t *testing.T) {
+	requireBinaries(t, "devcontainer", "docker")
+
+	t.Setenv("DEV_STATE", t.TempDir())
+
+	bin := buildBinary(t)
+	dev := func(args ...string) string {
+		t.Helper()
+		return run(t, bin, args...)
+	}
+
+	const (
+		src   = "dev-smoke-copy-src"
+		clone = "dev-smoke-copy-clone"
+		ws    = "dev-smoke-copy-ws"
+	)
+	t.Cleanup(func() {
+		for _, name := range []string{clone, src} {
+			_ = exec.Command(bin, "container", "remove", name, "--force").Run()
+			_ = exec.Command("docker", "volume", "rm", "--force",
+				"dev-"+ws+"-"+name, "dev-"+ws+"-"+name+"-state").Run()
+		}
+	})
+
+	imageOf := func(name string) string {
+		t.Helper()
+		out, err := exec.Command("docker", "ps", "-aq",
+			"--filter", "label=dev.workspace="+ws, "--filter", "label=dev.container="+name).Output()
+		id := strings.TrimSpace(string(out))
+		if err != nil || id == "" {
+			t.Fatalf("no container for %s: %v", name, err)
+		}
+		image, err := exec.Command("docker", "inspect", "--format", "{{.Image}}", id).Output()
+		if err != nil {
+			t.Fatalf("docker inspect %s: %v", id, err)
+		}
+		return strings.TrimSpace(string(image))
+	}
+
+	dev("provider", "configure", "dev-smoke-copy-local", "--kind", "local")
+	dev("workspace", "init", ws, "--provider", "dev-smoke-copy-local")
+
+	t.Log("creating the source; the first run pulls a base image and installs features")
+	dev("container", "create", src, "--no-folder", "--generate", "--tools", "yq")
+	dev("container", "exec", src, "--", "sh", "-c", "echo marker > /var/dev-state/marker")
+
+	dev("container", "create", clone, "--no-folder", "--from", src, "--copy", "image,state")
+
+	srcImage, cloneImage := imageOf(src), imageOf(clone)
+	if srcImage != cloneImage {
+		t.Errorf("clone image = %s, want the source's %s: something was built", cloneImage, srcImage)
+	}
+	if out := dev("container", "exec", clone, "--", "cat", "/var/dev-state/marker"); !strings.Contains(out, "marker") {
+		t.Errorf("the state was not copied: %q", out)
+	}
+	if out := dockerImages(t, "dev-"+ws+"-"+clone+":from-image"); len(out) != 0 {
+		t.Errorf("the snapshot tag outlived the first start: %v", out)
+	}
+
+	// Rebuilding the source recreates its container, and must leave the copy's
+	// image alone.
+	dev("container", "rebuild", src)
+	if got := imageOf(clone); got != cloneImage {
+		t.Errorf("clone image after the source's rebuild = %s, want %s", got, cloneImage)
+	}
+
+	dev("container", "remove", clone)
+	dev("container", "remove", src)
+}
+
+// dockerImages returns the image IDs a reference names.
+func dockerImages(t *testing.T, ref string) []string {
+	t.Helper()
+	out, err := exec.Command("docker", "images", "-q", ref).Output()
+	if err != nil {
+		t.Fatalf("docker images: %v", err)
+	}
+	return strings.Fields(string(out))
+}

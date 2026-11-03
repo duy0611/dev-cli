@@ -51,6 +51,19 @@ func (p *Provider) SnapshotImage(ctx context.Context, dst model.Container, image
 	return runDocker(ctx, "tag", imageID, SnapshotTag(dst.WorkspaceName, dst.Name))
 }
 
+// CheckState reports whether src has a state volume to copy, so a caller can
+// refuse before it writes anything.
+func (p *Provider) CheckState(ctx context.Context, src model.Container) error {
+	if err := requireBinary(dockerBin); err != nil {
+		return err
+	}
+	from := StateVolumeName(src.WorkspaceName, src.Name)
+	if exec.CommandContext(ctx, dockerBin, "volume", "inspect", from).Run() != nil {
+		return fmt.Errorf("volume %s: %w", from, provider.ErrNoStateVolume)
+	}
+	return nil
+}
+
 // CopyState fills dst's new state volume from src's. cp runs as the helper's
 // entrypoint, so the image needs neither a shell nor a cooperative USER.
 // --pull=never is spelled the same by docker and podman: the image is the

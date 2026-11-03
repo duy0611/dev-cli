@@ -173,6 +173,10 @@ type Copier interface {
 	// that tag while the engine has no container for it, then deletes the tag.
 	SnapshotImage(ctx context.Context, dst model.Container, imageID string) error
 
+	// CheckState reports, creating nothing, whether src has a state volume. It
+	// wraps ErrNoStateVolume.
+	CheckState(ctx context.Context, src model.Container) error
+
 	// CopyState creates dst's state volume and fills it with a copy of src's,
 	// through a short-lived container of helperImage, which must be present
 	// locally. It wraps ErrNoStateVolume.

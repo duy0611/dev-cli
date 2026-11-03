@@ -56,16 +56,23 @@ func newContainerCmd(a *app) *cobra.Command {
 
 // createOpts holds the flags of `container create` beyond the name and folder.
 type createOpts struct {
-	noStart         bool
-	noFolder        bool
-	generate        bool
-	noPersistState  bool
-	tools           []string
-	agentConfig     string
-	noAgentConfig   bool
-	from            string
-	allowPrivileged bool
-	mode            model.Mode
+	noStart        bool
+	noFolder       bool
+	generate       bool
+	noPersistState bool
+	tools          []string
+	agentConfig    string
+	noAgentConfig  bool
+	from           string
+	// copy is --copy's entries as given, empty ones included, so a bad list is
+	// refused rather than read as none.
+	copy []string
+	// Set by applyFrom: the source keeps its project's own config, and --tools
+	// was given before the source's own list replaced it.
+	fromProjectOwned bool
+	toolsGiven       bool
+	allowPrivileged  bool
+	mode             model.Mode
 	// extraFolders are the --folder arguments after the first.
 	extraFolders []string
 	// Set only on rows from before modes; no flag sets it.
@@ -77,6 +84,7 @@ func newContainerCreateCmd(a *app) *cobra.Command {
 		workspace string
 		folders   []string
 		toolList  string
+		copyList  string
 		opts      createOpts
 	)
 
@@ -104,15 +112,26 @@ func newContainerCreateCmd(a *app) *cobra.Command {
 			"agents' skills, MCP servers and plugins; dev applies it inside the\n" +
 			"container once it is running, and again on every rebuild. --agent-config\n" +
 			"names another file, --no-agent-config applies none.\n\n" +
-			"--from SOURCE starts from another container in the workspace whose\n" +
-			"configuration dev generated: its tools, its state volume setting and its\n" +
-			"agents.yaml choice. The configuration is rendered afresh for this\n" +
+			"--from SOURCE starts from another container in the workspace: its state\n" +
+			"volume setting and its agents.yaml choice, and, when dev generated its\n" +
+			"configuration, its tools. The configuration is rendered afresh for this\n" +
 			"container, so the two never share a volume. --tools then takes +/-\n" +
 			"changes to the source's list, and the other flags override what is\n" +
-			"inherited.",
+			"inherited. A source that uses its project's own config supplies no\n" +
+			"tools: the new container uses its own folder's .devcontainer, which\n" +
+			"must exist, and --tools is refused.\n\n" +
+			"--copy image,state, with --from, skips the build and fills the state\n" +
+			"volume: image starts from the image SOURCE's container was created from\n" +
+			"(nothing is built; the configurations must match), state copies SOURCE's\n" +
+			"/var/dev-state volume. Both need the local provider and refuse an\n" +
+			"isolated source or container. SOURCE is only read; stop it first for a\n" +
+			"clean state copy.",
 		Args: exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.tools = parseToolList(toolList)
+			if cmd.Flags().Changed("copy") {
+				opts.copy = strings.Split(copyList, ",")
+			}
 			folder := ""
 			if len(folders) > 0 {
 				folder, opts.extraFolders = folders[0], folders[1:]
@@ -139,7 +158,9 @@ func newContainerCreateCmd(a *app) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.noAgentConfig, "no-agent-config", false,
 		"apply no agents.yaml, even if the project has one")
 	cmd.Flags().StringVar(&opts.from, "from", "",
-		"start from another generated container's tools and settings")
+		"start from another container's settings, and its tools when dev generated its config")
+	cmd.Flags().StringVar(&copyList, "copy", "",
+		"with --from, also reuse the source's built image and/or a copy of its state volume: image, state or image,state (local provider, not isolated)")
 	cmd.Flags().BoolVar(&opts.allowPrivileged, "allow-privileged", false,
 		"let the configuration ask for privileged mode, the engine socket, host namespaces or a mount of / or your home")
 	return cmd
@@ -190,9 +211,14 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 			return err
 		}
 	}
+	kinds, err := parseCopy(opts.copy, opts.from)
+	if err != nil {
+		return err
+	}
 	// Before the source is resolved, so the render sees the tools --from
 	// carries.
-	if err := applyFrom(a, wsName, &opts); err != nil {
+	src, err := applyFrom(a, wsName, &opts)
+	if err != nil {
 		return err
 	}
 	// Re-checked: --from may have filled in what the flags left empty.
@@ -237,6 +263,13 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 		sortFolders(extras)
 		if defaulted {
 			a.printf("using %s (the current directory)\n", xpath.Shorten(source))
+		}
+	}
+
+	var plan *copyPlan
+	if kinds.any() {
+		if plan, err = a.planCopy(ctx, wsName, kinds, *src, opts, mode, configPath); err != nil {
+			return err
 		}
 	}
 
@@ -306,7 +339,21 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 	}
 	// Only when starting now: start checks again, so --no-start defers the
 	// check there.
-	if !opts.noStart {
+	guarded := false
+	if plan != nil && kinds.image && plan.src.GeneratedConfig == "" {
+		// A probe, so --no-start still leaves the digest to the first start.
+		probe := c
+		if err := a.guardNewContainer(ctx, wsName, &probe); err != nil {
+			return err
+		}
+		if err := plan.matchImage(probe); err != nil {
+			return err
+		}
+		if !opts.noStart {
+			c, guarded = probe, true
+		}
+	}
+	if !opts.noStart && !guarded {
 		if err := a.guardNewContainer(ctx, wsName, &c); err != nil {
 			return err
 		}
@@ -318,7 +365,7 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 	if err != nil {
 		return err
 	}
-	a.recordCreate(wsName, c)
+	a.recordCreate(wsName, c, opts.from, kinds)
 	if mode == model.ModeUnprotected {
 		warnUnprotected(a, name)
 	}
@@ -342,10 +389,21 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 		}
 	}
 
+	if plan != nil {
+		if err := plan.run(ctx, a, c); err != nil {
+			return plan.undo(ctx, a, c, err)
+		}
+	}
 	if opts.noStart {
 		return nil
 	}
-	return a.start(ctx, wsName, c)
+	if err := a.start(ctx, wsName, c); err != nil {
+		if plan != nil {
+			return plan.undo(ctx, a, c, err)
+		}
+		return err
+	}
+	return nil
 }
 
 // modeFor decides a new container's mode: --mode if given, else the provider's
@@ -527,6 +585,10 @@ func folderSource(ctx context.Context, wsName, name, folder string, mode model.M
 		return "", "", "", "", usageError(err)
 	}
 
+	if errors.Is(err, dcconfig.ErrNoConfig) && opts.fromProjectOwned {
+		return "", "", "", "", usageErrorf("container %s uses its project's config and %s has none; "+
+			"there is no configuration to start a copy from", opts.from, xpath.Shorten(source))
+	}
 	if errors.Is(err, dcconfig.ErrNoConfig) {
 		// No project config: generate one, kept in the database rather than
 		// written into the folder. A zero Mount leaves the CLI's own bind mount
