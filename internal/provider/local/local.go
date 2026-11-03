@@ -82,6 +82,7 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 	}
 
 	configPath, overridePath := c.ConfigPath, c.OverrideConfigPath
+	fromSnapshot := false
 	if !recreate {
 		rewritten, cleanup, ok, err := p.snapshotConfig(ctx, c)
 		if err != nil {
@@ -89,6 +90,7 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 		}
 		if ok {
 			defer cleanup()
+			fromSnapshot = true
 			configPath, overridePath = rewritten.config, rewritten.override
 		}
 	}
@@ -132,6 +134,9 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 	}
 	if recreate {
 		p.dropSnapshotTag(ctx, c)
+	}
+	if fromSnapshot {
+		p.keepSnapshot(ctx, c)
 	}
 	if err := p.claimStateDir(ctx, c); err != nil {
 		if opts.Seed {

@@ -14,7 +14,10 @@ import (
 	"github.com/duy0611/dev-cli/internal/provider"
 )
 
-var snapTag = SnapshotTag("ws", "demo")
+var (
+	snapTag = SnapshotTag("ws", "demo")
+	keptTag = SnapshotKeptTag("ws", "demo")
+)
 
 // copyDocker is a docker whose engine has the snapshot tag, and a container
 // only when haveContainer is set.
@@ -157,7 +160,7 @@ func TestFirstStartFromASnapshotOverridesAProjectConfigWithNoOverride(t *testing
 	assertSnapshotDoc(t, readCaptured(t, capture+".override"))
 }
 
-func TestFirstStartFromASnapshotKeepsTheTag(t *testing.T) {
+func TestFirstStartFromASnapshotSwapsTheTagForTheKeptOne(t *testing.T) {
 	f := newFakePath(t)
 	copyDocker(f, t, false)
 	f.installScripted(t, devcontainerBin, "")
@@ -169,8 +172,81 @@ func TestFirstStartFromASnapshotKeepsTheTag(t *testing.T) {
 	if err := (&Provider{}).Up(context.Background(), c, nil); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
-	if f.calledWith(t, dockerBin, []string{"rmi"}) {
-		t.Errorf("the snapshot is the container's own image and must stay: %v", f.argvAll(t, dockerBin))
+	tag, rmi := -1, -1
+	for i, a := range f.argvAll(t, dockerBin) {
+		if contains(a, []string{"tag", snapTag, keptTag}) {
+			tag = i
+		}
+		if contains(a, []string{"rmi", snapTag}) {
+			rmi = i
+		}
+	}
+	if tag < 0 || rmi < tag {
+		t.Errorf("want tag %s %s then rmi %s: %v", snapTag, keptTag, snapTag, f.argvAll(t, dockerBin))
+	}
+}
+
+func TestUpWithoutARewriteLeavesTheTagsAlone(t *testing.T) {
+	f := newFakePath(t)
+	copyDocker(f, t, true)
+	installDevcontainerCapturing(f, t)
+	c := testContainer()
+	c.ConfigPath = writeDoc(t, buildDoc)
+	if err := (&Provider{}).Up(context.Background(), c, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range f.argvAll(t, dockerBin) {
+		if a[0] == "tag" || a[0] == "rmi" {
+			t.Errorf("unexpected %v", a)
+		}
+	}
+}
+
+func TestOnlyTheFromImageTagTriggersTheRewrite(t *testing.T) {
+	f := newFakePath(t)
+	f.installScripted(t, dockerBin, `
+case "$1" in
+  image) [ "$5" = `+keptTag+` ] && printf 'sha256:snap\n' || exit 1 ;;
+  ps) ;;
+esac`)
+	installDevcontainerCapturing(f, t)
+	c := testContainer()
+	c.ConfigPath = writeDoc(t, buildDoc)
+	if err := (&Provider{}).Up(context.Background(), c, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !contains(f.argv(t, devcontainerBin), []string{"--config", c.ConfigPath}) {
+		t.Error("the kept tag must not rewrite the config")
+	}
+}
+
+func TestRemoveAndRebuildAndDiscardDropBothTags(t *testing.T) {
+	both := `
+case "$1" in
+  image) printf 'sha256:x\n' ;;
+  ps) ;;
+esac`
+	run := map[string]func(*Provider, model.Container) error{
+		"remove": func(p *Provider, c model.Container) error { return p.Remove(context.Background(), c) },
+		"rebuild": func(p *Provider, c model.Container) error {
+			return p.Rebuild(context.Background(), c, nil, provider.RebuildOpts{})
+		},
+		"discard": func(p *Provider, c model.Container) error { return p.DiscardCopy(context.Background(), c) },
+	}
+	for name, fn := range run {
+		t.Run(name, func(t *testing.T) {
+			f := newFakePath(t)
+			f.installScripted(t, dockerBin, both)
+			f.install(t, devcontainerBin, "", 0)
+			c := testContainer()
+			c.ConfigPath = writeDoc(t, buildDoc)
+			if err := fn(&Provider{}, c); err != nil {
+				t.Fatal(err)
+			}
+			if !f.calledWith(t, dockerBin, []string{"rmi", snapTag}) || !f.calledWith(t, dockerBin, []string{"rmi", keptTag}) {
+				t.Errorf("calls: %v", f.argvAll(t, dockerBin))
+			}
+		})
 	}
 }
 
@@ -377,11 +453,15 @@ func commitCall(t *testing.T, f *fakeBin) []string {
 	return nil
 }
 
-func TestSnapshotImageKeepsOnlyFeatureMetadata(t *testing.T) {
+func labelsOf(meta string) string {
+	b, _ := json.Marshal(map[string]string{"devcontainer.metadata": meta, "other": "1"})
+	return string(b)
+}
+
+func TestSnapshotImageDropsOnlyTheSourcesConfigEntry(t *testing.T) {
 	f := newFakePath(t)
-	meta := `[{"id":"ghcr.io/x/y:1","containerEnv":{"A":"$1"}},{"mounts":[{"source":"/host/.git","target":"/w/.git"}],"postCreateCommand":"chown x","privileged":true},{"id":"base","remoteUser":"v\"s"}]`
-	labels, _ := json.Marshal(map[string]string{"devcontainer.metadata": meta, "other": "1"})
-	snapshotDocker(f, t, string(labels), "")
+	meta := `[{"remoteUser":"v\"s"},{"id":"ghcr.io/x/y:1","containerEnv":{"A":"$1"}},{"mounts":[{"source":"/host/.git","target":"/w/.git"}],"postCreateCommand":"chown x","privileged":true}]`
+	snapshotDocker(f, t, labelsOf(meta), "")
 
 	if err := (&Provider{}).SnapshotImage(context.Background(), testContainer(), "sha256:abc"); err != nil {
 		t.Fatal(err)
@@ -390,60 +470,125 @@ func TestSnapshotImageKeepsOnlyFeatureMetadata(t *testing.T) {
 	if !contains(calls[0], []string{"image", "inspect", "--format", "{{json .Config.Labels}}", "sha256:abc"}) {
 		t.Errorf("labels were not read first: %v", calls[0])
 	}
-	if !f.calledWith(t, dockerBin, []string{"create", "--pull=never", "sha256:abc"}) {
+	tmp := "dev-copy-" + snapshotHash("ws", "demo") + "-tmp"
+	if !f.calledWith(t, dockerBin, []string{"create", "--pull=never", "--name", tmp, "sha256:abc"}) {
 		t.Errorf("calls: %v", calls)
 	}
-	commit := commitCall(t, f)
 	want := []string{"commit", "--change",
-		`LABEL devcontainer.metadata="[{\"id\":\"ghcr.io/x/y:1\",\"containerEnv\":{\"A\":\"\$1\"}},{\"id\":\"base\",\"remoteUser\":\"v\\\"s\"}]"`,
-		"tmpc", snapTag}
-	if !slices.Equal(commit, want) {
-		t.Errorf("commit = %q\nwant     %q", commit, want)
+		`LABEL devcontainer.metadata="[{\"remoteUser\":\"v\\\"s\"},{\"id\":\"ghcr.io/x/y:1\",\"containerEnv\":{\"A\":\"\$1\"}}]"`,
+		tmp, snapTag}
+	if got := commitCall(t, f); !slices.Equal(got, want) {
+		t.Errorf("commit = %q\nwant     %q", got, want)
 	}
-	if !f.calledWith(t, dockerBin, []string{"rm", "tmpc"}) {
-		t.Errorf("the temporary container was not removed: %v", calls)
+}
+
+func TestSnapshotImageRemovesAStaleTempContainerFirstAndTheNewOneAfter(t *testing.T) {
+	f := newFakePath(t)
+	snapshotDocker(f, t, labelsOf(`[{"id":"a"},{"mounts":[]}]`), "")
+	if err := (&Provider{}).SnapshotImage(context.Background(), testContainer(), "sha256:abc"); err != nil {
+		t.Fatal(err)
+	}
+	tmp := "dev-copy-" + snapshotHash("ws", "demo") + "-tmp"
+	rm, create, commit, rmAfter := -1, -1, -1, -1
+	for i, a := range f.argvAll(t, dockerBin) {
+		switch {
+		case contains(a, []string{"rm", "-f", tmp}) && create < 0:
+			rm = i
+		case a[0] == "create":
+			create = i
+		case a[0] == "commit":
+			commit = i
+		case contains(a, []string{"rm", "-f", tmp}):
+			rmAfter = i
+		}
+	}
+	if rm < 0 || rm >= create || create >= commit || commit >= rmAfter {
+		t.Errorf("order wrong: %v", f.argvAll(t, dockerBin))
 	}
 }
 
 func TestSnapshotImageAcceptsASingleObjectLabel(t *testing.T) {
 	f := newFakePath(t)
-	labels, _ := json.Marshal(map[string]string{"devcontainer.metadata": `{"id":"a"}`})
-	snapshotDocker(f, t, string(labels), "")
+	snapshotDocker(f, t, labelsOf(`{"id":"a"}`), "")
 	if err := (&Provider{}).SnapshotImage(context.Background(), testContainer(), "sha256:abc"); err != nil {
 		t.Fatal(err)
 	}
-	if got := commitCall(t, f)[2]; got != `LABEL devcontainer.metadata="[{\"id\":\"a\"}]"` {
-		t.Errorf("change = %s", got)
+	if !f.calledWith(t, dockerBin, []string{"tag", "sha256:abc", snapTag}) {
+		t.Errorf("calls %v", f.argvAll(t, dockerBin))
 	}
 }
 
-func TestSnapshotImageWithoutTheLabelJustTags(t *testing.T) {
-	for _, labels := range []string{`null`, `{"a":"b"}`} {
-		f := newFakePath(t)
-		snapshotDocker(f, t, labels, "")
-		if err := (&Provider{}).SnapshotImage(context.Background(), testContainer(), "sha256:abc"); err != nil {
-			t.Fatal(err)
-		}
-		if !f.calledWith(t, dockerBin, []string{"tag", "sha256:abc", snapTag}) {
-			t.Errorf("labels %s: calls %v", labels, f.argvAll(t, dockerBin))
-		}
-		for _, a := range f.argvAll(t, dockerBin) {
-			if a[0] == "create" || a[0] == "commit" {
-				t.Errorf("labels %s: needless %v", labels, a)
+func TestSnapshotImageJustTagsWhenNothingIsDropped(t *testing.T) {
+	for name, labels := range map[string]string{
+		"no label":              `null`,
+		"other label":           `{"a":"b"}`,
+		"base only":             labelsOf(`[{"remoteUser":"vscode"}]`),
+		"base with plain entry": labelsOf(`[{"id":"a"},{"remoteUser":"vscode","containerEnv":{"A":"1"}}]`),
+		"last has an id":        labelsOf(`[{"id":"a"},{"id":"b","mounts":[{"target":"/x"}]}]`),
+		"empty":                 labelsOf(`[]`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFakePath(t)
+			snapshotDocker(f, t, labels, "")
+			if err := (&Provider{}).SnapshotImage(context.Background(), testContainer(), "sha256:abc"); err != nil {
+				t.Fatal(err)
 			}
-		}
+			if !f.calledWith(t, dockerBin, []string{"tag", "sha256:abc", snapTag}) {
+				t.Errorf("calls %v", f.argvAll(t, dockerBin))
+			}
+			for _, a := range f.argvAll(t, dockerBin) {
+				if a[0] == "create" || a[0] == "commit" {
+					t.Errorf("needless %v", a)
+				}
+			}
+		})
 	}
 }
 
 func TestSnapshotImageRemovesTheTemporaryContainerOnFailure(t *testing.T) {
 	f := newFakePath(t)
-	labels, _ := json.Marshal(map[string]string{"devcontainer.metadata": `[{"x":1}]`})
-	snapshotDocker(f, t, string(labels), "commit")
+	snapshotDocker(f, t, labelsOf(`[{"mounts":[]}]`), "commit")
 	if err := (&Provider{}).SnapshotImage(context.Background(), testContainer(), "sha256:abc"); err == nil {
 		t.Fatal("SnapshotImage succeeded")
 	}
-	if !f.calledWith(t, dockerBin, []string{"rm", "tmpc"}) {
-		t.Errorf("the temporary container leaked: %v", f.argvAll(t, dockerBin))
+	tmp := "dev-copy-" + snapshotHash("ws", "demo") + "-tmp"
+	n := 0
+	for _, a := range f.argvAll(t, dockerBin) {
+		if contains(a, []string{"rm", "-f", tmp}) {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Errorf("want a stale and a final rm -f, got %v", f.argvAll(t, dockerBin))
+	}
+}
+
+func TestImageFeatureIDs(t *testing.T) {
+	for name, c := range map[string]struct {
+		labels string
+		want   []string
+	}{
+		"ordered and deduplicated": {labelsOf(`[{"remoteUser":"v"},{"id":"b"},{"id":"a"},{"id":"b"},{"mounts":[]}]`), []string{"b", "a"}},
+		"single object":            {labelsOf(`{"id":"a"}`), []string{"a"}},
+		"no label":                 {`{"x":"y"}`, nil},
+		"null labels":              {`null`, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFakePath(t)
+			snapshotDocker(f, t, c.labels, "")
+			got, err := (&Provider{}).ImageFeatureIDs(context.Background(), "sha256:abc")
+			if err != nil || !slices.Equal(got, c.want) {
+				t.Errorf("got %v, %v; want %v", got, err, c.want)
+			}
+		})
+	}
+}
+
+func TestImageFeatureIDsReportsAMissingImage(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, dockerBin, "", 1)
+	if _, err := (&Provider{}).ImageFeatureIDs(context.Background(), "sha256:abc"); err == nil {
+		t.Fatal("no error")
 	}
 }
 
@@ -533,6 +678,7 @@ func TestCheckTarget(t *testing.T) {
 	}{
 		"volume": {`[ "$1" = image ] && exit 1`, true},
 		"tag":    {`[ "$1" = volume ] && exit 1; printf 'sha256:x\n'`, true},
+		"kept":   {`[ "$1" = volume ] && exit 1; [ "$5" = ` + keptTag + ` ] && printf 'sha256:x\n' || exit 1`, true},
 		"none":   {`exit 1`, false},
 	} {
 		t.Run(name, func(t *testing.T) {

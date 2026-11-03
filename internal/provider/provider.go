@@ -179,6 +179,10 @@ type Copier interface {
 	// it.
 	SnapshotImage(ctx context.Context, dst model.Container, imageID string) error
 
+	// ImageFeatureIDs returns the id values of the image's devcontainer.metadata
+	// label, in order and deduplicated; empty when it has no label.
+	ImageFeatureIDs(ctx context.Context, imageID string) ([]string, error)
+
 	// CheckState reports, creating nothing, whether src has a state volume. It
 	// wraps ErrNoStateVolume.
 	CheckState(ctx context.Context, src model.Container) error

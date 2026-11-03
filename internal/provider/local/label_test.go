@@ -36,3 +36,13 @@ func TestSnapshotTag(t *testing.T) {
 		seen[tag] = key
 	}
 }
+
+func TestSnapshotKeptTag(t *testing.T) {
+	want := "dev-copy-" + snapshotHash("ws", "demo") + ":copied"
+	if got := SnapshotKeptTag("ws", "demo"); got != want {
+		t.Errorf("SnapshotKeptTag = %q, want %q", got, want)
+	}
+	if SnapshotKeptTag("ws", "demo") == SnapshotTag("ws", "demo") {
+		t.Error("the two tags are the same")
+	}
+}

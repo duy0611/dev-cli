@@ -9,7 +9,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/tailscale/hujson"
 
@@ -48,82 +50,160 @@ func (p *Provider) SourceImage(ctx context.Context, src model.Container) (string
 // config metadata.
 const metadataLabel = "devcontainer.metadata"
 
-// SnapshotImage makes imageID available as dst's snapshot tag. When the image
-// carries the CLI's metadata label, the snapshot is a new image whose label
-// keeps only the entries with an id (the base image and each Feature): the
-// entry without one is the source's own materialised config, which the CLI
-// would merge into dst's, carrying the source's mounts, privileges and
-// lifecycle commands along.
+// SnapshotImage makes imageID available as dst's snapshot tag. The CLI appends
+// the source's own materialised config (its mounts, lifecycle commands and
+// privileges) as the last entry of the metadata label, and would merge it into
+// dst's; when the label ends that way the snapshot is a new image without that
+// entry. Any other image is tagged as it is.
 func (p *Provider) SnapshotImage(ctx context.Context, dst model.Container, imageID string) (err error) {
 	if err := requireBinary(dockerBin); err != nil {
 		return err
 	}
 	tag := SnapshotTag(dst.WorkspaceName, dst.Name)
-	out, err := output(ctx, dockerBin, "image", "inspect", "--format", "{{json .Config.Labels}}", imageID)
+	meta, ok, err := imageMetadata(ctx, imageID)
 	if err != nil {
 		return err
 	}
-	var labels map[string]string
-	if err := json.Unmarshal([]byte(out), &labels); err != nil {
-		return fmt.Errorf("reading the labels of %s: %w", imageID, err)
-	}
-	meta, ok := labels[metadataLabel]
 	if !ok {
 		return runDocker(ctx, "tag", imageID, tag)
 	}
-	filtered, err := featureMetadata(meta)
+	filtered, dropped, err := featureMetadata(meta)
 	if err != nil {
 		return fmt.Errorf("reading %s of %s: %w", metadataLabel, imageID, err)
 	}
+	if !dropped {
+		return runDocker(ctx, "tag", imageID, tag)
+	}
 
+	// A fixed name lets a leftover from a killed run be found and removed.
+	tmp := "dev-copy-" + snapshotHash(dst.WorkspaceName, dst.Name) + "-tmp"
+	_ = exec.CommandContext(ctx, dockerBin, "rm", "-f", tmp).Run()
 	// create leaves the filesystem as the image has it; commit keeps the image's
 	// config and replaces the one label.
-	cid, err := output(ctx, dockerBin, "create", "--pull=never", imageID)
-	if err != nil {
+	if err := runDocker(ctx, "create", "--pull=never", "--name", tmp, imageID); err != nil {
 		return err
 	}
-	cid = first(cid)
-	if cid == "" {
-		return errors.New("docker create printed no container ID")
-	}
 	defer func() {
-		if rmErr := runDocker(context.WithoutCancel(ctx), "rm", cid); rmErr != nil && err == nil {
+		rmCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		if rmErr := runDocker(rmCtx, "rm", "-f", tmp); rmErr != nil && err == nil {
 			err = rmErr
 		}
 	}()
-	return runDocker(ctx, "commit", "--change", "LABEL "+metadataLabel+"="+dockerfileString(filtered), cid, tag)
+	return runDocker(ctx, "commit", "--change", "LABEL "+metadataLabel+"="+dockerfileString(filtered), tmp, tag)
 }
 
-// featureMetadata keeps the entries of a devcontainer.metadata value that have
-// an id. The CLI writes an array; an older one wrote a single object.
-func featureMetadata(raw string) (string, error) {
-	var entries []json.RawMessage
-	if strings.HasPrefix(strings.TrimSpace(raw), "{") {
-		entries = []json.RawMessage{json.RawMessage(raw)}
-	} else if err := json.Unmarshal([]byte(raw), &entries); err != nil {
-		return "", err
+// imageMetadata returns the devcontainer.metadata label of an image, and
+// whether it has one.
+func imageMetadata(ctx context.Context, imageID string) (string, bool, error) {
+	out, err := output(ctx, dockerBin, "image", "inspect", "--format", "{{json .Config.Labels}}", imageID)
+	if err != nil {
+		return "", false, err
 	}
-	kept := []json.RawMessage{}
+	var labels map[string]string
+	if err := json.Unmarshal([]byte(out), &labels); err != nil {
+		return "", false, fmt.Errorf("reading the labels of %s: %w", imageID, err)
+	}
+	meta, ok := labels[metadataLabel]
+	return meta, ok, nil
+}
+
+// ImageFeatureIDs returns the id of each metadata entry of imageID, in order
+// and without repeats. An image with no label has none.
+func (p *Provider) ImageFeatureIDs(ctx context.Context, imageID string) ([]string, error) {
+	if err := requireBinary(dockerBin); err != nil {
+		return nil, err
+	}
+	meta, ok, err := imageMetadata(ctx, imageID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+	entries, err := metadataEntries(meta)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s of %s: %w", metadataLabel, imageID, err)
+	}
+	var ids []string
 	for _, e := range entries {
-		var m map[string]json.RawMessage
-		if err := json.Unmarshal(e, &m); err != nil {
-			return "", err
+		m, err := entryFields(e)
+		if err != nil {
+			return nil, fmt.Errorf("reading %s of %s: %w", metadataLabel, imageID, err)
 		}
-		if _, ok := m["id"]; ok {
-			kept = append(kept, e)
+		var id string
+		if raw, ok := m["id"]; ok && json.Unmarshal(raw, &id) == nil && id != "" && !slices.Contains(ids, id) {
+			ids = append(ids, id)
 		}
+	}
+	return ids, nil
+}
+
+// metadataEntries parses a devcontainer.metadata value. The CLI writes an
+// array; an older one wrote a single object.
+func metadataEntries(raw string) ([]json.RawMessage, error) {
+	if strings.HasPrefix(strings.TrimSpace(raw), "{") {
+		raw = "[" + raw + "]"
+	}
+	var entries []json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
+func entryFields(e json.RawMessage) (map[string]json.RawMessage, error) {
+	var m map[string]json.RawMessage
+	err := json.Unmarshal(e, &m)
+	return m, err
+}
+
+// configEntryKeys are what the CLI's own config entry carries when the source
+// had any of it, and dev always adds a state mount to a source's config.
+var configEntryKeys = []string{"mounts", "privileged", "capAdd", "securityOpt",
+	"initializeCommand", "onCreateCommand", "updateContentCommand",
+	"postCreateCommand", "postStartCommand", "postAttachCommand"}
+
+// featureMetadata drops the source's own config entry from a metadata value.
+// Nothing in the image says whether the CLI built it, and base images carry
+// entries without an id too (mcr's remoteUser), so the entry is recognised by
+// position and content: last, no id, and holding what a dev config always
+// does. dropped is false when nothing was removed.
+func featureMetadata(raw string) (filtered string, dropped bool, err error) {
+	entries, err := metadataEntries(raw)
+	if err != nil {
+		return "", false, err
+	}
+	if n := len(entries); n > 0 {
+		last, err := entryFields(entries[n-1])
+		if err != nil {
+			return "", false, err
+		}
+		_, hasID := last["id"]
+		carries := false
+		for _, k := range configEntryKeys {
+			if _, ok := last[k]; ok {
+				carries = true
+			}
+		}
+		if !hasID && carries {
+			entries, dropped = entries[:n-1], true
+		}
+	}
+	if entries == nil {
+		entries = []json.RawMessage{}
 	}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
-	if err := enc.Encode(kept); err != nil {
-		return "", err
+	if err := enc.Encode(entries); err != nil {
+		return "", false, err
 	}
 	var compact bytes.Buffer
 	if err := json.Compact(&compact, buf.Bytes()); err != nil {
-		return "", err
+		return "", false, err
 	}
-	return compact.String(), nil
+	return compact.String(), dropped, nil
 }
 
 // dockerfileString quotes s as one double-quoted Dockerfile word: LABEL values
@@ -145,7 +225,8 @@ func (p *Provider) CheckState(ctx context.Context, src model.Container) error {
 	return nil
 }
 
-// CheckTarget reports whether dst already has a state volume or snapshot tag.
+// CheckTarget reports whether dst already has a state volume or a snapshot tag
+// of either kind.
 func (p *Provider) CheckTarget(ctx context.Context, dst model.Container) error {
 	if err := requireBinary(dockerBin); err != nil {
 		return err
@@ -154,8 +235,10 @@ func (p *Provider) CheckTarget(ctx context.Context, dst model.Container) error {
 	if exec.CommandContext(ctx, dockerBin, "volume", "inspect", to).Run() == nil {
 		return fmt.Errorf("volume %s: %w", to, provider.ErrTargetExists)
 	}
-	if p.hasSnapshotTag(ctx, dst) {
-		return fmt.Errorf("image %s: %w", SnapshotTag(dst.WorkspaceName, dst.Name), provider.ErrTargetExists)
+	for _, tag := range snapshotTags(dst) {
+		if hasImage(ctx, tag) {
+			return fmt.Errorf("image %s: %w", tag, provider.ErrTargetExists)
+		}
 	}
 	return nil
 }
@@ -188,38 +271,60 @@ func (p *Provider) CopyState(ctx context.Context, src, dst model.Container, help
 		helperImage, "-a", "/from/.", "/to/")
 }
 
-// DiscardCopy removes dst's snapshot tag and state volume.
+// DiscardCopy removes dst's snapshot tags and state volume.
 func (p *Provider) DiscardCopy(ctx context.Context, dst model.Container) error {
 	if err := requireBinary(dockerBin); err != nil {
 		return err
 	}
-	if p.hasSnapshotTag(ctx, dst) {
-		if err := runDocker(ctx, "rmi", SnapshotTag(dst.WorkspaceName, dst.Name)); err != nil {
-			return err
+	for _, tag := range snapshotTags(dst) {
+		if hasImage(ctx, tag) {
+			if err := runDocker(ctx, "rmi", tag); err != nil {
+				return err
+			}
 		}
 	}
 	return runDocker(ctx, "volume", "rm", "--force", StateVolumeName(dst.WorkspaceName, dst.Name))
 }
 
-// hasSnapshotTag asks for the image ID rather than trusting the exit status, so
-// an engine that answers nothing counts as having no tag.
-func (p *Provider) hasSnapshotTag(ctx context.Context, c model.Container) bool {
+func snapshotTags(c model.Container) []string {
+	return []string{SnapshotTag(c.WorkspaceName, c.Name), SnapshotKeptTag(c.WorkspaceName, c.Name)}
+}
+
+// hasImage asks for the image ID rather than trusting the exit status, so an
+// engine that answers nothing counts as having no such image.
+func hasImage(ctx context.Context, ref string) bool {
 	if _, err := exec.LookPath(dockerBin); err != nil {
 		return false
 	}
-	out, err := output(ctx, dockerBin, "image", "inspect", "--format", "{{.Id}}",
-		SnapshotTag(c.WorkspaceName, c.Name))
+	out, err := output(ctx, dockerBin, "image", "inspect", "--format", "{{.Id}}", ref)
 	return err == nil && first(out) != ""
 }
 
-// dropSnapshotTag deletes the snapshot image once its container is gone or has
+// dropSnapshotTag deletes both snapshot tags once the container is gone or has
 // been rebuilt from a normal config. A failure is only reported: the image may
 // still be a parent of an image the CLI layered on top.
 func (p *Provider) dropSnapshotTag(ctx context.Context, c model.Container) {
-	if !p.hasSnapshotTag(ctx, c) {
+	for _, tag := range snapshotTags(c) {
+		if !hasImage(ctx, tag) {
+			continue
+		}
+		if err := runDocker(ctx, "rmi", tag); err != nil {
+			fmt.Fprintf(os.Stderr, "dev: removing the snapshot tag of container %s: %v\n", c.Name, err)
+		}
+	}
+}
+
+// keepSnapshot swaps the snapshot's tag for the kept one after the first
+// successful up, so the rewrite cannot apply a second time. Docker untags
+// rather than deletes the image, since the kept tag remains. Failures are only
+// reported: the container is already up.
+func (p *Provider) keepSnapshot(ctx context.Context, c model.Container) {
+	from, kept := SnapshotTag(c.WorkspaceName, c.Name), SnapshotKeptTag(c.WorkspaceName, c.Name)
+	if err := runDocker(ctx, "tag", from, kept); err != nil {
+		fmt.Fprintf(os.Stderr, "dev: keeping the copied image of container %s: %v\n", c.Name, err)
 		return
 	}
-	if err := runDocker(ctx, "rmi", SnapshotTag(c.WorkspaceName, c.Name)); err != nil {
+	if err := runDocker(ctx, "rmi", from); err != nil {
 		fmt.Fprintf(os.Stderr, "dev: removing the snapshot tag of container %s: %v\n", c.Name, err)
 	}
 }
@@ -234,7 +339,7 @@ type snapshotPaths struct{ config, override string }
 // override when there is one; otherwise a project's own file goes in as an
 // override, and a generated one replaces --config.
 func (p *Provider) snapshotConfig(ctx context.Context, c model.Container) (paths snapshotPaths, cleanup func(), ok bool, err error) {
-	if !p.hasSnapshotTag(ctx, c) {
+	if !hasImage(ctx, SnapshotTag(c.WorkspaceName, c.Name)) {
 		return paths, nil, false, nil
 	}
 	id, err := p.containerID(ctx, c)
