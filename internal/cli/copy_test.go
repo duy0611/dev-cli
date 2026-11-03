@@ -961,3 +961,29 @@ func TestUndoKeepsAVolumeThatAppearedAfterTheCheck(t *testing.T) {
 		t.Logf("snapshot tag not removed (stub has no tag record):\n%s", e.log(t))
 	}
 }
+
+func TestSrcBuilds(t *testing.T) {
+	rec := func(keys ...string) string {
+		f := map[string]string{}
+		for _, k := range keys {
+			f[k] = "x"
+		}
+		b, _ := json.Marshal(map[string]any{"fields": f})
+		return string(b)
+	}
+	for name, c := range map[string]model.Container{
+		"generated":  {GeneratedConfig: "{}", ConfigDigest: "d", ConfigDigestFields: rec("image")},
+		"features":   {ConfigDigest: "d", ConfigDigestFields: rec("image", "features")},
+		"build":      {ConfigDigest: "d", ConfigDigestFields: rec("build")},
+		"dockerFile": {ConfigDigest: "d", ConfigDigestFields: rec("dockerFile")},
+		"no digest":  {},
+	} {
+		if !(&copyPlan{src: c}).srcBuilds() {
+			t.Errorf("%s: srcBuilds = false", name)
+		}
+	}
+	c := model.Container{ConfigDigest: "d", ConfigDigestFields: rec("image", "postCreateCommand")}
+	if (&copyPlan{src: c}).srcBuilds() {
+		t.Error("an image-only config reported as building")
+	}
+}

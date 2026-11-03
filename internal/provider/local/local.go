@@ -125,7 +125,13 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 	// since an image build is minutes of silence otherwise.
 	cmd.Stdout = io.Discard
 	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	runErr := cmd.Run()
+	// A failed up can leave a container (a lifecycle command that fails), and
+	// a later removal of it must not find the tag to rewrite from again.
+	if fromSnapshot && (runErr == nil || p.hasContainer(ctx, c)) {
+		p.keepSnapshot(ctx, c)
+	}
+	if err := runErr; err != nil {
 		err = fmt.Errorf("starting container %s: %w", c.Name, err)
 		if opts.Seed {
 			p.discardSeed(ctx, c)
@@ -134,9 +140,6 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 	}
 	if recreate {
 		p.dropSnapshotTag(ctx, c)
-	}
-	if fromSnapshot {
-		p.keepSnapshot(ctx, c)
 	}
 	if err := p.claimStateDir(ctx, c); err != nil {
 		if opts.Seed {
@@ -458,6 +461,11 @@ func (p *Provider) containerID(ctx context.Context, c model.Container) (string, 
 		return "", err
 	}
 	return first(out), nil
+}
+
+func (p *Provider) hasContainer(ctx context.Context, c model.Container) bool {
+	id, err := p.containerID(ctx, c)
+	return err == nil && id != ""
 }
 
 // --- helpers -----------------------------------------------------------------

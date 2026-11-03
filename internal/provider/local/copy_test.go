@@ -186,22 +186,6 @@ func TestFirstStartFromASnapshotSwapsTheTagForTheKeptOne(t *testing.T) {
 	}
 }
 
-func TestUpWithoutARewriteLeavesTheTagsAlone(t *testing.T) {
-	f := newFakePath(t)
-	copyDocker(f, t, true)
-	installDevcontainerCapturing(f, t)
-	c := testContainer()
-	c.ConfigPath = writeDoc(t, buildDoc)
-	if err := (&Provider{}).Up(context.Background(), c, nil); err != nil {
-		t.Fatal(err)
-	}
-	for _, a := range f.argvAll(t, dockerBin) {
-		if a[0] == "tag" || a[0] == "rmi" {
-			t.Errorf("unexpected %v", a)
-		}
-	}
-}
-
 func TestOnlyTheFromImageTagTriggersTheRewrite(t *testing.T) {
 	f := newFakePath(t)
 	f.installScripted(t, dockerBin, `
@@ -250,7 +234,19 @@ esac`
 	}
 }
 
-func TestUpKeepsTheTagWhenTheCLIFails(t *testing.T) {
+// createdDocker is a docker with the snapshot tag whose engine has a container
+// once the devcontainer stub has run, as after an up that failed late.
+func createdDocker(f *fakeBin, t *testing.T) string {
+	marker := filepath.Join(f.dir, "created")
+	f.installScripted(t, dockerBin, `
+case "$1" in
+  image) [ "$5" = `+snapTag+` ] && printf 'sha256:snap\n' || exit 1 ;;
+  ps) [ -e `+shellQuote(marker)+` ] && printf 'abc123\n' ;;
+esac`)
+	return marker
+}
+
+func TestUpKeepsTheTagWhenTheCLIFailsBeforeCreatingAContainer(t *testing.T) {
 	f := newFakePath(t)
 	copyDocker(f, t, false)
 	f.install(t, devcontainerBin, "", 1)
@@ -261,7 +257,38 @@ func TestUpKeepsTheTagWhenTheCLIFails(t *testing.T) {
 		t.Fatal("Up succeeded")
 	}
 	if f.calledWith(t, dockerBin, []string{"rmi", snapTag}) {
-		t.Error("the tag was deleted after a failed up")
+		t.Error("the tag was deleted after a failed up that made no container")
+	}
+}
+
+func TestUpSwapsTheTagWhenTheCLIFailsAfterCreatingAContainer(t *testing.T) {
+	f := newFakePath(t)
+	marker := createdDocker(f, t)
+	f.installScripted(t, devcontainerBin, "touch "+shellQuote(marker)+"\nexit 1")
+	// installScripted appends "exit 0" after the body; the body's own exit wins.
+
+	c := testContainer()
+	c.ConfigPath = writeDoc(t, buildDoc)
+	if err := (&Provider{}).Up(context.Background(), c, nil); err == nil {
+		t.Fatal("Up succeeded")
+	}
+	if !f.calledWith(t, dockerBin, []string{"tag", snapTag, keptTag}) || !f.calledWith(t, dockerBin, []string{"rmi", snapTag}) {
+		t.Errorf("the tag was not swapped: %v", f.argvAll(t, dockerBin))
+	}
+}
+
+func TestStartOfAnExistingContainerSwapsALeftoverSnapshotTag(t *testing.T) {
+	f := newFakePath(t)
+	copyDocker(f, t, true)
+	installDevcontainerCapturing(f, t)
+
+	c := testContainer()
+	c.ConfigPath = writeDoc(t, buildDoc)
+	if err := (&Provider{}).Up(context.Background(), c, nil); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if !f.calledWith(t, dockerBin, []string{"tag", snapTag, keptTag}) || !f.calledWith(t, dockerBin, []string{"rmi", snapTag}) {
+		t.Errorf("the tag was not swapped: %v", f.argvAll(t, dockerBin))
 	}
 }
 
@@ -463,7 +490,7 @@ func TestSnapshotImageDropsOnlyTheSourcesConfigEntry(t *testing.T) {
 	meta := `[{"remoteUser":"v\"s"},{"id":"ghcr.io/x/y:1","containerEnv":{"A":"$1"}},{"mounts":[{"source":"/host/.git","target":"/w/.git"}],"postCreateCommand":"chown x","privileged":true}]`
 	snapshotDocker(f, t, labelsOf(meta), "")
 
-	if err := (&Provider{}).SnapshotImage(context.Background(), testContainer(), "sha256:abc"); err != nil {
+	if err := (&Provider{}).SnapshotImage(context.Background(), testContainer(), "sha256:abc", true); err != nil {
 		t.Fatal(err)
 	}
 	calls := f.argvAll(t, dockerBin)
@@ -485,7 +512,7 @@ func TestSnapshotImageDropsOnlyTheSourcesConfigEntry(t *testing.T) {
 func TestSnapshotImageRemovesAStaleTempContainerFirstAndTheNewOneAfter(t *testing.T) {
 	f := newFakePath(t)
 	snapshotDocker(f, t, labelsOf(`[{"id":"a"},{"mounts":[]}]`), "")
-	if err := (&Provider{}).SnapshotImage(context.Background(), testContainer(), "sha256:abc"); err != nil {
+	if err := (&Provider{}).SnapshotImage(context.Background(), testContainer(), "sha256:abc", true); err != nil {
 		t.Fatal(err)
 	}
 	tmp := "dev-copy-" + snapshotHash("ws", "demo") + "-tmp"
@@ -510,7 +537,7 @@ func TestSnapshotImageRemovesAStaleTempContainerFirstAndTheNewOneAfter(t *testin
 func TestSnapshotImageAcceptsASingleObjectLabel(t *testing.T) {
 	f := newFakePath(t)
 	snapshotDocker(f, t, labelsOf(`{"id":"a"}`), "")
-	if err := (&Provider{}).SnapshotImage(context.Background(), testContainer(), "sha256:abc"); err != nil {
+	if err := (&Provider{}).SnapshotImage(context.Background(), testContainer(), "sha256:abc", true); err != nil {
 		t.Fatal(err)
 	}
 	if !f.calledWith(t, dockerBin, []string{"tag", "sha256:abc", snapTag}) {
@@ -530,7 +557,7 @@ func TestSnapshotImageJustTagsWhenNothingIsDropped(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newFakePath(t)
 			snapshotDocker(f, t, labels, "")
-			if err := (&Provider{}).SnapshotImage(context.Background(), testContainer(), "sha256:abc"); err != nil {
+			if err := (&Provider{}).SnapshotImage(context.Background(), testContainer(), "sha256:abc", true); err != nil {
 				t.Fatal(err)
 			}
 			if !f.calledWith(t, dockerBin, []string{"tag", "sha256:abc", snapTag}) {
@@ -545,10 +572,26 @@ func TestSnapshotImageJustTagsWhenNothingIsDropped(t *testing.T) {
 	}
 }
 
+func TestSnapshotImageOfAnUnbuiltSourceKeepsTheLabelIntact(t *testing.T) {
+	f := newFakePath(t)
+	snapshotDocker(f, t, labelsOf(`[{"remoteUser":"vscode"},{"postCreateCommand":"base thing"}]`), "")
+	if err := (&Provider{}).SnapshotImage(context.Background(), testContainer(), "sha256:abc", false); err != nil {
+		t.Fatal(err)
+	}
+	if !f.calledWith(t, dockerBin, []string{"tag", "sha256:abc", snapTag}) {
+		t.Errorf("calls %v", f.argvAll(t, dockerBin))
+	}
+	for _, a := range f.argvAll(t, dockerBin) {
+		if a[0] == "create" || a[0] == "commit" {
+			t.Errorf("needless %v", a)
+		}
+	}
+}
+
 func TestSnapshotImageRemovesTheTemporaryContainerOnFailure(t *testing.T) {
 	f := newFakePath(t)
 	snapshotDocker(f, t, labelsOf(`[{"mounts":[]}]`), "commit")
-	if err := (&Provider{}).SnapshotImage(context.Background(), testContainer(), "sha256:abc"); err == nil {
+	if err := (&Provider{}).SnapshotImage(context.Background(), testContainer(), "sha256:abc", true); err == nil {
 		t.Fatal("SnapshotImage succeeded")
 	}
 	tmp := "dev-copy-" + snapshotHash("ws", "demo") + "-tmp"

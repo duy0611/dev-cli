@@ -184,6 +184,23 @@ func (cp *copyPlan) matchImage(probe model.Container) error {
 	return nil
 }
 
+// srcBuilds is whether the source's config builds an image of its own. A
+// generated config always has Features. For a project's, the recorded digest
+// names the fields present; one that cannot be read counts as building, which
+// only costs the label filter a harmless no-op.
+func (cp *copyPlan) srcBuilds() bool {
+	if cp.src.GeneratedConfig != "" || cp.src.ConfigDigest == "" {
+		return true
+	}
+	fields := guard.ParseRecord(cp.src.ConfigDigest, cp.src.ConfigDigestFields).Fields
+	for _, k := range []string{"features", "build", "dockerFile", "dockerfile"} {
+		if _, ok := fields[k]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 // matchGenerated refuses a generated target whose document, rendered with the
 // current catalog, differs from the one stored for the source: the catalog may
 // have changed since. It cannot see a rebuild --tools that failed after
@@ -267,7 +284,7 @@ func (cp *copyPlan) checkTarget(ctx context.Context, c model.Container) error {
 // run tags the image and fills the state volume.
 func (cp *copyPlan) run(ctx context.Context, a *app, c model.Container) error {
 	if cp.kinds.image {
-		if err := cp.copier.SnapshotImage(ctx, c, cp.imageID); err != nil {
+		if err := cp.copier.SnapshotImage(ctx, c, cp.imageID, cp.srcBuilds()); err != nil {
 			return fmt.Errorf("tagging %s's image for %s: %w", cp.src.Name, c.Name, err)
 		}
 	}

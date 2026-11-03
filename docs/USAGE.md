@@ -478,13 +478,18 @@ local provider only.
 - **`image`** starts the new container from a snapshot of the image `web`'s
   container was created from. Nothing is built, so the first start skips the
   build. The snapshot is the copy's own image: it keeps `web`'s Features and the
-  base image's own settings (such as `remoteUser`) and drops only `web`'s own
-  container config entry (its mounts, lifecycle commands, privileges). The
+  base image's own settings (such as `remoteUser`) and drops `web`'s own
+  container config entry when it carries mounts, lifecycle commands or
+  privileges (other keys stay). A project-owned `web`'s `containerEnv` is baked
+  into its image as `ENV` by the devcontainer CLI, so those values carry into
+  the copy unless its config sets the same keys. A `web` whose config builds
+  nothing (no `features`, `build`, `dockerFile`) is tagged as it is. The
   new container's own config supplies those, and its `onCreateCommand`,
   `updateContentCommand` and `postCreateCommand` still run, since they set
   ownership on its new volumes. Only the first start uses the snapshot: a later
-  start, after a failed rebuild say, builds or uses the copy's own kept image
-  and never applies the snapshot rewrite again. The image is removed with the
+  start of the existing container just starts it, and if the container is gone
+  a start builds from the config; the snapshot rewrite never applies again,
+  and the kept image tag only holds the image until remove or rebuild. The image is removed with the
   container. Refused, exit 2:
   - a source whose configuration would not produce the same image. For a
     project-owned source dev compares `image`, `build`, `dockerFile`, `context`

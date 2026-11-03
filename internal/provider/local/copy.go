@@ -54,12 +54,18 @@ const metadataLabel = "devcontainer.metadata"
 // the source's own materialised config (its mounts, lifecycle commands and
 // privileges) as the last entry of the metadata label, and would merge it into
 // dst's; when the label ends that way the snapshot is a new image without that
-// entry. Any other image is tagged as it is.
-func (p *Provider) SnapshotImage(ctx context.Context, dst model.Container, imageID string) (err error) {
+// entry. Any other image is tagged as it is. built says whether the source's
+// config built an image: when it did not, the CLI used the base image as-is and
+// put the source's entry only on the container's label, so the image's last
+// id-less entry belongs to the base and is kept.
+func (p *Provider) SnapshotImage(ctx context.Context, dst model.Container, imageID string, built bool) (err error) {
 	if err := requireBinary(dockerBin); err != nil {
 		return err
 	}
 	tag := SnapshotTag(dst.WorkspaceName, dst.Name)
+	if !built {
+		return runDocker(ctx, "tag", imageID, tag)
+	}
 	meta, ok, err := imageMetadata(ctx, imageID)
 	if err != nil {
 		return err
@@ -159,7 +165,8 @@ func entryFields(e json.RawMessage) (map[string]json.RawMessage, error) {
 }
 
 // configEntryKeys are what the CLI's own config entry carries when the source
-// had any of it, and dev always adds a state mount to a source's config.
+// had any of it. The rule is a heuristic: an id-less last entry that holds one
+// of these is taken to be the CLI's, since a base image's own entries rarely do.
 var configEntryKeys = []string{"mounts", "privileged", "capAdd", "securityOpt",
 	"initializeCommand", "onCreateCommand", "updateContentCommand",
 	"postCreateCommand", "postStartCommand", "postAttachCommand"}
@@ -343,8 +350,13 @@ func (p *Provider) snapshotConfig(ctx context.Context, c model.Container) (paths
 		return paths, nil, false, nil
 	}
 	id, err := p.containerID(ctx, c)
-	if err != nil || id != "" {
+	if err != nil {
 		return paths, nil, false, err
+	}
+	if id != "" {
+		// An earlier up made the container and did not get to swap the tag.
+		p.keepSnapshot(ctx, c)
+		return paths, nil, false, nil
 	}
 
 	asOverride := c.OverrideConfigPath != "" || c.GeneratedConfig == ""

@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/duy0611/dev-cli/internal/provider/local"
 )
 
 // A tiny image, so the pull is seconds rather than minutes.
@@ -472,8 +474,21 @@ func TestSmokeCreateFromCopy(t *testing.T) {
 	if out := dev("container", "exec", clone, "--", "cat", "/var/dev-state/marker"); !strings.Contains(out, "marker") {
 		t.Errorf("the state was not copied: %q", out)
 	}
-	if out := dockerImages(t, "dev-"+ws+"-"+clone+":from-image"); len(out) != 0 {
-		t.Errorf("the snapshot tag outlived the first start: %v", out)
+	fromTag, keptTag := local.SnapshotTag(ws, clone), local.SnapshotKeptTag(ws, clone)
+	if out := dockerImages(t, fromTag); len(out) != 0 {
+		t.Errorf("the snapshot tag %s outlived the first start: %v", fromTag, out)
+	}
+	if out := dockerImages(t, keptTag); len(out) != 1 {
+		t.Errorf("the kept tag %s = %v, want one image", keptTag, out)
+	}
+	if out := strings.TrimSpace(dev("container", "exec", clone, "--", "whoami")); out != "vscode" {
+		t.Errorf("whoami in the clone = %q, want vscode", out)
+	}
+	srcVolume := local.StateVolumeName(ws, src)
+	for _, entry := range metadataEntries(t, keptTag) {
+		if m, ok := entry["mounts"]; ok && strings.Contains(string(m), srcVolume) {
+			t.Errorf("the copied image still carries the source's state mount %s: %s", srcVolume, m)
+		}
 	}
 
 	// Rebuilding the source recreates its container, and must leave the copy's
@@ -484,7 +499,32 @@ func TestSmokeCreateFromCopy(t *testing.T) {
 	}
 
 	dev("container", "remove", clone)
+	for _, tag := range []string{fromTag, keptTag} {
+		if out := dockerImages(t, tag); len(out) != 0 {
+			t.Errorf("%s survived remove: %v", tag, out)
+		}
+	}
 	dev("container", "remove", src)
+}
+
+// metadataEntries returns the devcontainer.metadata label of an image as a
+// list of entries.
+func metadataEntries(t *testing.T, image string) []map[string]json.RawMessage {
+	t.Helper()
+	out, err := exec.Command("docker", "image", "inspect", "--format",
+		`{{index .Config.Labels "devcontainer.metadata"}}`, image).Output()
+	if err != nil {
+		t.Fatalf("docker image inspect %s: %v", image, err)
+	}
+	raw := strings.TrimSpace(string(out))
+	if strings.HasPrefix(raw, "{") {
+		raw = "[" + raw + "]"
+	}
+	var entries []map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		t.Fatalf("decoding the metadata of %s: %v: %s", image, err, raw)
+	}
+	return entries
 }
 
 // imageLayers returns the RootFS layer digests of an image, base first.

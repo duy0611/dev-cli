@@ -135,9 +135,16 @@ found by its `dev.workspace`/`dev.container` labels. It is **not** a
 tagged `dev-<ws>-<name>:from-image`; the exact name is left to the builder. It
 is made from SOURCE's image ID with `docker create` and `docker commit`, with
 the `devcontainer.metadata` label keeping the Features' entries and the base
-image's own (such as `remoteUser`) and dropping only SOURCE's own config entry
-(mounts, lifecycle commands, privileges, `containerEnv` from its project), so
-nothing of SOURCE's config reaches the new container.
+image's own (such as `remoteUser`) and dropping SOURCE's own config entry, but only
+when it is the last entry, has no id and carries mounts, lifecycle commands or
+privileges; harmless keys of an entry without those stay. The devcontainer CLI
+also bakes the source config's `containerEnv` into the image it builds as image
+`ENV`, so a project-owned source's `containerEnv` values carry into the copy
+wherever the copy's config does not set the same keys (generated configs set
+identical env, so there it has no effect). A source whose config builds nothing
+(no `features`, `build` or `dockerFile`) is tagged as it is: the CLI used the
+base image as-is and put the source's entry only on the container's label, so
+the image's last id-less entry belongs to the base and is kept.
 The snapshot is the new container's own image, not a bridge: it lives until
 `dev container remove`, and a rebuild replaces it. SOURCE can be removed and its
 image pruned at any time. From the first creation nothing ties the two
@@ -165,9 +172,11 @@ what they would be without `--copy`.
 The rewrite applies only to the first start: when the snapshot tag exists and
 the engine has no container for the row. That means the first start after
 `create`, including a later `start` after `--no-start`. Once the first start
-has used it, the tag is renamed to `:copied`, so a later start (after a failed
-rebuild, say) builds or uses the clone's kept image and never re-applies the
-rewrite. A rebuild goes through the normal path, building afresh and replacing
+has used it, whether the `up` succeeded or failed after creating the
+container, the tag is renamed to `:copied`, so the rewrite never applies again.
+A later start of the existing container just starts it; if the container is
+gone, a start builds from the config. The `:copied` tag only keeps the image
+referenced until remove or rebuild. A rebuild goes through the normal path, building afresh and replacing
 the snapshot.
 
 **What still runs.** The new container's own `onCreateCommand`,

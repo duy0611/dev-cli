@@ -176,8 +176,9 @@ type Copier interface {
 	// image of its own that carries the source's Features' metadata but not the
 	// source's own config. Up starts dst from that tag while the engine has no
 	// container for it. The tag stays: it is dst's own image, and Remove deletes
-	// it.
-	SnapshotImage(ctx context.Context, dst model.Container, imageID string) error
+	// it. built is whether the source's config builds an image; when it does
+	// not, the image is tagged as it is.
+	SnapshotImage(ctx context.Context, dst model.Container, imageID string, built bool) error
 
 	// ImageFeatureIDs returns the id values of the image's devcontainer.metadata
 	// label, in order and deduplicated; empty when it has no label.
