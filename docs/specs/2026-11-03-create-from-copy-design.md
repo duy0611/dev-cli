@@ -131,13 +131,17 @@ created from. This is the image ID from `docker inspect` on SOURCE's container,
 found by its `dev.workspace`/`dev.container` labels. It is **not** a
 `docker commit` of the running container's filesystem. Nothing is built.
 
-**Snapshot tag.** dev tags that image ID under a name owned by the new
-container, for example `dev-<ws>-<name>:from-image`; the exact name is left to
-the builder. The tag only bridges the time between `create` and the new
-container's first successful start. Without it, SOURCE could be removed and its
-image pruned in between. Once the container exists, it references the image by
-ID, and dev deletes the tag. From then on nothing ties the two containers
-together: a rebuild of either leaves the other's image alone.
+**Snapshot.** dev builds a new image for the new container, for example
+tagged `dev-<ws>-<name>:from-image`; the exact name is left to the builder. It
+is made from SOURCE's image ID with `docker create` and `docker commit`, with
+the `devcontainer.metadata` label filtered to the Feature and base entries.
+SOURCE's own per-container entries (mounts, lifecycle commands, privileges,
+`remoteUser`, `containerEnv` from its project) are dropped, so nothing of
+SOURCE's config reaches the new container but what its Features contributed.
+The snapshot is the new container's own image, not a bridge: it lives until
+`dev container remove`, and a rebuild replaces it. SOURCE can be removed and its
+image pruned at any time. From the first creation nothing ties the two
+containers together: a rebuild of either leaves the other's image alone.
 
 **How the build is skipped.** For the first creation only, the config passed to
 `devcontainer up` is rewritten:
@@ -160,9 +164,10 @@ what they would be without `--copy`.
 
 The rewrite applies when the snapshot tag exists and the engine has no
 container for the row. That means the first start after `create`, including a
-later `start` after `--no-start`. Once the tag is deleted, every later start or
-rebuild goes through the normal path. If the container is removed out from
-under dev, the next start builds normally.
+later `start` after `--no-start`. After that the container exists, and a
+rebuild goes through the normal path, building afresh and replacing the
+snapshot. If the container is removed out from under dev, the next start
+starts from the snapshot again.
 
 **What still runs.** The new container's own `onCreateCommand`,
 `updateContentCommand` and `postCreateCommand` still run on first start. They
@@ -177,7 +182,12 @@ would have produced it:
 
 - *Generated source:* `--tools` with `--copy image` is exit 2, whatever its form,
   because the tools are baked into the image. The target cannot have its own
-  `.devcontainer`, so the configs match by construction.
+  `.devcontainer`, but its document is rendered with the current catalog, which
+  may differ from what SOURCE's image was built from (a dev upgrade, a failed
+  `rebuild --tools`). So SOURCE's stored `GeneratedConfig` and the new
+  container's rendered one are digested (`guard.DigestOf`) and compared on the
+  same image-deciding entries (`guard.ImageDiff`). A mismatch is exit 2 with the
+  same advice to drop `--copy image` and build.
 - *Project-owned source:* compare only what decides the image. The full
   `ConfigDigest` cannot be compared, because it covers the merged config **with**
   dev's per-container overlays: the state volume name and the worktree binds
@@ -248,29 +258,34 @@ The rest is left to the builder.
 Every validation step runs before anything is created, in roughly this order:
 
 1. The existing name, folder and `--from` checks.
-2. The `--copy` parse.
+2. The `--copy` parse, after the source lookup, so a missing source is exit 3
+   whatever `--copy` says. `--copy` without `--from` is exit 2 at once.
 3. Mode checks.
 4. Persist-state and compose checks.
 5. Engine lookups: SOURCE's container, image and state volume.
-6. The config match for `image`.
+6. The target check: the new container's state volume and snapshot tag must not
+   exist. A leftover is exit 2, naming `docker volume rm` and `docker rmi`.
+7. The config match for `image`.
 
 Then:
 
 1. Write the row (as today).
-2. If `image`: tag the snapshot.
+2. If `image`: create the snapshot.
 3. If `state`: create the new state volume and copy into it.
 4. Start the container (unless `--no-start`). With `image`, start from the
    snapshot.
 
-If step 2, 3 or 4 fails, everything created so far is removed: the snapshot tag,
-the new state volume, the container if one was made, and the row. If step 4
-succeeds, the snapshot tag is deleted. With `--no-start`, the tag and the
-filled volume remain until the first `start`, which uses them and then deletes
-the tag.
+If step 2, 3 or 4 fails, everything created so far is removed, under a
+context that outlives Ctrl-C or SIGTERM and with a timeout: first the
+container and its volumes through the provider's remove, then the snapshot image
+and the new state volume, then the row. Removal goes first because the engine
+refuses a volume a container still uses. If the container cannot be removed, the
+row is kept and the error tells the operator to run `dev container remove NAME`.
+With `--no-start`, the snapshot and the filled volume remain until the first
+`start`, which uses them.
 
-`dev container remove` deletes a snapshot tag that is still there (only
-possible after `--no-start`), along with the volumes. Untagging leaves the
-image in place for SOURCE. Removing SOURCE never affects the copy.
+`dev container remove` deletes the snapshot image along with the volumes.
+Removing SOURCE never affects the copy.
 
 ## Recording
 
@@ -294,7 +309,7 @@ one exists, the way forward ("drop `--copy image`", "stop SOURCE first",
   - every refusal in this document;
   - the snapshot tag and volume copy invocations;
   - rollback on a failed copy;
-  - the tag deleted after the first start, and by `remove` after `--no-start`;
+  - the snapshot image kept after the first start, and deleted by `remove`;
   - the first-start config rewrite, and its absence on later starts;
   - the project-owned config match ignoring dev's overlays (two worktrees of
     one repo match, an edited Dockerfile does not);
@@ -330,7 +345,7 @@ one exists, the way forward ("drop `--copy image`", "stop SOURCE first",
 - Refusing `--copy image` when configs differ, rather than warning.
 - Refusing `--copy` for compose projects.
 - Allowing a running source for `--copy state`, with a warning.
-- The snapshot tag living only until the first successful start.
+- The snapshot being the new container's own image until remove or rebuild, with SOURCE's per-container metadata filtered out.
 - The first-start config rewrite (image swapped, build fields dropped), never
   stored.
 - The project-owned config match comparing only image-deciding entries from

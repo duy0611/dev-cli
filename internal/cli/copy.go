@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/duy0611/dev-cli/internal/dcgen"
 	"github.com/duy0611/dev-cli/internal/guard"
@@ -28,6 +29,15 @@ func (k copyKinds) list() []string {
 		out = append(out, "state")
 	}
 	return out
+}
+
+// copyNeedsFrom is the part of --copy's validation that does not depend on
+// the source, so it can run before the source is looked up.
+func copyNeedsFrom(entries []string, from string) error {
+	if len(entries) > 0 && from == "" {
+		return usageErrorf("--copy needs --from: it copies from another container")
+	}
+	return nil
 }
 
 func parseCopy(entries []string, from string) (copyKinds, error) {
@@ -114,8 +124,8 @@ func (a *app) planCopy(ctx context.Context, wsName string, kinds copyKinds, src 
 		return nil, usageErrorf("--copy: the engine has no container for %s; start %s once (dev container start %s), or drop --copy",
 			src.Name, src.Name, src.Name)
 	case errors.Is(err, provider.ErrNoImage):
-		return nil, usageErrorf("--copy: %s's image no longer exists locally; rebuild %s (dev container rebuild %s), or drop --copy image",
-			src.Name, src.Name, src.Name)
+		return nil, usageErrorf("--copy: %s's image no longer exists locally; rebuild %s (dev container rebuild %s), or drop %s",
+			src.Name, src.Name, src.Name, dropFlag(kinds))
 	case err != nil:
 		return nil, err
 	}
@@ -127,6 +137,16 @@ func (a *app) planCopy(ctx context.Context, wsName string, kinds copyKinds, src 
 		}
 	}
 	return &copyPlan{kinds: kinds, src: src, imageID: imageID, p: p, copier: copier}, nil
+}
+
+// dropFlag names what to drop when the source's image is missing: with image
+// among the kinds, that kind; with state alone, all of --copy, since its helper
+// container runs from the source's image.
+func dropFlag(k copyKinds) string {
+	if k.image {
+		return "--copy image"
+	}
+	return "--copy"
 }
 
 // usesCompose is false for an unreadable file: the commands that need the file
@@ -162,6 +182,42 @@ func (cp *copyPlan) matchImage(probe model.Container) error {
 	return nil
 }
 
+// matchGenerated refuses a generated target whose document, rendered with the
+// current catalog, would not have produced the source's image: the catalog may
+// have changed since, or a rebuild --tools may have failed after rewriting the
+// source's row.
+func (cp *copyPlan) matchGenerated(target string) error {
+	digest := func(doc string) (guard.Digest, error) {
+		// A generated document names no Dockerfile, so the path is never read.
+		return guard.DigestOf([]byte(doc), "/generated/devcontainer.json", nil)
+	}
+	src, err := digest(cp.src.GeneratedConfig)
+	if err != nil {
+		return fmt.Errorf("container %s: %w", cp.src.Name, err)
+	}
+	dst, err := digest(target)
+	if err != nil {
+		return err
+	}
+	if diff := guard.ImageDiff(src, dst); len(diff) > 0 {
+		return usageErrorf("--copy image: the tools %s was built from differ from what dev renders now (%s); "+
+			"drop --copy image and build", cp.src.Name, strings.Join(diff, ", "))
+	}
+	return nil
+}
+
+// checkTarget refuses a create over a state volume or snapshot tag an earlier
+// attempt left behind: the copy would write into it or silently reuse it.
+func (cp *copyPlan) checkTarget(ctx context.Context, c model.Container) error {
+	err := cp.copier.CheckTarget(ctx, c)
+	if errors.Is(err, provider.ErrTargetExists) {
+		return usageErrorf("--copy: a leftover from an earlier create of %s already exists (%v); "+
+			"clear it with docker volume rm for the state volume or docker rmi for the image tag, "+
+			"or dev container remove %s if that container still exists", c.Name, err, c.Name)
+	}
+	return err
+}
+
 // run tags the image and fills the state volume.
 func (cp *copyPlan) run(ctx context.Context, a *app, c model.Container) error {
 	if cp.kinds.image {
@@ -183,14 +239,26 @@ func (cp *copyPlan) run(ctx context.Context, a *app, c model.Container) error {
 	return nil
 }
 
+// undoTimeout bounds the cleanup, which outlives a cancelled create.
+const undoTimeout = 2 * time.Minute
+
 // undo removes everything a failed create made, and never touches the source.
-// cause is returned, after the cleanup's own failures are reported.
+// cause is returned, after the cleanup's own failures are reported. It runs
+// without ctx's cancellation: Ctrl-C is the commonest reason to be here, and
+// a cancelled context would fail every engine call.
 func (cp *copyPlan) undo(ctx context.Context, a *app, c model.Container, cause error) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), undoTimeout)
+	defer cancel()
+
+	// The container and its volumes first: the engine refuses to remove a
+	// volume a container still references.
+	if err := cp.p.Remove(ctx, c); err != nil {
+		// Keep the row, the only handle remove has on what is left.
+		warnf(a, "removing container %s: %v", c.Name, err)
+		return fmt.Errorf("%w; the partial container %s was kept: run dev container remove %s", cause, c.Name, c.Name)
+	}
 	if err := cp.copier.DiscardCopy(ctx, c); err != nil {
 		warnf(a, "removing the copy made for %s: %v", c.Name, err)
-	}
-	if err := cp.p.Remove(ctx, c); err != nil {
-		warnf(a, "removing container %s: %v", c.Name, err)
 	}
 	if st, err := a.store(); err == nil {
 		if err := st.DeleteContainer(c.WorkspaceName, c.Name); err != nil {

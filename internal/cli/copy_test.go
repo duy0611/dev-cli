@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +12,7 @@ import (
 	"github.com/duy0611/dev-cli/internal/audit"
 	"github.com/duy0611/dev-cli/internal/guard"
 	"github.com/duy0611/dev-cli/internal/model"
+	"github.com/duy0611/dev-cli/internal/provider"
 	"github.com/duy0611/dev-cli/internal/provider/k8s"
 )
 
@@ -36,10 +39,14 @@ func stubCopyEngine(t *testing.T, merged string) *copyEngine {
 		"  *'dev.container=web'*'{{.State}}'*|*'{{.State}}'*'dev.container=web'*) [ -n \"$STUB_RUNNING\" ] && echo running || echo exited; exit 0;;\n"+
 		"  ps*'dev.container=web'*) [ -z \"$STUB_NO_CONTAINER\" ] && echo abc123; exit 0;;\n"+
 		"  'inspect --type container'*) echo sha256:srcimage; exit 0;;\n"+
+		"  'image inspect --format {{json .Config.Labels}}'*) echo '{}'; exit 0;;\n"+
 		"  'image inspect --format {{.Id}} sha256:srcimage') [ -z \"$STUB_NO_IMAGE\" ]; exit $?;;\n"+
-		"  'image inspect'*) [ -e '"+tagged+"' ] && echo sha256:srcimage; exit 0;;\n"+
-		"  tag*) : > '"+tagged+"'; exit 0;;\n"+
-		"  'volume inspect'*) [ -z \"$STUB_NO_VOLUME\" ]; exit $?;;\n"+
+		"  'image inspect'*) grep -qx \"$4\" '"+tagged+"' 2>/dev/null && echo sha256:srcimage; exit 0;;\n"+
+		"  tag*) echo \"$3\" >> '"+tagged+"'; exit 0;;\n"+
+		"  'volume inspect'*web-state*) [ -z \"$STUB_NO_VOLUME\" ]; exit $?;;\n"+
+		"  'volume inspect'*) [ -n \"$STUB_TARGET_EXISTS\" ]; exit $?;;\n"+
+		"  ps*'dev.container=feat'*) [ -n \"$STUB_FEAT_CONTAINER\" ] && echo feat123; exit 0;;\n"+
+		"  'rm -f'*) [ -z \"$STUB_FAIL_RM\" ] || { echo busy >&2; exit 1; };;\n"+
 		"  run*) [ -n \"$STUB_FAIL_RUN\" ] && { echo boom >&2; exit 1; }; exit 0;;\n"+
 		"esac\nexit 0\n")
 	for _, n := range []string{"devcontainer", "docker"} {
@@ -364,7 +371,7 @@ func TestCopyImageAndStateRunInOrderThenStart(t *testing.T) {
 	if err := copyCreate(t, a, "feat", createOpts{copy: []string{"image", "state"}}); err != nil {
 		t.Fatalf("create: %v\n%s", err, out)
 	}
-	tag, vol, run, up := e.index(t, "docker tag sha256:srcimage dev-ws-feat:from-image"),
+	tag, vol, run, up := e.index(t, "docker tag sha256:srcimage dev-copy-"),
 		e.index(t, "docker volume create dev-ws-feat-state"),
 		e.index(t, "docker run --rm --pull=never"),
 		e.index(t, "devcontainer up")
@@ -685,7 +692,7 @@ func TestCopyImageStartsProjectTargetAndRecordsItsDigest(t *testing.T) {
 		createOpts{from: "web", copy: []string{"image", "state"}}); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	if e.index(t, "docker tag sha256:srcimage dev-ws-feat:from-image") < 0 {
+	if e.index(t, "docker tag sha256:srcimage dev-copy-") < 0 {
 		t.Errorf("log:\n%s", e.log(t))
 	}
 	want := containerRow(t, a, "web").ConfigDigestFields
@@ -699,4 +706,152 @@ func samePath(a, b string) bool {
 	ra, _ := filepath.EvalSymlinks(a)
 	rb, _ := filepath.EvalSymlinks(b)
 	return ra != "" && ra == rb
+}
+
+// --- review fixes -------------------------------------------------------------
+
+func TestUndoRunsUnderACancelledContext(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	e := stubCopyEngine(t, `{}`)
+	copySource(t, a)
+	if err := copyCreate(t, a, "feat", createOpts{copy: []string{"state"}, noStart: true}); err != nil {
+		t.Fatal(err)
+	}
+	p, err := a.providerForWorkspace("ws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cp := &copyPlan{src: getContainer(t, a, "web"), p: p, copier: p.(provider.Copier)}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	cause := errors.New("interrupted")
+	if got := cp.undo(ctx, a, getContainer(t, a, "feat"), cause); got != cause {
+		t.Errorf("undo returned %v", got)
+	}
+	if e.index(t, "docker volume rm --force dev-ws-feat-state") < 0 {
+		t.Errorf("the cleanup never reached the engine:\n%s", e.log(t))
+	}
+	assertNoRow(t, a, "feat")
+}
+
+func TestUndoKeepsTheRowWhenRemoveFails(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	e := stubCopyEngine(t, `{}`)
+	copySource(t, a)
+	if err := copyCreate(t, a, "feat", createOpts{copy: []string{"state"}, noStart: true}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("STUB_FEAT_CONTAINER", "1")
+	t.Setenv("STUB_FAIL_RM", "1")
+	p, _ := a.providerForWorkspace("ws")
+	cp := &copyPlan{src: getContainer(t, a, "web"), p: p, copier: p.(provider.Copier)}
+
+	err := cp.undo(t.Context(), a, getContainer(t, a, "feat"), errors.New("boom"))
+	if err == nil || !strings.Contains(err.Error(), "dev container remove feat") {
+		t.Errorf("err = %v, want advice to run dev container remove feat", err)
+	}
+	_ = containerRow(t, a, "feat")
+	if e.index(t, "volume rm --force dev-ws-feat-state") >= 0 {
+		t.Errorf("the copy was discarded while the container may still use it:\n%s", e.log(t))
+	}
+}
+
+func TestFailedCopyRemovesTheContainerBeforeTheCopy(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	e := stubCopyEngine(t, `{}`)
+	copySource(t, a)
+	t.Setenv("STUB_FAIL_UP", "1")
+	t.Setenv("STUB_FEAT_CONTAINER", "1")
+
+	if err := copyCreate(t, a, "feat", createOpts{copy: []string{"image", "state"}}); err == nil {
+		t.Fatal("create succeeded")
+	}
+	rm := e.index(t, "docker rm -f feat123")
+	disc := e.index(t, "volume rm --force dev-ws-feat-state")
+	if rm < 0 || disc < 0 || rm >= disc {
+		t.Errorf("remove=%d discard=%d:\n%s", rm, disc, e.log(t))
+	}
+}
+
+func TestCopyImageRefusesAGeneratedSourceBuiltFromAnotherCatalog(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	e := stubCopyEngine(t, `{}`)
+	copySource(t, a)
+	st, _ := a.store()
+	if err := st.UpdateContainerConfig("ws", "web", `{"image":"debian:12"}`); err != nil {
+		t.Fatal(err)
+	}
+
+	err := copyCreate(t, a, "feat", createOpts{copy: []string{"image"}, noStart: true})
+	assertUsage(t, err, "image", "drop --copy image and build")
+	assertNoRow(t, a, "feat")
+	if e.index(t, "docker tag") >= 0 {
+		t.Error("tagged despite the mismatch")
+	}
+}
+
+func TestCopyImageAcceptsAGeneratedSourceWithTheSameConfig(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	stubCopyEngine(t, `{}`)
+	copySource(t, a)
+	if err := copyCreate(t, a, "feat", createOpts{copy: []string{"image"}, noStart: true}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCopyRefusesALeftoverTarget(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	e := stubCopyEngine(t, `{}`)
+	copySource(t, a)
+	t.Setenv("STUB_TARGET_EXISTS", "1")
+
+	err := copyCreate(t, a, "feat", createOpts{copy: []string{"state"}, noStart: true})
+	assertUsage(t, err, "docker volume rm", "docker rmi")
+	assertNoRow(t, a, "feat")
+	if e.index(t, "docker volume create") >= 0 {
+		t.Error("created over a leftover")
+	}
+}
+
+func TestCopyDropAdviceNamesWhatIsDropped(t *testing.T) {
+	for label, c := range map[string]struct {
+		env  string
+		list []string
+		has  string
+		not  string
+	}{
+		"state only":  {"STUB_NO_IMAGE", []string{"state"}, "or drop --copy\n", "drop --copy image"},
+		"image state": {"STUB_NO_IMAGE", []string{"image", "state"}, "or drop --copy image", ""},
+	} {
+		t.Run(label, func(t *testing.T) {
+			a, _ := newTestApp(t)
+			seedWorkspace(t, a)
+			stubCopyEngine(t, `{}`)
+			copySource(t, a)
+			t.Setenv(c.env, "1")
+			err := copyCreate(t, a, "feat", createOpts{copy: c.list, noStart: true})
+			assertUsage(t, err, "--copy")
+			msg := err.Error() + "\n"
+			if !strings.Contains(msg, c.has) || (c.not != "" && strings.Contains(msg, c.not)) {
+				t.Errorf("message %q", msg)
+			}
+		})
+	}
+}
+
+func TestMissingSourceBeatsABadCopyList(t *testing.T) {
+	a, _ := newTestApp(t)
+	seedWorkspace(t, a)
+	stubCopyEngine(t, `{}`)
+	err := copyCreate(t, a, "feat", createOpts{copy: []string{"bogus"}})
+	if got := exitCodeOf(err); got != exitNotFound {
+		t.Errorf("exit = %d (%v), want %d", got, err, exitNotFound)
+	}
 }

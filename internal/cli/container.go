@@ -211,13 +211,17 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 			return err
 		}
 	}
-	kinds, err := parseCopy(opts.copy, opts.from)
-	if err != nil {
+	if err := copyNeedsFrom(opts.copy, opts.from); err != nil {
 		return err
 	}
 	// Before the source is resolved, so the render sees the tools --from
 	// carries.
 	src, err := applyFrom(a, wsName, &opts)
+	if err != nil {
+		return err
+	}
+	// After the lookup, so a missing source is exit 3 whatever --copy says.
+	kinds, err := parseCopy(opts.copy, opts.from)
 	if err != nil {
 		return err
 	}
@@ -340,6 +344,16 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 	// Only when starting now: start checks again, so --no-start defers the
 	// check there.
 	guarded := false
+	if plan != nil {
+		if err := plan.checkTarget(ctx, c); err != nil {
+			return err
+		}
+	}
+	if plan != nil && kinds.image && plan.src.GeneratedConfig != "" {
+		if err := plan.matchGenerated(c.GeneratedConfig); err != nil {
+			return err
+		}
+	}
 	if plan != nil && kinds.image && plan.src.GeneratedConfig == "" {
 		// A probe, so --no-start still leaves the digest to the first start.
 		probe := c

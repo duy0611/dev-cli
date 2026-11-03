@@ -475,16 +475,22 @@ new folder's own agents.yaml. `--no-persist-state`, `--agent-config` and
 `--copy` takes `image`, `state` or `image,state`, and needs `--from`. Both are
 local provider only.
 
-- **`image`** starts the new container from the image `web`'s container was
-  created from. Nothing is built, so the first start skips the build. The new
-  container's `onCreateCommand`, `updateContentCommand` and `postCreateCommand`
-  still run, since they set ownership on its new volumes. Its mounts, labels and
-  environment come from its own config, as for any create. Refused, exit 2:
-  - a project-owned source, when the new folder's configuration would not
-    produce the same image. dev compares `image`, `build`, `dockerFile`,
-    `context` and `features`, and the Dockerfile, and names what differs. It
-    also refuses when `web` has no recorded configuration, which is the case
-    when it was never started. The fix is to drop `--copy image` and build;
+- **`image`** starts the new container from a snapshot of the image `web`'s
+  container was created from. Nothing is built, so the first start skips the
+  build. The snapshot is the copy's own image: it keeps `web`'s Features but none
+  of `web`'s per-container config (mounts, lifecycle commands, privileges). The
+  new container's own config supplies those, and its `onCreateCommand`,
+  `updateContentCommand` and `postCreateCommand` still run, since they set
+  ownership on its new volumes. The image is removed with the container.
+  Refused, exit 2:
+  - a source whose configuration would not produce the same image. For a
+    project-owned source dev compares `image`, `build`, `dockerFile`, `context`
+    and `features`, and the Dockerfile, and names what differs; it does not see
+    local Feature directories or files the Dockerfile `COPY`s. For a generated
+    source it compares the document stored for `web` with what dev renders now,
+    so a dev upgrade or a failed `rebuild --tools` can trigger it. It also
+    refuses when `web` has no recorded configuration, which is the case when it
+    was never started. The fix is to drop `--copy image` and build;
   - `--tools` with `image`, since the tools are already in the image;
   - a config that uses `dockerComposeFile`, on either side;
   - `web` with no container in the engine (start it once), or whose image is
@@ -493,6 +499,8 @@ local provider only.
   before the new container first starts. The copy is everything: logins,
   settings, plugins, MCP config, gitconfig, Claude history and memory, and
   `dev-team` run folders. Nothing is filtered, and ownership and modes are kept.
+  The copy runs from `web`'s image, so `web` must have been started once and its
+  image must still be present locally.
   - Logins are duplicated, not moved. Both containers hold the same tokens, so
     revoking one does not revoke the other.
   - Claude keys history and memory by path. A worktree at `../feat-x` is a
@@ -503,6 +511,10 @@ local provider only.
     (`dev container stop web`); dev never stops `web` itself.
   - Refused, exit 2, if either container was made with `--no-persist-state`, or
     `web` has no state volume in the engine.
+
+A leftover state volume or image tag from an earlier create of the same name
+refuses the create, exit 2; the message says to clear it with `docker volume rm`
+or `docker rmi`.
 
 `--copy` is refused, exit 2, when either `web` or the new container is isolated.
 The new container's mode is `--mode`, which defaults to guarded. Isolated
