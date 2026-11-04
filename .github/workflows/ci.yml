@@ -141,11 +141,6 @@ jobs:
       - name: Install the devcontainer CLI
         run: npm install -g @devcontainers/cli
 
-      # The smoke tests compile cmd/dev themselves; the relay and the team
-      # dispatch binary have to be there first or that binary embeds none.
-      - name: Build the embedded binaries
-        run: make relay team
-
       - name: Smoke
         run: make smoke
 

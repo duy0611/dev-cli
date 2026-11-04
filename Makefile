@@ -100,7 +100,8 @@ lint:
 # ignored is written `_ = f()`, which says it was considered.
 
 # Behind a build tag so `make test` never tries to reach a container engine.
-smoke:
+# The tests compile cmd/dev, which embeds the relay and team binaries.
+smoke: relay team
 	$(GO) test -tags smoke -count=1 -v ./test/smoke/...
 
 install: build
