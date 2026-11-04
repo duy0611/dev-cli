@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.21.0](https://github.com/duy0611/dev-cli/compare/v0.20.0...v0.21.0) (2026-11-04)
+
+
+### Features
+
+* **cli:** add --copy image,state to container create --from ([7dfd353](https://github.com/duy0611/dev-cli/commit/7dfd3530ffefbb53eae55f6f46f3a4834a28a39d))
+* **cli:** dev container remove --keep-state keeps the state volume ([0274755](https://github.com/duy0611/dev-cli/commit/02747557680d653de16cd5cb00a0e0c8fa7001de))
+* **guard:** compare only the entries that decide a container's image ([185b0fb](https://github.com/duy0611/dev-cli/commit/185b0fb5474150ba557f863b3401c5322693e5e5))
+* **local:** snapshot a source image and copy its state volume ([72a2e1e](https://github.com/duy0611/dev-cli/commit/72a2e1e90c4024077a21aa1367e792ca81bd5f4a))
+
+
+### Bug Fixes
+
+* **cli:** check a copied image's Features and refuse an existing name first ([6cdd2c7](https://github.com/duy0611/dev-cli/commit/6cdd2c7172ac7a41de94446d839207b260100cbd))
+* **cli:** leave a kept state volume to --copy image and explain it to --copy state ([db4dba0](https://github.com/duy0611/dev-cli/commit/db4dba08bf2bd48789782f7962a34a09bb1a6aba))
+* **cli:** pass RemoveOpts to Remove in --copy rollback ([bb53654](https://github.com/duy0611/dev-cli/commit/bb53654b931affcdb8a48bf4e14908374d37404b))
+* **cli:** roll back a --copy create fully and check generated sources' images ([0d3e57c](https://github.com/duy0611/dev-cli/commit/0d3e57c82362227615e0b2bd757806ba9ab56d2e))
+* **local:** keep the base image's settings in a copied image and use it once ([e129204](https://github.com/duy0611/dev-cli/commit/e129204a98cb1506a1c36ddba5fc0ca41e0388a8))
+* **local:** snapshot a copied image without the source's own config ([0a636bc](https://github.com/duy0611/dev-cli/commit/0a636bcc51e5bbbab00d946de1625ddd57d420ec))
+* **local:** tag an unbuilt source's image as-is and settle the snapshot after any first start ([af46e04](https://github.com/duy0611/dev-cli/commit/af46e0472d308724f2c72db5bb5d017c32b8fa8e))
+
 ## [0.20.0](https://github.com/duy0611/dev-cli/compare/v0.19.0...v0.20.0) (2026-10-27)
 
 
