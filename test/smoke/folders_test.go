@@ -95,11 +95,7 @@ func TestSmokeIsolatedFolders(t *testing.T) {
 	repo1 := smokeRepo(t, parent, "repo-1")
 	repo2 := smokeRepo(t, parent, "repo-2")
 
-	globalConfig := filepath.Join(t.TempDir(), "gitconfig")
-	if err := os.WriteFile(globalConfig, []byte("[user]\n\tname = agent\n\temail = a@example.com\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
+	hermeticGitIdentity(t, "agent", "a@example.com")
 
 	const name = "dev-smoke-isolated-folders"
 	dev := func(args ...string) string { t.Helper(); return run(t, bin, args...) }
