@@ -152,3 +152,68 @@ func TestWithoutMountsDropsOnlyTheNamedTargets(t *testing.T) {
 		t.Errorf("digest still sees the tree mounts: %s", out)
 	}
 }
+
+func TestImageDiffIgnoresEntriesThatDoNotDecideTheImage(t *testing.T) {
+	a := digest(t, `{"image":"ubuntu","mounts":["source=a,target=/a,type=bind"],"containerEnv":{"X":"1"},"remoteUser":"vscode"}`, nil)
+	b := digest(t, `{"image":"ubuntu","mounts":["source=b,target=/b,type=bind"],"containerEnv":{"X":"2"},"remoteUser":"root","runArgs":["--x"]}`, nil)
+	if got := ImageDiff(a, b); len(got) != 0 {
+		t.Errorf("ImageDiff = %v, want none", got)
+	}
+}
+
+func TestImageDiffNamesTheImageDecidingFields(t *testing.T) {
+	base := digest(t, `{"image":"ubuntu","features":{"x":{"v":"1"}},"build":{"dockerfile":"Dockerfile"}}`,
+		map[string]string{"Dockerfile": "FROM ubuntu\n"})
+	for name, other := range map[string]struct {
+		merged string
+		want   []string
+	}{
+		"image":    {`{"image":"debian","features":{"x":{"v":"1"}},"build":{"dockerfile":"Dockerfile"}}`, []string{"image"}},
+		"features": {`{"image":"ubuntu","features":{"x":{"v":"2"}},"build":{"dockerfile":"Dockerfile"}}`, []string{"features"}},
+		"build":    {`{"image":"ubuntu","features":{"x":{"v":"1"}},"build":{"dockerfile":"Dockerfile","args":{"A":"1"}}}`, []string{"build"}},
+	} {
+		got := ImageDiff(base, digest(t, other.merged, map[string]string{"Dockerfile": "FROM ubuntu\n"}))
+		if !slices.Equal(got, other.want) {
+			t.Errorf("%s: ImageDiff = %v, want %v", name, got, other.want)
+		}
+	}
+}
+
+func TestImageDiffNamesAChangedDockerfile(t *testing.T) {
+	merged := `{"build":{"dockerfile":"Dockerfile"}}`
+	a := digest(t, merged, map[string]string{"Dockerfile": "FROM a\n"})
+	b := digest(t, merged, map[string]string{"Dockerfile": "FROM a\nRUN true\n"})
+	if got := ImageDiff(a, b); !slices.Equal(got, []string{"Dockerfile"}) {
+		t.Errorf("ImageDiff = %v, want [Dockerfile]", got)
+	}
+}
+
+func TestImageDiffCountsAOneSidedEntryAsADifference(t *testing.T) {
+	withFeatures := digest(t, `{"image":"ubuntu","features":{"x":{}}}`, nil)
+	without := digest(t, `{"image":"ubuntu"}`, nil)
+	if got := ImageDiff(withFeatures, without); !slices.Equal(got, []string{"features"}) {
+		t.Errorf("ImageDiff = %v, want [features]", got)
+	}
+	if got := ImageDiff(without, withFeatures); !slices.Equal(got, []string{"features"}) {
+		t.Errorf("ImageDiff reversed = %v, want [features]", got)
+	}
+	withDockerfile := digest(t, `{"build":{"dockerfile":"Dockerfile"}}`, map[string]string{"Dockerfile": "FROM a\n"})
+	noDockerfile := digest(t, `{"image":"ubuntu"}`, nil)
+	if got := ImageDiff(withDockerfile, noDockerfile); !slices.Equal(got, []string{"Dockerfile", "build", "image"}) {
+		t.Errorf("ImageDiff = %v, want [Dockerfile build image]", got)
+	}
+}
+
+func TestImageDiffOfStoredAndLiveDigests(t *testing.T) {
+	merged := `{"build":{"dockerfile":"Dockerfile"},"image":"a","remoteUser":"vscode"}`
+	live := digest(t, merged, map[string]string{"Dockerfile": "FROM a\n"})
+	stored := ParseRecord(live.Sum, live.Record())
+	if got := ImageDiff(stored, live); len(got) != 0 {
+		t.Errorf("stored vs live ImageDiff = %v, want none", got)
+	}
+	changed := digest(t, `{"build":{"dockerfile":"Dockerfile"},"image":"b","remoteUser":"vscode"}`,
+		map[string]string{"Dockerfile": "FROM a\n"})
+	if got := ImageDiff(stored, changed); !slices.Equal(got, []string{"image"}) {
+		t.Errorf("stored vs changed ImageDiff = %v, want [image]", got)
+	}
+}

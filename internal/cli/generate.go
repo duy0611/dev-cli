@@ -155,51 +155,58 @@ func applyToolDiff(current, spec []string) ([]string, error) {
 }
 
 // applyFrom points opts at another container's tools and persisted choices, as
-// --from asks. Only the tool list is copied, never the document: it bakes in
-// names and volumes.
-func applyFrom(a *app, wsName string, opts *createOpts) error {
+// --from asks, and returns the source. Only the tool list is copied, never the
+// document: it bakes in names and volumes. A project-owned source supplies no
+// tools: the new container resolves its own folder's config.
+func applyFrom(a *app, wsName string, opts *createOpts) (*model.Container, error) {
 	if opts.from == "" {
-		return nil
+		return nil, nil
 	}
 	// A plain list would replace the inherited tools, so it is refused.
 	for _, s := range opts.tools {
 		if !strings.HasPrefix(s, "+") && !strings.HasPrefix(s, "-") {
-			return usageErrorf("with --from, --tools takes +/- changes to %s's tools", opts.from)
+			return nil, usageErrorf("with --from, --tools takes +/- changes to %s's tools", opts.from)
 		}
 	}
 
 	st, err := a.store()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	src, err := st.GetContainer(wsName, opts.from)
 	if errors.Is(err, store.ErrNotFound) {
-		return notFoundErrorf("no such container: %s (workspace %s)", opts.from, wsName)
+		return nil, notFoundErrorf("no such container: %s (workspace %s)", opts.from, wsName)
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if src.GeneratedConfig == "" {
-		// A project's own config cannot be copied: a relative dockerfile would
-		// stay anchored to that project.
-		return usageErrorf("container %s uses its project's own config; --from copies only generated ones",
-			opts.from)
-	}
+	opts.toolsGiven = len(opts.tools) > 0
 
-	tools, err := dcgen.ToolsOf(src.GeneratedConfig)
-	if err != nil {
-		// A corrupt row is exit 1, not a malformed request.
-		return fmt.Errorf("container %s: %w", opts.from, err)
-	}
-	// An empty spec would install none of the source's tools.
-	if len(opts.tools) > 0 {
-		if tools, err = applyToolDiff(tools, opts.tools); err != nil {
-			return err
+	if src.GeneratedConfig == "" {
+		if opts.noFolder {
+			return nil, usageErrorf("container %s uses its project's config; --no-folder leaves no folder whose config to use",
+				opts.from)
 		}
+		if opts.toolsGiven {
+			return nil, usageErrorf("container %s uses its project's config, so --tools has nothing to change", opts.from)
+		}
+		opts.fromProjectOwned = true
+	} else {
+		tools, err := dcgen.ToolsOf(src.GeneratedConfig)
+		if err != nil {
+			// A corrupt row is exit 1, not a malformed request.
+			return nil, fmt.Errorf("container %s: %w", opts.from, err)
+		}
+		// An empty spec would install none of the source's tools.
+		if len(opts.tools) > 0 {
+			if tools, err = applyToolDiff(tools, opts.tools); err != nil {
+				return nil, err
+			}
+		}
+		opts.tools = tools
+		// --from names the tools, so the picker must not open.
+		opts.generate = true
 	}
-	opts.tools = tools
-	// --from names the tools, so the picker must not open.
-	opts.generate = true
 
 	// --no-persist-state can only turn persistence off, so a source without it
 	// passes that on.
@@ -216,7 +223,7 @@ func applyFrom(a *app, wsName string, opts *createOpts) error {
 			opts.agentConfig = src.AgentConfig
 		}
 	}
-	return nil
+	return &src, nil
 }
 
 // rewriteGeneratedTools changes a generated container's tools. It reads them

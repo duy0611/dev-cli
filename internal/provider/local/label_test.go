@@ -20,3 +20,29 @@ func TestFolderVolumeName(t *testing.T) {
 		t.Errorf("FolderVolumeName = %q", a)
 	}
 }
+
+func TestSnapshotTag(t *testing.T) {
+	ref := regexp.MustCompile(`^dev-copy-[0-9a-f]{16}:from-image$`)
+	seen := map[string]string{}
+	for _, c := range [][2]string{{"a-b", "c"}, {"a", "b-c"}, {"ws", "Feat"}, {"ws", "feat"}, {"ws", "x-"}, {"ws", "_a"}} {
+		tag := SnapshotTag(c[0], c[1])
+		if !ref.MatchString(tag) {
+			t.Errorf("SnapshotTag(%q, %q) = %q is not a valid reference", c[0], c[1], tag)
+		}
+		key := c[0] + "/" + c[1]
+		if prev, dup := seen[tag]; dup {
+			t.Errorf("%q and %q share tag %q", prev, key, tag)
+		}
+		seen[tag] = key
+	}
+}
+
+func TestSnapshotKeptTag(t *testing.T) {
+	want := "dev-copy-" + snapshotHash("ws", "demo") + ":copied"
+	if got := SnapshotKeptTag("ws", "demo"); got != want {
+		t.Errorf("SnapshotKeptTag = %q, want %q", got, want)
+	}
+	if SnapshotKeptTag("ws", "demo") == SnapshotTag("ws", "demo") {
+		t.Error("the two tags are the same")
+	}
+}

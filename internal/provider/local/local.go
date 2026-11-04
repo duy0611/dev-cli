@@ -81,18 +81,32 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 		seeding = id == ""
 	}
 
+	configPath, overridePath := c.ConfigPath, c.OverrideConfigPath
+	fromSnapshot := false
+	if !recreate {
+		rewritten, cleanup, ok, err := p.snapshotConfig(ctx, c)
+		if err != nil {
+			return err
+		}
+		if ok {
+			defer cleanup()
+			fromSnapshot = true
+			configPath, overridePath = rewritten.config, rewritten.override
+		}
+	}
+
 	args := []string{"up", "--workspace-folder", c.Source}
 	args = append(args, idLabelArgs(c)...)
 	// Passed explicitly: a generated config lives in a temporary directory the
 	// CLI's own lookup never reaches.
-	if c.ConfigPath != "" {
-		args = append(args, "--config", c.ConfigPath)
+	if configPath != "" {
+		args = append(args, "--config", configPath)
 	}
 	// --override-config replaces the document rather than merging, so dev does
 	// the merge. --config stays alongside: it anchors a relative "dockerfile"
 	// to the project.
-	if c.OverrideConfigPath != "" {
-		args = append(args, "--override-config", c.OverrideConfigPath)
+	if overridePath != "" {
+		args = append(args, "--override-config", overridePath)
 	}
 	if recreate {
 		args = append(args, "--remove-existing-container")
@@ -111,12 +125,21 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 	// since an image build is minutes of silence otherwise.
 	cmd.Stdout = io.Discard
 	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	runErr := cmd.Run()
+	// A failed up can leave a container (a lifecycle command that fails), and
+	// a later removal of it must not find the tag to rewrite from again.
+	if fromSnapshot && (runErr == nil || p.hasContainer(ctx, c)) {
+		p.keepSnapshot(ctx, c)
+	}
+	if err := runErr; err != nil {
 		err = fmt.Errorf("starting container %s: %w", c.Name, err)
 		if opts.Seed {
 			p.discardSeed(ctx, c)
 		}
 		return err
+	}
+	if recreate {
+		p.dropSnapshotTag(ctx, c)
 	}
 	if err := p.claimStateDir(ctx, c); err != nil {
 		if opts.Seed {
@@ -328,6 +351,9 @@ func (p *Provider) Remove(ctx context.Context, c model.Container, opts provider.
 		}
 	}
 
+	// After the container: an image in use cannot be removed.
+	p.dropSnapshotTag(ctx, c)
+
 	// docker rm leaves named volumes behind, so they are removed here. Last,
 	// because a volume still referenced by a container cannot be removed.
 	var volumes []string
@@ -435,6 +461,11 @@ func (p *Provider) containerID(ctx context.Context, c model.Container) (string, 
 		return "", err
 	}
 	return first(out), nil
+}
+
+func (p *Provider) hasContainer(ctx context.Context, c model.Container) bool {
+	id, err := p.containerID(ctx, c)
+	return err == nil && id != ""
 }
 
 // --- helpers -----------------------------------------------------------------

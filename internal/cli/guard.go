@@ -99,20 +99,27 @@ func (cc *configCheck) digest() (guard.Digest, error) {
 // records. The configuration is materialised exactly as start will materialise
 // it, so what is checked is what runs.
 func (a *app) guardNewContainer(ctx context.Context, workspace string, c *model.Container, worktreeRepo ...string) error {
+	_, err := a.guardNewContainerConfig(ctx, workspace, c, worktreeRepo...)
+	return err
+}
+
+// guardNewContainerConfig is guardNewContainer, also returning the merged
+// configuration it read: nil for a generated one or a provider that reads none.
+func (a *app) guardNewContainerConfig(ctx context.Context, workspace string, c *model.Container, worktreeRepo ...string) (*configCheck, error) {
 	if c.GeneratedConfig != "" {
-		return nil
+		return nil, nil
 	}
 	st, err := a.store()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	ws, err := st.GetWorkspace(workspace)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	p, err := a.providerFor(ws)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	probe := *c
 	if len(worktreeRepo) > 0 {
@@ -122,30 +129,30 @@ func (a *app) guardNewContainer(ctx context.Context, workspace string, c *model.
 	// materialises.
 	plan, err := a.planGitGuard(ctx, probe, probe.WorktreeRepo, false, overridesConfig(p))
 	if err != nil {
-		return a.recordRefusal(*c, err)
+		return nil, a.recordRefusal(*c, err)
 	}
 	if overridesConfig(p) {
 		probe.GitGuardMounts = plan.mounts
 	}
 	probe, cleanup, err := materialise(probe, overridesConfig(p))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer cleanup()
 
 	cc, err := readConfig(ctx, p, probe, plan)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := a.escape(cc); err != nil {
-		return err
+		return nil, err
 	}
 	d, err := cc.digest()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	c.ConfigDigest, c.ConfigDigestFields = d.Sum, d.Record()
-	return nil
+	return cc, nil
 }
 
 // checkDrift refuses a rebuild whose configuration differs from the one last

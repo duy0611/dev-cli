@@ -4,6 +4,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -155,4 +156,59 @@ type Mount struct {
 // the engine has no such container.
 type MountReader interface {
 	Mounts(ctx context.Context, c model.Container) (mounts []Mount, exists bool, err error)
+}
+
+// Errors a Copier reports for a source it cannot copy from, so a caller can
+// tell the operator what to do.
+var (
+	// ErrNoContainer: the source has no container in the engine.
+	ErrNoContainer = errors.New("the source has no container")
+	// ErrNoImage: the source's image is no longer present locally.
+	ErrNoImage = errors.New("the source's image no longer exists locally")
+	// ErrNoStateVolume: the source has no state volume.
+	ErrNoStateVolume = errors.New("the source has no state volume")
+	// ErrTargetExists: the new container's state volume or snapshot tag is
+	// already in the engine, so a copy would merge into or replace leftovers.
+	ErrTargetExists = errors.New("the new container's state volume or snapshot tag already exists")
+	// ErrTargetVolumeExists is the ErrTargetExists whose object is the state
+	// volume, which remove --keep-state leaves on purpose.
+	ErrTargetVolumeExists = fmt.Errorf("the new container's state volume already exists: %w", ErrTargetExists)
+)
+
+// Copier is a provider that can start a container from another one's image and
+// state. The local provider only.
+type Copier interface {
+	// SourceImage returns the ID of the image src's container was created from.
+	// It wraps ErrNoContainer or ErrNoImage.
+	SourceImage(ctx context.Context, src model.Container) (string, error)
+
+	// SnapshotImage makes imageID available under a name owned by dst, as an
+	// image of its own that carries the source's Features' metadata but not the
+	// source's own config. Up starts dst from that tag while the engine has no
+	// container for it. The tag stays: it is dst's own image, and Remove deletes
+	// it. built is whether the source's config builds an image; when it does
+	// not, the image is tagged as it is.
+	SnapshotImage(ctx context.Context, dst model.Container, imageID string, built bool) error
+
+	// ImageFeatureIDs returns the id values of the image's devcontainer.metadata
+	// label, in order and deduplicated; empty when it has no label.
+	ImageFeatureIDs(ctx context.Context, imageID string) ([]string, error)
+
+	// CheckState reports, creating nothing, whether src has a state volume. It
+	// wraps ErrNoStateVolume.
+	CheckState(ctx context.Context, src model.Container) error
+
+	// CheckTarget reports, creating nothing, whether dst's state volume or
+	// snapshot tag already exists. It wraps ErrTargetExists.
+	CheckTarget(ctx context.Context, dst model.Container) error
+
+	// CopyState creates dst's state volume and fills it with a copy of src's,
+	// through a short-lived container of helperImage, which must be present
+	// locally. It wraps ErrNoStateVolume and ErrTargetExists, and deletes nothing
+	// when it refuses.
+	CopyState(ctx context.Context, src, dst model.Container, helperImage string) error
+
+	// DiscardCopy removes dst's snapshot tag and state volume, whichever
+	// exist. For rollback.
+	DiscardCopy(ctx context.Context, dst model.Container) error
 }

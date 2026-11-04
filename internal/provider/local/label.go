@@ -79,3 +79,23 @@ func FolderVolumeName(workspace, container, host string) string {
 	sum := sha256.Sum256([]byte(host))
 	return fmt.Sprintf("dev-%s-%s-f-%s", workspace, container, hex.EncodeToString(sum[:])[:8])
 }
+
+// snapshotHash names a container's copy-related images. Always a hash: joining
+// workspace and name with a separator is ambiguous, and names allow characters
+// a reference does not.
+func snapshotHash(workspace, container string) string {
+	sum := sha256.Sum256([]byte(workspace + "\x00" + container))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+// SnapshotTag is the image tag that holds a container's copied image until its
+// first start. Only this tag makes up rewrite the config.
+func SnapshotTag(workspace, container string) string {
+	return "dev-copy-" + snapshotHash(workspace, container) + ":from-image"
+}
+
+// SnapshotKeptTag is the tag the copied image carries once its container
+// exists, so a later start with the container gone does not rewrite again.
+func SnapshotKeptTag(workspace, container string) string {
+	return "dev-copy-" + snapshotHash(workspace, container) + ":copied"
+}

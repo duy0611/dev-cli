@@ -7,12 +7,16 @@ package smoke
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/duy0611/dev-cli/internal/provider/local"
 )
 
 // A tiny image, so the pull is seconds rather than minutes.
@@ -403,4 +407,146 @@ func TestSmokePersistState(t *testing.T) {
 	if out := dockerVolumes(t, stateVolume); len(out) != 0 {
 		t.Errorf("remove left the state volume behind: %v", out)
 	}
+}
+
+// A copy shares no image tag with its source: it starts from the image ID the
+// source's container used, and a rebuild of either leaves the other alone.
+func TestSmokeCreateFromCopy(t *testing.T) {
+	requireBinaries(t, "devcontainer", "docker")
+
+	t.Setenv("DEV_STATE", t.TempDir())
+
+	bin := buildBinary(t)
+	dev := func(args ...string) string {
+		t.Helper()
+		return run(t, bin, args...)
+	}
+
+	const (
+		src   = "dev-smoke-copy-src"
+		clone = "dev-smoke-copy-clone"
+		ws    = "dev-smoke-copy-ws"
+	)
+	t.Cleanup(func() {
+		for _, name := range []string{clone, src} {
+			_ = exec.Command(bin, "container", "remove", name, "--force").Run()
+			_ = exec.Command("docker", "volume", "rm", "--force",
+				"dev-"+ws+"-"+name, "dev-"+ws+"-"+name+"-state").Run()
+		}
+	})
+
+	imageOf := func(name string) string {
+		t.Helper()
+		out, err := exec.Command("docker", "ps", "-aq",
+			"--filter", "label=dev.workspace="+ws, "--filter", "label=dev.container="+name).Output()
+		id := strings.TrimSpace(string(out))
+		if err != nil || id == "" {
+			t.Fatalf("no container for %s: %v", name, err)
+		}
+		image, err := exec.Command("docker", "inspect", "--format", "{{.Image}}", id).Output()
+		if err != nil {
+			t.Fatalf("docker inspect %s: %v", id, err)
+		}
+		return strings.TrimSpace(string(image))
+	}
+
+	dev("provider", "configure", "dev-smoke-copy-local", "--kind", "local")
+	dev("workspace", "init", ws, "--provider", "dev-smoke-copy-local")
+
+	t.Log("creating the source; the first run pulls a base image and installs features")
+	dev("container", "create", src, "--no-folder", "--generate", "--tools", "yq")
+	dev("container", "exec", src, "--", "sh", "-c", "echo marker > /var/dev-state/marker")
+
+	dev("container", "create", clone, "--no-folder", "--from", src, "--copy", "image,state")
+
+	// The devcontainer CLI may add a thin UID-adjustment layer on top of an
+	// image when it starts a container, so the image IDs can differ. The clone
+	// must still sit on the source's image, with at most a couple of layers
+	// added on top.
+	srcImage, cloneImage := imageOf(src), imageOf(clone)
+	srcLayers, cloneLayers := imageLayers(t, srcImage), imageLayers(t, cloneImage)
+	if len(cloneLayers) < len(srcLayers) || !slices.Equal(cloneLayers[:len(srcLayers)], srcLayers) {
+		t.Errorf("clone image %s is not built on the source image %s: layers %v, want a prefix of %v",
+			cloneImage, srcImage, cloneLayers, srcLayers)
+	} else if extra := len(cloneLayers) - len(srcLayers); extra > 2 {
+		t.Errorf("clone image adds %d layers to the source's image, want at most 2: something was built", extra)
+	}
+	if out := dev("container", "exec", clone, "--", "cat", "/var/dev-state/marker"); !strings.Contains(out, "marker") {
+		t.Errorf("the state was not copied: %q", out)
+	}
+	fromTag, keptTag := local.SnapshotTag(ws, clone), local.SnapshotKeptTag(ws, clone)
+	if out := dockerImages(t, fromTag); len(out) != 0 {
+		t.Errorf("the snapshot tag %s outlived the first start: %v", fromTag, out)
+	}
+	if out := dockerImages(t, keptTag); len(out) != 1 {
+		t.Errorf("the kept tag %s = %v, want one image", keptTag, out)
+	}
+	if out := strings.TrimSpace(dev("container", "exec", clone, "--", "whoami")); out != "vscode" {
+		t.Errorf("whoami in the clone = %q, want vscode", out)
+	}
+	srcVolume := local.StateVolumeName(ws, src)
+	for _, entry := range metadataEntries(t, keptTag) {
+		if m, ok := entry["mounts"]; ok && strings.Contains(string(m), srcVolume) {
+			t.Errorf("the copied image still carries the source's state mount %s: %s", srcVolume, m)
+		}
+	}
+
+	// Rebuilding the source recreates its container, and must leave the copy's
+	// image alone.
+	dev("container", "rebuild", src)
+	if got := imageOf(clone); got != cloneImage {
+		t.Errorf("clone image after the source's rebuild = %s, want %s", got, cloneImage)
+	}
+
+	dev("container", "remove", clone)
+	for _, tag := range []string{fromTag, keptTag} {
+		if out := dockerImages(t, tag); len(out) != 0 {
+			t.Errorf("%s survived remove: %v", tag, out)
+		}
+	}
+	dev("container", "remove", src)
+}
+
+// metadataEntries returns the devcontainer.metadata label of an image as a
+// list of entries.
+func metadataEntries(t *testing.T, image string) []map[string]json.RawMessage {
+	t.Helper()
+	out, err := exec.Command("docker", "image", "inspect", "--format",
+		`{{index .Config.Labels "devcontainer.metadata"}}`, image).Output()
+	if err != nil {
+		t.Fatalf("docker image inspect %s: %v", image, err)
+	}
+	raw := strings.TrimSpace(string(out))
+	if strings.HasPrefix(raw, "{") {
+		raw = "[" + raw + "]"
+	}
+	var entries []map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		t.Fatalf("decoding the metadata of %s: %v: %s", image, err, raw)
+	}
+	return entries
+}
+
+// imageLayers returns the RootFS layer digests of an image, base first.
+func imageLayers(t *testing.T, image string) []string {
+	t.Helper()
+	out, err := exec.Command("docker", "image", "inspect", "--format", "{{json .RootFS.Layers}}", image).Output()
+	if err != nil {
+		t.Fatalf("docker image inspect %s: %v", image, err)
+	}
+	var layers []string
+	if err := json.Unmarshal(out, &layers); err != nil {
+		t.Fatalf("decoding the layers of %s: %v", image, err)
+	}
+	return layers
+}
+
+// dockerImages returns the image IDs a reference names.
+func dockerImages(t *testing.T, ref string) []string {
+	t.Helper()
+	out, err := exec.Command("docker", "images", "-q", ref).Output()
+	if err != nil {
+		t.Fatalf("docker images: %v", err)
+	}
+	return strings.Fields(string(out))
 }
