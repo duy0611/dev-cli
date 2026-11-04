@@ -56,14 +56,21 @@ func (a *app) record(event, workspace, container string, fields map[string]any) 
 }
 
 // recordCreate appends the record for a container row just written.
-func (a *app) recordCreate(workspace string, c model.Container) {
-	a.record("create", workspace, c.Name, map[string]any{
+func (a *app) recordCreate(workspace string, c model.Container, from string, copied copyKinds) {
+	fields := map[string]any{
 		"source_kind":      string(c.SourceKind),
 		"generated":        c.GeneratedConfig != "",
 		"persist_state":    c.PersistState,
 		"allow_privileged": c.AllowPrivileged,
 		"git_guard":        c.GitGuard,
-	})
+	}
+	if from != "" {
+		fields["from"] = from
+	}
+	if list := copied.list(); len(list) > 0 {
+		fields["copy"] = list
+	}
+	a.record("create", workspace, c.Name, fields)
 }
 
 // recordRun appends one record when a container command finishes. A session

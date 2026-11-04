@@ -194,3 +194,29 @@ func dockerfileOf(doc map[string]json.RawMessage) string {
 	}
 	return ""
 }
+
+// imageFields are the merged-config fields that decide the image a container
+// is built from.
+var imageFields = []string{"image", "build", "dockerFile", "context", "features"}
+
+// ImageDiff names the entries that decide a container's image and differ
+// between a and b, sorted. Every file entry counts, not only the Dockerfile:
+// a stored record keeps no merged config to find it by, and compose projects
+// are refused before this is asked.
+func ImageDiff(a, b Digest) []string {
+	var out []string
+	for _, k := range imageFields {
+		av, aok := a.Fields[k]
+		bv, bok := b.Fields[k]
+		if aok != bok || av != bv {
+			out = append(out, k)
+		}
+	}
+	for _, k := range sortedUnion(slices.Collect(maps.Keys(a.files)), slices.Collect(maps.Keys(b.files))) {
+		if a.files[k] != b.files[k] {
+			out = append(out, k)
+		}
+	}
+	slices.Sort(out)
+	return out
+}

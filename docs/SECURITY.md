@@ -124,6 +124,8 @@ uncommitted, unfetched or unmerged, and deletes the `NAME/*` refs once it
 passes; `--force` removes it anyway and keeps them. `podman machine reset` or deleting the volume by
 hand loses it without asking.
 
+`dev container create --copy` refuses when either the source or the new container is isolated. An isolated agent can plant hooks, plugins, MCP server commands or git config in its container's image and state volume, so copying either into a guarded container would hand them to an agent that was never isolated, and copying into an isolated container would start its agent from state dev did not write. Nothing flows out of an isolated container into a guarded one, and nothing flows into an isolated one. `--from` on its own still copies only settings that dev wrote, and works with isolated containers.
+
 ## What no mode covers
 
 **Reviewing the agent's commits.** Whatever the agent commits is code you have
