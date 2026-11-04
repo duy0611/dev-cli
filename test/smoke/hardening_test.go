@@ -267,11 +267,7 @@ func TestSmokeIsolated(t *testing.T) {
 	}
 
 	// The identity dev passes into the container, distinct from the fixture's.
-	globalConfig := filepath.Join(t.TempDir(), "gitconfig")
-	if err := os.WriteFile(globalConfig, []byte("[user]\n\tname = agent\n\temail = a@example.com\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
+	hermeticGitIdentity(t, "agent", "a@example.com")
 
 	const name = "dev-smoke-isolated"
 	dev := func(args ...string) string { t.Helper(); return run(t, bin, args...) }
@@ -423,11 +419,7 @@ func TestSmokeGuardedToIsolated(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(project, "untracked.txt"), []byte("new\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	globalConfig := filepath.Join(t.TempDir(), "gitconfig")
-	if err := os.WriteFile(globalConfig, []byte("[user]\n\tname = agent\n\temail = a@example.com\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
+	hermeticGitIdentity(t, "agent", "a@example.com")
 
 	const name = "dev-smoke-to-isolated"
 	dev := func(args ...string) string { t.Helper(); return run(t, bin, args...) }

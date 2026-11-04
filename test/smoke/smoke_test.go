@@ -8,6 +8,7 @@ package smoke
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,6 +31,57 @@ const (
 	containerName = "dev-smoke"
 	providerName  = "dev-smoke-local"
 )
+
+// moduleRoot is where the module lives, taken before TestMain leaves the
+// package directory.
+var moduleRoot string
+
+// TestMain moves the whole run out of the operator's clone. dev asks git for
+// the user's identity from its working directory, so a repo-local user.name or
+// includeIf there would outrank the test's GIT_CONFIG_GLOBAL.
+func TestMain(m *testing.M) {
+	code := 1
+	func() {
+		wd, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return
+		}
+		moduleRoot = filepath.Join(wd, "..", "..")
+		neutral, err := os.MkdirTemp("", "dev-smoke-cwd-")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return
+		}
+		defer func() { _ = os.RemoveAll(neutral) }()
+		if err := os.Chdir(neutral); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return
+		}
+		code = m.Run()
+	}()
+	os.Exit(code)
+}
+
+// hermeticGitIdentity makes the identity dev forwards into a container the one
+// given, whatever the host's git config, environment or cwd say.
+func hermeticGitIdentity(t *testing.T, name, email string) {
+	t.Helper()
+	config := filepath.Join(t.TempDir(), "gitconfig")
+	body := "[user]\n\tname = " + name + "\n\temail = " + email + "\n"
+	if err := os.WriteFile(config, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", config)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_COUNT", "0")
+	// t.Setenv first so the original value is restored; Unsetenv then wins
+	// for the duration of the test.
+	for _, k := range []string{"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"} {
+		t.Setenv(k, "")
+		_ = os.Unsetenv(k)
+	}
+}
 
 func TestSmoke(t *testing.T) {
 	requireBinaries(t, "devcontainer", "docker")
@@ -118,7 +170,8 @@ func buildBinary(t *testing.T) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "dev")
 
-	cmd := exec.Command("go", "build", "-o", bin, "../../cmd/dev")
+	cmd := exec.Command("go", "build", "-o", bin, "./cmd/dev")
+	cmd.Dir = moduleRoot
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("building the binary: %v\n%s", err, out)
