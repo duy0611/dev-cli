@@ -146,7 +146,7 @@ func Render(name string, toolIDs []string, mount Mount, state State) (string, er
 // featuresFor builds the features object for a resolved selection.
 func featuresFor(ids []string) map[string]any {
 	features := map[string]any{}
-	var apt []string
+	var apt, npm []string
 
 	for _, id := range ids {
 		tool, ok := Lookup(id)
@@ -156,6 +156,8 @@ func featuresFor(ids []string) map[string]any {
 		switch {
 		case tool.Apt != "":
 			apt = append(apt, tool.Apt)
+		case tool.Npm != "":
+			npm = append(npm, tool.Npm)
 		case tool.Feature == kubeFeature:
 			// Handled once below: several tools share this reference and a JSON
 			// object cannot hold it twice.
@@ -182,6 +184,9 @@ func featuresFor(ids []string) map[string]any {
 	if len(apt) > 0 {
 		// A comma-separated string, as the feature's option schema declares.
 		features[aptFeature] = map[string]any{"packages": strings.Join(apt, ",")}
+	}
+	if len(npm) > 0 {
+		features[npmPackagesFeature] = map[string]any{"packages": strings.Join(npm, ",")}
 	}
 	return features
 }
@@ -234,6 +239,21 @@ func ToolsOf(config string) ([]string, error) {
 				pkg = strings.TrimSpace(pkg)
 				for _, tool := range catalog {
 					if tool.Apt == pkg && pkg != "" {
+						out = append(out, tool.ID)
+					}
+				}
+			}
+		case npmPackagesFeature:
+			var opts struct {
+				Packages string `json:"packages"`
+			}
+			if err := json.Unmarshal(raw, &opts); err != nil {
+				return nil, fmt.Errorf("reading the stored configuration: %w", err)
+			}
+			for _, pkg := range strings.Split(opts.Packages, ",") {
+				pkg = strings.TrimSpace(pkg)
+				for _, tool := range catalog {
+					if tool.Npm == pkg && pkg != "" {
 						out = append(out, tool.ID)
 					}
 				}

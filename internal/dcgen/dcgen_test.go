@@ -14,11 +14,17 @@ func TestCatalogEntriesAreWellFormed(t *testing.T) {
 		if tool.ID == "" || tool.Summary == "" {
 			t.Errorf("%+v: every entry needs an id and a summary", tool)
 		}
-		if (tool.Feature == "") == (tool.Apt == "") {
-			t.Errorf("%s: exactly one of Feature and Apt must be set", tool.ID)
+		set := 0
+		for _, v := range []string{tool.Feature, tool.Apt, tool.Npm} {
+			if v != "" {
+				set++
+			}
 		}
-		if tool.Apt != "" && tool.Options != nil {
-			t.Errorf("%s: an apt tool has nowhere to put options", tool.ID)
+		if set != 1 {
+			t.Errorf("%s: exactly one of Feature, Apt and Npm must be set", tool.ID)
+		}
+		if (tool.Apt != "" || tool.Npm != "") && tool.Options != nil {
+			t.Errorf("%s: a package tool has nowhere to put options", tool.ID)
 		}
 	}
 }
@@ -467,6 +473,54 @@ func TestRenderWorktreeIsStable(t *testing.T) {
 		}
 		if again != first {
 			t.Fatal("Render is not byte-stable across calls")
+		}
+	}
+}
+
+// opencode owns the npm-package reference, so the ACP adapters go through
+// npm-packages, which takes a list. Both must coexist with opencode.
+func TestACPAdaptersShareOneNpmPackagesFeature(t *testing.T) {
+	ids, err := Resolve([]string{"claude-agent-acp", "codex-acp", "opencode"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if !slices.Contains(ids, "node") {
+		t.Errorf("Resolve = %v, want node pulled in", ids)
+	}
+	cfg, err := Render("acp", ids, Mount{}, State{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	var doc struct {
+		Features map[string]map[string]any `json:"features"`
+	}
+	if err := json.Unmarshal([]byte(cfg), &doc); err != nil {
+		t.Fatal(err)
+	}
+	pkgs, _ := doc.Features[npmPackagesFeature]["packages"].(string)
+	if pkgs != "@agentclientprotocol/claude-agent-acp,@agentclientprotocol/codex-acp" {
+		t.Errorf("packages = %q", pkgs)
+	}
+	if got := doc.Features[npmFeature]["package"]; got != "@opencode/cli" {
+		t.Errorf("opencode package = %v", got)
+	}
+	back, err := ToolsOf(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(back, ids) {
+		t.Errorf("ToolsOf = %v, want %v", back, ids)
+	}
+}
+
+func TestACPAdaptersRequireNode(t *testing.T) {
+	for _, id := range []string{"claude-agent-acp", "codex-acp"} {
+		tool, ok := Lookup(id)
+		if !ok {
+			t.Fatalf("no %s in the catalog", id)
+		}
+		if !slices.Equal(tool.Requires, []string{"node"}) {
+			t.Errorf("%s.Requires = %v, want [node]", id, tool.Requires)
 		}
 	}
 }

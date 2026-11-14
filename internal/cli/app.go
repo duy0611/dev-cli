@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"text/tabwriter"
 	"time"
 
@@ -32,6 +33,9 @@ type app struct {
 	// Built on first use. Tests leave it nil, where it records nothing.
 	auditLog *audit.Log
 	auditOff bool
+
+	archMu sync.Mutex
+	arch   string
 }
 
 // audit returns the log beside the database. A nil Log records nothing, so an

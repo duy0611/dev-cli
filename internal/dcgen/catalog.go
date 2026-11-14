@@ -23,6 +23,11 @@ const (
 	// features map holds one entry per reference, so only one tool using it can
 	// set a package option.
 	npmFeature = "ghcr.io/devcontainers-extra/features/npm-package:1"
+	// npmPackagesFeature installs a comma-separated list of global npm
+	// packages. It is a different reference from npmFeature, so tools that
+	// need it can coexist with opencode, and it takes every such tool in one
+	// entry.
+	npmPackagesFeature = "ghcr.io/devcontainers-extra/features/npm-packages:1"
 )
 
 // Tool is one installable entry in the catalog.
@@ -37,6 +42,9 @@ type Tool struct {
 	Options map[string]any
 	// Apt is the package name, set only when Feature is empty.
 	Apt string
+	// Npm is the package, with no version, set only when the tool installs
+	// through npmPackagesFeature.
+	Npm string
 	// Requires names catalog entries this one cannot work without. They are
 	// added to the selection.
 	Requires []string
@@ -48,8 +56,15 @@ type Tool struct {
 var catalog = []Tool{
 	{ID: "aws", Summary: "AWS CLI", Official: true,
 		Feature: "ghcr.io/devcontainers/features/aws-cli:1"},
+	// The adapter bundles the Claude Agent SDK, so it works without the
+	// claude-code entry. Its package needs node 22 or later, which the node
+	// feature's default (lts) satisfies.
+	{ID: "claude-agent-acp", Summary: "Claude ACP adapter",
+		Npm: "@agentclientprotocol/claude-agent-acp", Requires: []string{"node"}},
 	{ID: "claude-code", Summary: "Claude Code", Official: true,
 		Feature: "ghcr.io/anthropics/devcontainer-features/claude-code:1"},
+	{ID: "codex-acp", Summary: "Codex ACP adapter",
+		Npm: "@agentclientprotocol/codex-acp", Requires: []string{"node"}},
 	// Codex has no official feature, so this is a community one. It pins
 	// nothing.
 	{ID: "codex", Summary: "Codex CLI",

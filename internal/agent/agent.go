@@ -41,6 +41,9 @@ type Agent struct {
 	// standing instruction as a team lead. Nil when the agent has no channel
 	// for one.
 	Lead func(in LeadInput) ([]string, []provider.EnvVar, error)
+	// ACP is the argv that serves the agent over the Agent Client Protocol on
+	// stdio. Nil when no adapter is known.
+	ACP []string
 }
 
 // PromptCommand is the full argv that starts the agent with text as its first
@@ -83,15 +86,18 @@ var registry = map[string]Agent{
 	"claude": {
 		ID: "claude", Binary: "claude", Configure: configureClaude,
 		Prompt: claudePrompt, Resumes: true, Lead: claudeLead,
+		ACP: []string{"claude-agent-acp"},
 	},
 	"opencode": {
 		ID: "opencode", Binary: "opencode", Configure: configureOpencode,
 		Prompt: opencodePrompt, Resumes: true, Lead: opencodeLead,
+		ACP: []string{"opencode", "acp"},
 	},
-	"codex": {ID: "codex", Binary: "codex"},
+	"codex": {ID: "codex", Binary: "codex", ACP: []string{"codex-acp"}},
 	"hermes": {
 		ID: "hermes", Binary: "hermes", Configure: configureHermes,
 		Prompt: hermesPrompt, Resumes: true,
+		ACP: []string{"hermes", "acp"},
 	},
 }
 

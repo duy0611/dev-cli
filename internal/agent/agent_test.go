@@ -60,3 +60,21 @@ func TestIDsAreSorted(t *testing.T) {
 		}
 	}
 }
+
+func TestACPAdapters(t *testing.T) {
+	want := map[string]string{
+		"claude":   "claude-agent-acp",
+		"opencode": "opencode acp",
+		"codex":    "codex-acp",
+		"hermes":   "hermes acp",
+	}
+	for id, argv := range want {
+		ag, err := Lookup(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Join(ag.ACP, " "); got != argv {
+			t.Errorf("%s ACP = %q, want %q", id, got, argv)
+		}
+	}
+}
