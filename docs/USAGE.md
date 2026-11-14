@@ -202,25 +202,24 @@ that container's tools and credentials. The command reference is
 
 The setup, once per container and architecture:
 
-**1. Build the buzz CLI for Linux.** `block/buzz` publishes no Linux build, so
-build one in a Rust container from a clone of the repository:
+**1. Get the buzz CLI for Linux.** `block/buzz` publishes no Linux build, so
+this repository builds one. Run the "buzz CLI" workflow with a `block/buzz` tag,
+branch or commit (the Actions tab, or `gh workflow run buzz-cli.yml -f ref=<tag>`),
+then download the result from the prerelease it publishes:
 
 ```sh
-cd ~/buzz
-podman run --rm -v "$PWD":/src -w /src -e CARGO_TARGET_DIR=/src/target-linux \
-  docker.io/library/rust:1 cargo build --release -p buzz-cli
+gh release download buzz-cli-<ref>-<sha> -R duy0611/dev-cli -p 'buzz-linux-*'
+chmod +x buzz-linux-*
 ```
 
-That builds for the architecture podman runs on, into
-`~/buzz/target-linux/release/buzz`. For the other architecture add
-`--platform linux/amd64` and a separate target directory such as
-`target-linux-amd64`, so the two builds do not overwrite each other.
+The release notes name the commit built. Without GitHub, build it yourself in a
+Rust container (`cargo build --release -p buzz-cli` from a `block/buzz` clone,
+once per architecture, with `--platform linux/amd64` for the other one).
 
 **2. Name the files.** Give each architecture's binary to the workspace:
 
 ```sh
-dev workspace buzz-binary --arm64 ~/buzz/target-linux/release/buzz
-dev workspace buzz-binary --amd64 ~/buzz/target-linux-amd64/release/buzz
+dev workspace buzz-binary --arm64 buzz-linux-arm64 --amd64 buzz-linux-amd64
 ```
 
 A container mounts only the file for its own architecture, read-only, at

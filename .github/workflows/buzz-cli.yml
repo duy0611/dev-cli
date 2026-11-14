@@ -1,0 +1,174 @@
+## Builds the `buzz` CLI from block/buzz for linux/amd64 and linux/arm64 and
+## publishes the two binaries as a release of this repository.
+##
+## `block/buzz` ships no Linux build of its CLI, and a dev container runs it
+## from a host file (`dev workspace buzz-binary --arm64 FILE --amd64 FILE`). This
+## replaces building one by hand in a Rust container. Started by hand only: it
+## compiles a third-party repository at a ref the operator names, so nothing
+## about a push here should trigger it.
+##
+## Each architecture builds on a native runner. Cross-compiling would need a
+## linker and C sysroot per target for no gain, and the arm runner is the same
+## machine class an Apple Silicon engine's VM presents.
+##
+## The release is a prerelease named `buzz-cli-*`, so it never becomes "latest"
+## beside dev's own release-please releases (`v*`). release-please tracks only
+## its own tags, and a tag pushed with GITHUB_TOKEN starts no workflow, so
+## nothing reacts to this one.
+name: buzz CLI
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: A block/buzz tag, branch or commit SHA
+        required: true
+        type: string
+
+# Two runs for one ref would race to create the same release.
+concurrency:
+  group: buzz-cli-${{ inputs.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Pins the ref to one commit before either build starts. Each build resolving
+  # it for itself would let a branch that moves between the two jobs produce an
+  # amd64 and an arm64 binary from different commits under one release.
+  resolve:
+    runs-on: ubuntu-24.04
+    outputs:
+      sha: ${{ steps.r.outputs.sha }}
+      tag: ${{ steps.r.outputs.tag }}
+    steps:
+      - id: r
+        env:
+          REF: ${{ inputs.ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          sha=$(gh api "repos/block/buzz/commits/$REF" --jq .sha)
+          short=${sha:0:12}
+
+          # The tag is the sanitised ref plus the short SHA: the ref says what
+          # the operator asked for, the SHA keeps two builds of a moving branch
+          # apart. A SHA given as the ref would only repeat itself.
+          name=$(printf '%s' "$REF" | tr -c 'A-Za-z0-9._\n-' '-')
+          case "$sha" in
+            "$name"*) tag="buzz-cli-$short" ;;
+            *) tag="buzz-cli-$name-$short" ;;
+          esac
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "$REF -> $sha, release $tag"
+
+  build:
+    needs: resolve
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+            elf: x86-64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            elf: ARM aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: block/buzz
+          ref: ${{ needs.resolve.outputs.sha }}
+
+      # No apt packages: buzz-cli's TLS is rustls, so it needs a C compiler and
+      # nothing else, and the runner image has one. block/buzz's Dockerfile
+      # installs libssl-dev and cmake for the relay's dependencies, not for this
+      # crate.
+      #
+      # rustup is on the runner image, but since 1.28 it no longer installs the
+      # toolchain named in rust-toolchain.toml on first use, so do it
+      # explicitly. `show` installs on older rustup; the fallback covers newer.
+      - name: Install the pinned Rust toolchain
+        run: |
+          set -eu
+          rustup show active-toolchain || rustup toolchain install
+          rustup show active-toolchain
+          cargo --version
+
+      - name: Build
+        run: cargo build --release --locked -p buzz-cli
+
+      - name: Check and name the binary
+        env:
+          ARCH: ${{ matrix.arch }}
+          ELF: ${{ matrix.elf }}
+        run: |
+          set -eu
+          mkdir -p out
+          cp target/release/buzz "out/buzz-linux-$ARCH"
+          # dev refuses a file that is not a 64-bit Linux ELF for the
+          # container's architecture, so fail here rather than at the operator.
+          desc=$(file -b "out/buzz-linux-$ARCH")
+          echo "$desc"
+          case "$desc" in
+            "ELF 64-bit LSB"*"$ELF"*) ;;
+            *) echo "not a linux/$ARCH ELF" >&2; exit 1 ;;
+          esac
+          strip "out/buzz-linux-$ARCH"
+          "out/buzz-linux-$ARCH" --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: buzz-linux-${{ matrix.arch }}
+          path: out/buzz-linux-${{ matrix.arch }}
+          if-no-files-found: error
+
+  publish:
+    needs: [resolve, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # the tag, the release, and uploading to it
+    env:
+      TAG: ${{ needs.resolve.outputs.tag }}
+      SHA: ${{ needs.resolve.outputs.sha }}
+      REF: ${{ inputs.ref }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: out
+          merge-multiple: true
+
+      - name: Publish
+        run: |
+          set -eu
+          cd out
+          chmod +x buzz-linux-*
+          sha256sum buzz-linux-* > SHA256SUMS
+          cat SHA256SUMS
+
+          cat > ../notes.md <<NOTES
+          \`buzz\` CLI built from [block/buzz](https://github.com/block/buzz) ref \`$REF\`, commit \`$SHA\`.
+
+          \`\`\`sh
+          dev workspace buzz-binary --arm64 buzz-linux-arm64 --amd64 buzz-linux-amd64
+          \`\`\`
+          NOTES
+
+          # A rerun for the same ref and commit replaces the files; a new
+          # commit has a new tag. Never latest: that is dev's own releases'.
+          # --target names a commit of this repository, for the tag to point at.
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" -R "$GITHUB_REPOSITORY" \
+              --prerelease --latest=false --notes-file ../notes.md
+            gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber \
+              buzz-linux-amd64 buzz-linux-arm64 SHA256SUMS
+          else
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" --title "buzz CLI $REF ($SHA)" \
+              --prerelease --latest=false --notes-file ../notes.md \
+              buzz-linux-amd64 buzz-linux-arm64 SHA256SUMS
+          fi

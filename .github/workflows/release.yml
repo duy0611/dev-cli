@@ -85,7 +85,7 @@ jobs:
           if [ -n "$TAG" ]; then
             version="${TAG#v}"
           else
-            version="$(git describe --tags --always)"
+            version="$(git describe --tags --match 'v*' --always)"
           fi
           mkdir -p release
 
