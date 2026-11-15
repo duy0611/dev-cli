@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.1](https://github.com/duy0611/dev-cli/compare/v0.22.0...v0.22.1) (2026-11-15)
+
+
+### Bug Fixes
+
+* **ci:** smoke-test the buzz binary with --help, which it supports ([fbd1215](https://github.com/duy0611/dev-cli/commit/fbd1215a2f7ab79076ee55afc40ba203f46551cb))
+
 ## [0.22.0](https://github.com/duy0611/dev-cli/compare/v0.21.0...v0.22.0) (2026-11-15)
 
 
