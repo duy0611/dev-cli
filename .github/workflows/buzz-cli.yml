@@ -118,7 +118,7 @@ jobs:
             *) echo "not a linux/$ARCH ELF" >&2; exit 1 ;;
           esac
           strip "out/buzz-linux-$ARCH"
-          "out/buzz-linux-$ARCH" --version
+          "out/buzz-linux-$ARCH" --help >/dev/null
 
       - uses: actions/upload-artifact@v4
         with:
