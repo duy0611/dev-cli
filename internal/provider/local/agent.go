@@ -34,8 +34,7 @@ func (p *Provider) ForwardAgent(ctx context.Context, c model.Container, agentSoc
 	}
 
 	start := func(ctx context.Context, command []string) (*relay.Pipes, error) {
-		// No env: passing resolved secrets would keep them in the host process
-		// list for the whole session.
+		// No env: the relay needs none.
 		cmd := exec.CommandContext(ctx, devcontainerBin, p.execArgs(c, command)...)
 
 		// StdinPipe, not an io.Pipe on cmd.Stdin: os/exec abandons a plain

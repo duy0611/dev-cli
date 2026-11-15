@@ -19,23 +19,6 @@ func shellJoin(argv []string) string {
 	return strings.Join(quoted, " ")
 }
 
-// envPrefix renders env vars as an `env` invocation, for values exec'd into a
-// pod whose own environment is fixed at start.
-func envPrefix(env []envVar) []string {
-	if len(env) == 0 {
-		return nil
-	}
-	args := []string{"env"}
-	for _, e := range env {
-		args = append(args, e.Key+"="+e.Value)
-	}
-	return args
-}
-
-// envVar mirrors provider.EnvVar, so the shell helpers do not import the
-// provider package.
-type envVar struct{ Key, Value string }
-
 // asRemoteUser wraps argv to run as the remote user. The switch is decided at
 // runtime because whether the pod runs as root depends on the image, which is
 // not inspected here.

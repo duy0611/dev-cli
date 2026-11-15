@@ -2,6 +2,7 @@ package local
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -265,9 +266,20 @@ func TestRebuildWithoutNoCache(t *testing.T) {
 	}
 }
 
-func TestExecPassesEnvAndCommand(t *testing.T) {
+// noValueInArgv fails the test if any recorded call of name carries value.
+func noValueInArgv(t *testing.T, f *fakeBin, name, value string) {
+	t.Helper()
+	for _, argv := range f.argvAll(t, name) {
+		if strings.Contains(strings.Join(argv, " "), value) {
+			t.Errorf("%s argv carries a setting's value, which ps shows: %v", name, argv)
+		}
+	}
+}
+
+func TestExecPassesEnvThroughAFileAndTheCommandLast(t *testing.T) {
 	f := newFakePath(t)
-	f.install(t, devcontainerBin, "", 0)
+	stdin := filepath.Join(f.dir, "exec.stdin")
+	f.installScripted(t, devcontainerBin, `[ "$1" = exec ] && cat >> `+shellQuote(stdin))
 
 	p := &Provider{}
 	err := p.Exec(context.Background(), testContainer(),
@@ -280,13 +292,126 @@ func TestExecPassesEnvAndCommand(t *testing.T) {
 		t.Fatalf("Exec: %v", err)
 	}
 
-	argv := f.argv(t, devcontainerBin)
-	if !contains(argv, []string{"--remote-env", "GREETING=hello"}) {
-		t.Errorf("argv %v is missing the remote env", argv)
+	noValueInArgv(t, f, devcontainerBin, "hello")
+	calls := f.argvAll(t, devcontainerBin)
+	if len(calls) != 2 {
+		t.Fatalf("devcontainer calls = %v, want a write then the command", calls)
+	}
+	if b, _ := os.ReadFile(stdin); string(b) != "GREETING='hello'\n" {
+		t.Errorf("the write's stdin = %q", b)
+	}
+	path := calls[0][len(calls[0])-1]
+	if !strings.HasPrefix(path, "/dev/shm/.dev-env-") || !contains(calls[1], []string{"sh", path}) {
+		t.Errorf("the write %v and the command %v do not share one file", calls[0], calls[1])
 	}
 	// The command must come last, or the CLI reads it as a flag's argument.
+	argv := calls[1]
 	if got := argv[len(argv)-2:]; got[0] != "printenv" || got[1] != "GREETING" {
 		t.Errorf("argv ends with %v, want the command last", got)
+	}
+}
+
+func TestExecWithoutEnvIsOneCall(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, devcontainerBin, "", 0)
+
+	if err := (&Provider{}).Exec(context.Background(), testContainer(), []string{"true"},
+		provider.ExecOpts{Stdout: io.Discard}); err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	if calls := f.argvAll(t, devcontainerBin); len(calls) != 1 {
+		t.Errorf("devcontainer calls = %v, want one", calls)
+	}
+}
+
+// secretsFileStub is a devcontainer that keeps a copy of every --secrets-file
+// it is given, with its mode, since dev deletes the file once the call returns.
+func secretsFileStub(t *testing.T, f *fakeBin) (copyOf, modeOf, pathOf string) {
+	t.Helper()
+	copyOf = filepath.Join(f.dir, "secrets.json")
+	modeOf = filepath.Join(f.dir, "secrets.mode")
+	pathOf = filepath.Join(f.dir, "secrets.path")
+	f.installScripted(t, devcontainerBin, `prev=
+for a in "$@"; do
+  if [ "$prev" = --secrets-file ]; then
+    cp "$a" `+shellQuote(copyOf)+`
+    ls -l "$a" | cut -c1-10 > `+shellQuote(modeOf)+`
+    printf '%s' "$a" > `+shellQuote(pathOf)+`
+  fi
+  prev=$a
+done`)
+	return copyOf, modeOf, pathOf
+}
+
+func TestUpPassesSettingsThroughAPrivateSecretsFile(t *testing.T) {
+	f := newFakePath(t)
+	copyOf, modeOf, pathOf := secretsFileStub(t, f)
+
+	env := []provider.EnvVar{{Key: "TOKEN", Value: "sk-0123456789"}, {Key: "QUOTED", Value: `a "quoted" one`}}
+	if err := (&Provider{}).Up(context.Background(), testContainer(), env); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	noValueInArgv(t, f, devcontainerBin, "sk-0123456789")
+	var got map[string]string
+	b, err := os.ReadFile(copyOf)
+	if err != nil {
+		t.Fatalf("up got no --secrets-file: %v", err)
+	}
+	if err := json.Unmarshal(b, &got); err != nil || got["TOKEN"] != "sk-0123456789" || got["QUOTED"] != `a "quoted" one` || len(got) != 2 {
+		t.Errorf("secrets file = %s (%v)", b, err)
+	}
+	if mode, _ := os.ReadFile(modeOf); strings.TrimSpace(string(mode)) != "-rw-------" {
+		t.Errorf("secrets file mode = %q, want -rw-------", mode)
+	}
+	path, _ := os.ReadFile(pathOf)
+	if _, err := os.Stat(string(path)); !os.IsNotExist(err) {
+		t.Errorf("the secrets file outlived up: %v", err)
+	}
+}
+
+// The CLI masks every occurrence of a secret's value in its log, so a value
+// like "1" would turn each digit of the build output into asterisks. A value
+// that short is no secret worth hiding from ps.
+func TestUpPassesAShortValueAsRemoteEnv(t *testing.T) {
+	f := newFakePath(t)
+	copyOf, _, _ := secretsFileStub(t, f)
+
+	env := []provider.EnvVar{{Key: "TEAMS", Value: "1"}, {Key: "TOKEN", Value: "sk-0123456789"}}
+	if err := (&Provider{}).Up(context.Background(), testContainer(), env); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if !f.calledWith(t, devcontainerBin, []string{"--remote-env", "TEAMS=1"}) {
+		t.Errorf("the short value is not a --remote-env: %v", f.argv(t, devcontainerBin))
+	}
+	var got map[string]string
+	b, _ := os.ReadFile(copyOf)
+	if err := json.Unmarshal(b, &got); err != nil || len(got) != 1 || got["TOKEN"] != "sk-0123456789" {
+		t.Errorf("secrets file = %s (%v)", b, err)
+	}
+}
+
+func TestUpWithOnlyShortValuesPassesNoSecretsFile(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, devcontainerBin, "", 0)
+
+	if err := (&Provider{}).Up(context.Background(), testContainer(), []provider.EnvVar{{Key: "ON", Value: "true"}}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if f.calledWith(t, devcontainerBin, []string{"--secrets-file"}) {
+		t.Errorf("up passed a secrets file for short values only: %v", f.argv(t, devcontainerBin))
+	}
+}
+
+func TestUpWithoutSettingsPassesNoSecretsFile(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, devcontainerBin, "", 0)
+
+	if err := (&Provider{}).Up(context.Background(), testContainer(), nil); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if f.calledWith(t, devcontainerBin, []string{"--secrets-file"}) {
+		t.Errorf("up passed a secrets file with no settings: %v", f.argv(t, devcontainerBin))
 	}
 }
 
@@ -671,6 +796,31 @@ func isolatedContainer(t *testing.T) model.Container {
 
 // On first create, up skips the lifecycle hooks, seeds the folder, then runs
 // them.
+// The hooks a seeding up held back still see the settings, by the same file.
+func TestRunUserCommandsPassesSettingsThroughASecretsFile(t *testing.T) {
+	f := newFakePath(t)
+	copyOf, _, _ := secretsFileStub(t, f)
+	f.install(t, dockerBin, "", 0)
+
+	env := []provider.EnvVar{{Key: "TOKEN", Value: "sk-0123456789"}}
+	if err := (&Provider{}).Up(context.Background(), isolatedContainer(t), env); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	noValueInArgv(t, f, devcontainerBin, "sk-0123456789")
+	if !f.calledWith(t, devcontainerBin, []string{"run-user-commands"}) {
+		t.Fatal("no run-user-commands call")
+	}
+	for _, argv := range f.argvAll(t, devcontainerBin) {
+		if argv[0] == "run-user-commands" && !contains(argv, []string{"--secrets-file"}) {
+			t.Errorf("run-user-commands got no secrets file: %v", argv)
+		}
+	}
+	if b, _ := os.ReadFile(copyOf); !strings.Contains(string(b), `"sk-0123456789"`) {
+		t.Errorf("secrets file = %s", b)
+	}
+}
+
 func TestUpSeedsAnIsolatedContainerBeforeItsLifecycleHooks(t *testing.T) {
 	f := newFakePath(t)
 	f.install(t, devcontainerBin, "", 0)

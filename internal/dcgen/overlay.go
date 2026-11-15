@@ -11,7 +11,7 @@ import (
 // Overlay merges dev's state mount into a project's own devcontainer.json. The
 // --override-config flag replaces the document rather than merging it, so every
 // field dev does not touch is passed through unchanged. Only mounts is
-// rewritten; environment already reaches the container through --remote-env.
+// rewritten; environment already reaches the container on every command.
 //
 // dev owns StateDir while it drives: an existing mount there is replaced,
 // because docker refuses a duplicate mount destination.

@@ -234,7 +234,7 @@ refer to them by number, so the numbers are stable.
     now resolves it instead of risking it. A project whose `devcontainer.json`
     names `dockerComposeFile` does not reliably get the mount applied at all;
     `create` warns rather than silently losing state at the next rebuild. The
-    variables ride `--remote-env` and so reach both commands. k8s ignores all
+    variables are passed on every command and so reach both. k8s ignores all
     of it and grows a PVC subPath instead.
 
     `Remove` deletes the state volume unless `RemoveOpts.KeepState` is set
@@ -432,9 +432,16 @@ The longer form of conventions summarised in `AGENTS.md`.
   `kubectl`. No Docker Go SDK, no client-go, no devcontainer-spec parser.
 - **Check flags and output against the real CLI before using them.**
   `devcontainer` has no `rebuild` subcommand (it is
-  `up --remove-existing-container`); `--secrets-file` exists on `up` but not on
-  `exec`, which is why both local paths use `--remote-env` and accept that
-  values are briefly visible in the host process list; and
+  `up --remove-existing-container`); `--secrets-file` exists on `up` and
+  `run-user-commands` but not on `exec`, so `up` takes the settings in a 0600
+  temp file and every exec, on both providers, gets them through
+  `internal/envfile`: a file written over stdin to the container's `/dev/shm`,
+  which a wrapper reads, deletes and execs past. The CLI masks every
+  occurrence of a secrets-file value in its log, so a value under eight
+  characters (`1`, `true`) still rides `--remote-env` on `up`, or each `1` in
+  the build output would become asterisks. Apart from those, no setting value
+  is on any argv `dev` starts. The CLI still hands lifecycle hooks their env
+  as `docker exec -e`, visible for that hook's length; and
   `read-configuration` emits *plural* merged fields (`onCreateCommands`),
   reports a null `workspaceFolder` when unset, and shells out to `docker ps`
   even to read a file.
