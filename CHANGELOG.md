@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.22.2](https://github.com/duy0611/dev-cli/compare/v0.22.1...v0.22.2) (2026-11-15)
+
+
+### Bug Fixes
+
+* **dcgen:** install npm-packages after the node feature ([6c57ee2](https://github.com/duy0611/dev-cli/commit/6c57ee25d91c537f41fd3a4c1e4ddba457a8ff24))
+* **provider:** keep setting values off the host's process list ([05b929d](https://github.com/duy0611/dev-cli/commit/05b929d003213165b3b442b783ebe7b6cc29acbc))
+
 ## [0.22.1](https://github.com/duy0611/dev-cli/compare/v0.22.0...v0.22.1) (2026-11-15)
 
 
