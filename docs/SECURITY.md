@@ -151,15 +151,23 @@ dev container start-agent NAME --ssh-agent
 
 **Secrets you give it.** Workspace settings are ordinary environment variables
 inside the container. Use keys made for the purpose, with spend limits and
-short expiry where the issuer offers them.
+short expiry where the issuer offers them. On the host, `dev` keeps the values
+off every command line it runs, so `ps` and a cluster's exec audit log do not
+show them: each command writes them over stdin to a `0600` file in the
+container's `/dev/shm`, which is deleted as the command starts. Three gaps
+remain. When a local container starts, a value shorter than eight characters
+is still passed on the command line, since the devcontainer CLI would mask
+every occurrence of it in the build log. A lifecycle hook (`postCreateCommand` and the like) gets them from the
+devcontainer CLI as `docker exec -e`, visible on the host while the hook runs.
+And if `dev` is killed (SIGKILL) between writing the file and starting the
+command, the file stays in `/dev/shm` until the container restarts.
 
 **An ACP agent's Buzz key.** An agent served by `dev container acp` receives its
 own Buzz key, `BUZZ_PRIVATE_KEY`, inside the container, where it can read it.
 That key is the agent's identity, so the agent can act as that agent in Buzz and
 nothing more. The values never appear on the host's process list; see
 [Serve an agent to Buzz Desktop](USAGE.md#serve-an-agent-to-buzz-desktop-experimental).
-If `dev` is killed (SIGKILL) between writing the `0600` env file and the adapter
-starting, that file can remain in the container's `/tmp` until you remove it.
+The same SIGKILL gap applies to its env file.
 
 ## Guarded's known gaps
 

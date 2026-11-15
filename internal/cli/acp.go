@@ -15,6 +15,7 @@ import (
 
 	"github.com/duy0611/dev-cli/internal/acp"
 	"github.com/duy0611/dev-cli/internal/agent"
+	"github.com/duy0611/dev-cli/internal/envfile"
 	"github.com/duy0611/dev-cli/internal/provider"
 	"github.com/duy0611/dev-cli/internal/store"
 	"github.com/duy0611/dev-cli/internal/xpath"
@@ -140,8 +141,8 @@ func runContainerACP(ctx context.Context, a *app, workspace, name, agentID strin
 	var wrapped []string
 	var envPath string
 	if len(secrets) > 0 {
-		envPath = acp.EnvPath()
-		wrapped = acp.Wrapper(envPath, command)
+		envPath = envfile.Path()
+		wrapped = envfile.Wrapper(envPath, command)
 	}
 
 	var traceW io.Writer
@@ -337,13 +338,9 @@ func passedEnv(environ []string, integ *acpIntegration, extra []string) []provid
 // stdin so no process list shows them. The adapter's wrapper reads and deletes
 // it.
 func writeACPEnv(ctx context.Context, t *target, path string, env []provider.EnvVar) error {
-	vars := make([]acp.Var, len(env))
-	for i, e := range env {
-		vars[i] = acp.Var{Key: e.Key, Value: e.Value}
-	}
 	var errBuf bytes.Buffer
-	if err := t.provider.Exec(ctx, t.container, acp.WriteCommand(path), provider.ExecOpts{
-		Stdin: bytes.NewReader(acp.EnvFile(vars)), Stdout: io.Discard, Stderr: &errBuf,
+	if err := t.provider.Exec(ctx, t.container, envfile.WriteCommand(path), provider.ExecOpts{
+		Stdin: bytes.NewReader(envfile.Render(env)), Stdout: io.Discard, Stderr: &errBuf,
 	}); err != nil {
 		return fmt.Errorf("passing variables to %s: %w: %s", t.container.Name, err, strings.TrimSpace(errBuf.String()))
 	}

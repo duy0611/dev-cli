@@ -4,6 +4,7 @@
 package k8s
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/duy0611/dev-cli/internal/envfile"
 	"github.com/duy0611/dev-cli/internal/model"
 	"github.com/duy0611/dev-cli/internal/provider"
 )
@@ -128,26 +130,34 @@ func (p *Provider) Exec(ctx context.Context, c model.Container, command []string
 		return err
 	}
 
-	env := make([]envVar, 0, len(opts.Env))
-	for _, e := range opts.Env {
-		env = append(env, envVar{Key: e.Key, Value: e.Value})
+	execArgs := func(inner []string, interactive, tty bool) []string {
+		args := []string{"exec"}
+		if tty {
+			args = append(args, "-i", "-t")
+		} else if interactive {
+			args = append(args, "-i")
+		}
+		args = append(args, "deployment/"+objectName(c), "--")
+		return append(args, asRemoteUser(dev.RemoteUser, dev.HomeDir(), dev.WorkspaceFolder, inner)...)
 	}
-	inner := append(envPrefix(env), command...)
 
-	args := []string{"exec"}
-	if opts.TTY {
-		args = append(args, "-i", "-t")
-	} else if opts.Stdin != nil {
-		args = append(args, "-i")
+	command, err = envfile.Pass(opts.Env, command, func(argv []string, stdin io.Reader) error {
+		var errBuf bytes.Buffer
+		if err := p.kube.stream(ctx, streamOpts{Stdin: stdin, Stdout: io.Discard, Stderr: &errBuf},
+			execArgs(argv, true, false)...); err != nil {
+			return fmt.Errorf("%w: %s", err, strings.TrimSpace(errBuf.String()))
+		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
-	args = append(args, "deployment/"+objectName(c), "--")
-	args = append(args, asRemoteUser(dev.RemoteUser, dev.HomeDir(), dev.WorkspaceFolder, inner)...)
 
 	return p.kube.stream(ctx, streamOpts{
 		Stdin:  opts.Stdin,
 		Stdout: opts.Stdout,
 		Stderr: opts.Stderr,
-	}, args...)
+	}, execArgs(command, opts.Stdin != nil, opts.TTY)...)
 }
 
 // Stop scales to zero and waits for the pod to go. `kubectl scale` returns

@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -313,12 +314,49 @@ func TestExecTargetsTheDeploymentAndCarriesEnv(t *testing.T) {
 	if !strings.Contains(call, "deployment/"+objectName(c)) {
 		t.Errorf("exec does not target the deployment: %q", call)
 	}
-	if !strings.Contains(call, "GREETING=hello") {
-		t.Errorf("exec did not carry the environment: %q", call)
+	for _, c := range kubectlCalls(t, s) {
+		// The exec's argv is on the host's process list and in the API server's
+		// audit log.
+		if strings.Contains(c, "hello") {
+			t.Errorf("kubectl argv carries a setting's value: %q", c)
+		}
 	}
 	// kubectl exec runs as the image's USER; su -p switches to remoteUser.
 	if !strings.Contains(call, "su -p") {
 		t.Errorf("exec does not honour remoteUser: %q", call)
+	}
+}
+
+// The value goes in on the write's stdin, and the command reads the same file.
+func TestExecPassesEnvThroughAFile(t *testing.T) {
+	s := clusterStubs(t, true)
+	stdin := filepath.Join(s.dir, "exec.stdin")
+	s.installScript(t, kubectlBin, `for a in "$@"; do [ "$a" = exec ] && /bin/cat >> '`+stdin+`' && break; done`)
+	c := k8sContainer(t)
+
+	err := testProvider().Exec(context.Background(), c, []string{"printenv", "GREETING"},
+		provider.ExecOpts{
+			Env:    []provider.EnvVar{{Key: "GREETING", Value: "hello"}},
+			Stdout: io.Discard,
+		})
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+
+	var execs []string
+	for _, c := range kubectlCalls(t, s) {
+		if strings.Contains(c, " exec ") || strings.HasPrefix(c, "exec ") {
+			execs = append(execs, c)
+		}
+	}
+	if len(execs) != 2 {
+		t.Fatalf("exec calls = %q, want a write then the command", execs)
+	}
+	if b, _ := os.ReadFile(stdin); string(b) != "GREETING='hello'\n" {
+		t.Errorf("the write's stdin = %q", b)
+	}
+	if !strings.Contains(execs[0], "/dev/shm/.dev-env-") || !strings.Contains(execs[1], "/dev/shm/.dev-env-") {
+		t.Errorf("the write %q and the command %q do not share one file", execs[0], execs[1])
 	}
 }
 

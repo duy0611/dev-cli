@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/duy0611/dev-cli/internal/dcgen"
+	"github.com/duy0611/dev-cli/internal/envfile"
 	"github.com/duy0611/dev-cli/internal/model"
 	"github.com/duy0611/dev-cli/internal/provider"
 	"github.com/duy0611/dev-cli/internal/seed"
@@ -117,7 +118,12 @@ func (p *Provider) up(ctx context.Context, c model.Container, env []provider.Env
 	if seeding {
 		args = append(args, "--skip-post-create")
 	}
-	args = append(args, remoteEnvArgs(env)...)
+	settings, cleanupSettings, err := settingsArgs(env)
+	if err != nil {
+		return err
+	}
+	defer cleanupSettings()
+	args = append(args, settings...)
 
 	cmd := exec.CommandContext(ctx, devcontainerBin, args...)
 	cmd.Env = upEnv(ctx, os.Environ())
@@ -258,7 +264,12 @@ func (p *Provider) runUserCommands(ctx context.Context, c model.Container, env [
 	if c.OverrideConfigPath != "" {
 		args = append(args, "--override-config", c.OverrideConfigPath)
 	}
-	args = append(args, remoteEnvArgs(env)...)
+	settings, cleanupSettings, err := settingsArgs(env)
+	if err != nil {
+		return err
+	}
+	defer cleanupSettings()
+	args = append(args, settings...)
 	cmd := exec.CommandContext(ctx, devcontainerBin, args...)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = os.Stderr
@@ -301,9 +312,20 @@ func (p *Provider) Exec(ctx context.Context, c model.Container, command []string
 		return fmt.Errorf("no command given")
 	}
 
-	args := p.execArgs(c, command, opts.Env...)
+	command, err := envfile.Pass(opts.Env, command, func(argv []string, stdin io.Reader) error {
+		var errBuf bytes.Buffer
+		cmd := exec.CommandContext(ctx, devcontainerBin, p.execArgs(c, argv)...)
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, io.Discard, &errBuf
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("%w: %s", err, strings.TrimSpace(errBuf.String()))
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
 
-	cmd := exec.CommandContext(ctx, devcontainerBin, args...)
+	cmd := exec.CommandContext(ctx, devcontainerBin, p.execArgs(c, command)...)
 	cmd.Stdin = opts.Stdin
 	cmd.Stdout = opts.Stdout
 	cmd.Stderr = opts.Stderr
@@ -312,7 +334,7 @@ func (p *Provider) Exec(ctx context.Context, c model.Container, command []string
 
 // execArgs builds the argument list for `devcontainer exec`. The agent relay
 // shares it so that it reaches the same container.
-func (p *Provider) execArgs(c model.Container, command []string, env ...provider.EnvVar) []string {
+func (p *Provider) execArgs(c model.Container, command []string) []string {
 	args := []string{"exec", "--workspace-folder", c.Source}
 	args = append(args, idLabelArgs(c)...)
 	// Passed explicitly, as in up: a generated config lives in a temporary
@@ -325,7 +347,6 @@ func (p *Provider) execArgs(c model.Container, command []string, env ...provider
 	if c.OverrideConfigPath != "" {
 		args = append(args, "--override-config", c.OverrideConfigPath)
 	}
-	args = append(args, remoteEnvArgs(env)...)
 	return append(args, command...)
 }
 
@@ -523,15 +544,46 @@ func EngineArch(ctx context.Context) (string, error) {
 	return arch, nil
 }
 
-// remoteEnvArgs renders environment variables as devcontainer CLI arguments.
-// --remote-env values are visible in the host process list for the length of
-// the call. --secrets-file would avoid that, but exists only on up, not exec.
-func remoteEnvArgs(env []provider.EnvVar) []string {
+// minMaskedLen is the shortest value passed by --secrets-file. The CLI masks
+// every occurrence of a secret's value in its log, so a value like "1" would
+// blank out each matching digit of the build output.
+const minMaskedLen = 8
+
+// settingsArgs passes env to up or run-user-commands. Values long enough to be
+// secrets go in a 0600 temp file for --secrets-file, off dev's own argv; the
+// CLI still hands them to each lifecycle hook as docker exec -e, for that
+// hook's length. The rest ride --remote-env.
+func settingsArgs(env []provider.EnvVar) ([]string, func(), error) {
 	var args []string
+	secrets := map[string]string{}
 	for _, e := range env {
-		args = append(args, "--remote-env", e.Key+"="+e.Value)
+		if len(e.Value) < minMaskedLen {
+			args = append(args, "--remote-env", e.Key+"="+e.Value)
+		} else {
+			secrets[e.Key] = e.Value
+		}
 	}
-	return args
+	if len(secrets) == 0 {
+		return args, func() {}, nil
+	}
+	b, err := json.Marshal(secrets)
+	if err != nil {
+		return nil, nil, err
+	}
+	f, err := os.CreateTemp("", "dev-secrets-*.json")
+	if err != nil {
+		return nil, nil, fmt.Errorf("writing the settings for the devcontainer CLI: %w", err)
+	}
+	cleanup := func() { _ = os.Remove(f.Name()) }
+	_, werr := f.Write(b)
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("writing the settings for the devcontainer CLI: %w", werr)
+	}
+	return append(args, "--secrets-file", f.Name()), cleanup, nil
 }
 
 func requireBinary(name string) error {
