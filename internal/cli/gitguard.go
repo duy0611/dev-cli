@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/duy0611/dev-cli/internal/buzzcli"
 	"github.com/duy0611/dev-cli/internal/dcgen"
 	"github.com/duy0611/dev-cli/internal/gitguard"
 	"github.com/duy0611/dev-cli/internal/model"
@@ -28,9 +29,35 @@ type gitGuardPlan struct {
 	fingerprint bool
 	tree        []gitguard.Bind
 	treeWatch   []string
-	// folderTargets are where the extra folders' mounts land. Kept out of the
-	// digest, so adding a folder is not configuration drift.
+	// folderTargets are where the extra folders' mounts and the buzz binary
+	// land. Kept out of the digest, so adding a folder or changing the setting
+	// is not configuration drift.
 	folderTargets []string
+	// buzzErr is why the workspace's buzz file cannot be mounted. Held, not
+	// returned, so only a command that creates the container fails on it.
+	buzzErr error
+}
+
+// requireBuzz reports that a container created from this plan would lack the
+// buzz CLI the workspace names. Called where a container is created: create,
+// rebuild and a start the engine has no container for.
+func (p gitGuardPlan) requireBuzz() error { return p.buzzErr }
+
+// requireBuzzIfCreating is requireBuzz for a start. Starting a container the
+// engine already has keeps the mounts it was created with, so an unusable
+// file is no reason to refuse.
+func requireBuzzIfCreating(ctx context.Context, p provider.Provider, c model.Container, plan gitGuardPlan) error {
+	if plan.buzzErr == nil {
+		return nil
+	}
+	status, err := p.Status(ctx, c)
+	if err != nil {
+		return err
+	}
+	if status != model.StatusAbsent {
+		return nil
+	}
+	return plan.buzzErr
 }
 
 // ownTargets are the container paths of the tree and folder mounts, which
@@ -73,6 +100,15 @@ func (a *app) planGitGuard(ctx context.Context, c model.Container, worktreeRepo 
 	folderEntries, folderTargets := folderMounts(c)
 	plan.mounts = append(plan.mounts, folderEntries...)
 	plan.folderTargets = folderTargets
+	// An unusable file is held in plan.buzzErr and left unmounted: it only
+	// matters to the commands that create the container.
+	buzz, err := a.buzzMount(ctx, c, overrides)
+	if err != nil {
+		plan.buzzErr = err
+	} else if buzz != "" {
+		plan.mounts = append(plan.mounts, buzz)
+		plan.folderTargets = append(plan.folderTargets, buzzcli.Target)
+	}
 	// A Kubernetes workspace is a copy host git never reads.
 	if len(scopes) == 0 || !overrides {
 		return plan, nil

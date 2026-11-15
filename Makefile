@@ -15,7 +15,7 @@ SHELL := /bin/bash
 
 BIN     := dist/dev
 PREFIX  ?= $(HOME)/.local
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+VERSION ?= $(shell git describe --tags --match 'v*' --always --dirty 2>/dev/null || echo dev)
 
 # CGO off on purpose: the SQLite driver is modernc.org/sqlite, which is pure Go,
 # so the build needs no C toolchain and the result is one static binary.

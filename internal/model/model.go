@@ -29,7 +29,24 @@ type Workspace struct {
 	// SSHForward forwards the host's SSH agent into the containers for the
 	// length of one dev command.
 	SSHForward bool
-	CreatedAt  time.Time
+	// BuzzArm64 and BuzzAmd64 are host files, one per container architecture,
+	// holding the buzz CLI to mount into the workspace's containers. Empty when
+	// none is set.
+	BuzzArm64 string
+	BuzzAmd64 string
+	CreatedAt time.Time
+}
+
+// BuzzBinary is the host file set for the architecture ("arm64" or "amd64"),
+// or "".
+func (w Workspace) BuzzBinary(arch string) string {
+	switch arch {
+	case "arm64":
+		return w.BuzzArm64
+	case "amd64":
+		return w.BuzzAmd64
+	}
+	return ""
 }
 
 // Setting is one environment variable a workspace contributes to its

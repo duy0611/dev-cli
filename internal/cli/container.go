@@ -43,6 +43,7 @@ func newContainerCmd(a *app) *cobra.Command {
 		newContainerShellCmd(a),
 		newContainerExecCmd(a),
 		newContainerStartAgentCmd(a),
+		newContainerACPCmd(a),
 		newContainerStartAgentTeamCmd(a),
 		newContainerTeamCmd(a),
 		newContainerSyncCmd(a),
@@ -862,6 +863,9 @@ func (a *app) start(ctx context.Context, workspace string, c model.Container) er
 	if overridesConfig(p) {
 		c.GitGuardMounts = plan.mounts
 	}
+	if err := requireBuzzIfCreating(ctx, p, c, plan); err != nil {
+		return err
+	}
 	// Stopped containers keep the mounts they were created with.
 	if err := a.checkTreeMounts(ctx, p, c, plan); err != nil {
 		return err
@@ -1148,6 +1152,9 @@ func newContainerRebuildCmd(a *app) *cobra.Command {
 				}
 			}
 			if err := t.requireOverride(a); err != nil {
+				return err
+			}
+			if err := t.gitGuard.requireBuzz(); err != nil {
 				return err
 			}
 			if err := requireFolders(t.container); err != nil {

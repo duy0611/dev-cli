@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/duy0611/dev-cli/internal/buzzcli"
 	"github.com/duy0611/dev-cli/internal/model"
 	"github.com/duy0611/dev-cli/internal/store"
 	"github.com/duy0611/dev-cli/internal/xpath"
@@ -26,6 +27,7 @@ func newWorkspaceCmd(a *app) *cobra.Command {
 		newWorkspaceSetCmd(a),
 		newWorkspaceUnsetCmd(a),
 		newWorkspaceShowCmd(a),
+		newWorkspaceBuzzCmd(a),
 		newWorkspaceRemoveCmd(a),
 	)
 	return cmd
@@ -413,6 +415,11 @@ func runWorkspaceShow(a *app, name string) error {
 	// Printed unconditionally: this command says what a container launches
 	// with.
 	a.printf("ssh agent %s\n", onOff(ws.SSHForward))
+	for _, arch := range buzzcli.Arches {
+		if f := ws.BuzzBinary(arch); f != "" {
+			a.printf("buzz %-5s %s\n", arch, f)
+		}
+	}
 	if len(settings) == 0 {
 		a.printf("settings  none\n")
 		return nil

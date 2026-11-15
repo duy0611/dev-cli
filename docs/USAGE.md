@@ -8,6 +8,7 @@ command. For what `dev` *is* and how it fits together, read the
   - [First setup](#first-setup)
   - [Run an agent on a project](#run-an-agent-on-a-project)
   - [Run an agent team (experimental)](#run-an-agent-team-experimental)
+  - [Serve an agent to Buzz Desktop (experimental)](#serve-an-agent-to-buzz-desktop-experimental)
   - [A scratch sandbox with no project](#a-scratch-sandbox-with-no-project)
   - [A project that ships no devcontainer config](#a-project-that-ships-no-devcontainer-config)
   - [Change what a generated container installs](#change-what-a-generated-container-installs)
@@ -178,6 +179,108 @@ without a word.
 The local provider is what this is built for. The team commands reach inside the
 container only through `Provider.Exec`, so nothing depends on how the provider
 runs one; the k8s provider is experimental either way.
+
+### Serve an agent to Buzz Desktop (experimental)
+
+> **Experimental.** The command, its flags and its output may change without a
+> migration. Buzz v0 is the one client this is built and tested against: Buzz
+> Desktop 0.5.x with buzz-acp from `block/buzz`, on a self-hosted relay.
+
+Without `--integration`, `dev container acp` is a plain ACP agent that any ACP
+client can start: Zed, JetBrains IDEs, VS Code extensions, Neovim and Emacs
+plugins, acpx. Point the client's custom-agent command at
+`dev container acp NAME --workspace W`. Everything below about Buzz applies
+with `--integration buzz`.
+
+`dev container acp` serves a container's agent over the Agent Client Protocol
+on stdin and stdout. Buzz Desktop starts it the way it starts any harness: the
+agent's ACP adapter runs inside the container, its protocol travels over the
+pipes, and everything `dev` itself prints goes to stderr. An agent set up this
+way answers @mentions in a Buzz channel, doing its work in the container with
+that container's tools and credentials. The command reference is
+[container](#container).
+
+The setup, once per container and architecture:
+
+**1. Get the buzz CLI for Linux.** `block/buzz` publishes no Linux build, so
+this repository builds one. Run the "buzz CLI" workflow with a `block/buzz` tag,
+branch or commit (the Actions tab, or `gh workflow run buzz-cli.yml -f ref=<tag>`),
+then download the result from the prerelease it publishes:
+
+```sh
+gh release download buzz-cli-<ref>-<sha> -R duy0611/dev-cli -p 'buzz-linux-*'
+chmod +x buzz-linux-*
+```
+
+The release notes name the commit built. Without GitHub, build it yourself in a
+Rust container (`cargo build --release -p buzz-cli` from a `block/buzz` clone,
+once per architecture, with `--platform linux/amd64` for the other one).
+
+**2. Name the files.** Give each architecture's binary to the workspace:
+
+```sh
+dev workspace buzz-binary --arm64 buzz-linux-arm64 --amd64 buzz-linux-amd64
+```
+
+A container mounts only the file for its own architecture, read-only, at
+`/usr/local/bin/buzz`. See [dev workspace buzz-binary](#workspace).
+
+**3. Install the adapter and rebuild.** The buzz mount is applied at create or
+rebuild, not when the setting changes, so one rebuild does both. For a generated
+container, add the adapter's catalog entry (`node` comes with it); for a
+project's own configuration, add the adapter to its `devcontainer.json` and run
+`dev container rebuild api`. `acp` checks that the adapter is on the
+container's `PATH` and, if not, names the configuration to change.
+
+```sh
+dev container rebuild api --tools +claude-agent-acp
+```
+
+**4. Write the harness.** Save the generic script once; it serves every
+container:
+
+```sh
+mkdir -p ~/.local/bin
+dev container acp --integration buzz --print-harness > ~/.local/bin/dev-acp
+chmod +x ~/.local/bin/dev-acp
+```
+
+The script runs this `dev` by its absolute path and reads which container to
+serve from the agent's environment. Rerun it when you move `dev` or change the
+flags given to `--print-harness`.
+
+**5. Set up the agent in Desktop.**
+
+- Leave **ACP command** as Buzz ACP. The harness is not the ACP command.
+- Register one custom harness pointing at `~/.local/bin/dev-acp`. The harness
+  goes in the agent **runtime**.
+- For each agent, set these in the agent's environment variables:
+  `DEV_ACP_CONTAINER` (the container name) and `DEV_ACP_WORKSPACE`, and
+  optionally `DEV_ACP_AGENT` (default `claude`) and `DEV_ACP_TRACE` (default
+  `/tmp/acp-<container>.log`). The script exits 2 naming the first of the
+  two required ones that is missing.
+- Create the agent and start it.
+- @mention it in a channel.
+
+`dev container acp api --integration buzz --print-harness` (with a NAME) prints
+a fixed script for that one container instead. Neither script sets `PATH`:
+Desktop starts harnesses with the login-shell `PATH`.
+
+**Lifecycle.** Starting the agent in Desktop runs `dev container acp`, which
+starts the container if it is stopped and launches the adapter. Stopping the
+agent closes the adapter's stdin, and the adapter and `dev` exit. Two things
+follow:
+
+- Stopping the container kills the adapter. buzz-acp restarts it, and that
+  restart starts the container again. **To stop a container for good, stop its
+  agents in Desktop first.**
+- A rebuild kills running agents. buzz-acp brings them back once the container
+  is up.
+
+`acp` never sets a container up: an unknown name is an error, as for
+`start-agent`. It does re-create an engine container whose record exists but
+whose engine container is gone, as `start-agent` does. Desktop is the only
+record of which agents run.
 
 ### Review an agent's changes (experimental)
 
@@ -1558,6 +1661,7 @@ dev workspace list
 dev workspace set KEY SPEC
 dev workspace unset KEY
 dev workspace show NAME
+dev workspace buzz-binary [--arm64 FILE] [--amd64 FILE] [--workspace NAME]
 dev workspace remove NAME
 ```
 
@@ -1593,6 +1697,18 @@ it is the command you read before trusting what a container will launch with,
 and it should not depend on a pointer set somewhere else. It prints specs, never
 values.
 
+`buzz-binary` (experimental) names the host files holding the `buzz` CLI, one
+per container architecture, since `block/buzz` publishes no Linux build. A
+container mounts the file for its own architecture, read-only, at
+`/usr/local/bin/buzz` when it is created or rebuilt, so a change applies only
+then; it is not configuration drift. The architecture is the engine's, or
+`DOCKER_DEFAULT_PLATFORM` when set. A file that is missing or is not a 64-bit
+Linux ELF for its architecture is refused when set and again at create and
+rebuild, by name. No file for the container's architecture means no mount. With
+no flag it prints what is set; an empty value (`--amd64 ''`) clears one. A
+Kubernetes workspace refuses it: a pod has no host mounts, so put `buzz` in the
+image.
+
 `remove` is refused while the workspace holds containers, running or not.
 Removing the active workspace leaves none active rather than a dangling pointer.
 
@@ -1623,6 +1739,9 @@ dev container start-agent-team NAME --lead claude|opencode [--lead-model MODEL]
                                 --workers claude|opencode --worker ROLE=MODEL
                                 [--worker-max-turns N] [--worker-timeout DURATION]
                                 [--agent-name NAME] [--kube-token] [--ssh-agent|--no-ssh-agent] [-- ARGS...]
+dev container acp [NAME] [--workspace W] [--agent claude|codex|hermes|opencode] [--pass-env NAME]...
+                       [--integration buzz] [--ssh-agent|--no-ssh-agent] [--trace FILE] [--print-harness]
+                       [-- COMMAND [ARGS...]]
 dev container team list NAME [--run ID]
 dev container team logs NAME [--run ID] [--task ID] [-f]
 dev container sync NAME
@@ -1876,6 +1995,72 @@ or `none`, and adds `, not yet applied` while an apply is still owed and
 `, invalid` when a start or rebuild would refuse the file as it stands. Stdout
 carries the document alone, so the command pipes into `jq`. Live status stays
 with `container list`.
+
+**`acp`** (experimental) serves the container's agent over ACP on stdin and
+stdout; the setup is in [Serve an agent to Buzz Desktop](#serve-an-agent-to-buzz-desktop-experimental).
+It starts a stopped container and re-creates an engine container that is gone
+but whose record exists, as `start-agent` does; it never creates one that was
+never set up with `dev container create`. A re-creation without the configured
+buzz file is refused, naming the file. Stdout carries nothing but protocol. The adapter must be in
+the image: if it is not, `acp` fails naming it and the project's configuration,
+with no rebuild offer.
+
+| Flag | Meaning |
+|---|---|
+| `--agent` | `claude`, `codex`, `hermes` or `opencode`; default `claude`. Selects the adapter in the table below |
+| `--workspace` | workspace to act on; default the active one |
+| `--integration` | add behaviour for one ACP client; only `buzz`, anything else is exit 2. Without it the command is a plain ACP agent. See the table below |
+| `--pass-env` | pass this host variable, by exact name; repeatable. A pattern is exit 2. With no `--integration`, only these are passed |
+| `--trace` | append every protocol message, after rewriting, to this file, created `0600`. It holds the conversation, so keep it private |
+| `--print-harness` | print a script that runs this command, then exit. With NAME: a fixed script for that container, after checking it exists. Without NAME: a generic script that reads `DEV_ACP_CONTAINER`, `DEV_ACP_WORKSPACE`, and optionally `DEV_ACP_AGENT` and `DEV_ACP_TRACE`; `--agent` and `--trace` then set the defaults for the last two. Carries `--integration`, `--pass-env` and the ssh flags given. Touches no container |
+| `--ssh-agent`, `--no-ssh-agent` | as on `start-agent` |
+| `--kube-token` | refused, exit 2: it asks for a cluster and namespace at a terminal, and stdin here is the protocol. Use `start-agent --kube-token` |
+| `-- COMMAND` | run this in place of the agent's adapter. The adapter's own environment still applies |
+
+| `--agent` | Adapter (argv in the container) | Also set | Catalog entry |
+|---|---|---|---|
+| `claude` | `claude-agent-acp` | `CLAUDE_AGENT_ACP_PROTOCOL=v1` with `--integration buzz` only | `claude-agent-acp` |
+| `codex` | `codex-acp` | | `codex-acp` |
+| `opencode` | `opencode acp` | | `opencode` |
+| `hermes` | `hermes acp` | | `hermes`; the catalog entry does not install hermes's `acp` extra, so `hermes acp` works only if the upstream installer includes it |
+
+**`--integration buzz`** adds:
+
+| Behaviour | Without `--integration` |
+|---|---|
+| passes `BUZZ_PRIVATE_KEY`, `BUZZ_AUTH_TAG`, `BUZZ_RELAY_URL`, `BUZZ_OUTPUT_FORMAT` when set, plus `--pass-env` | only `--pass-env` names |
+| sets `CLAUDE_AGENT_ACP_PROTOCOL=v1` for the `claude` agent | no pin |
+| warns when no `buzz` CLI is on the container's `PATH` | no check |
+
+The Claude pin exists because buzz-acp and `claude-agent-acp` implement
+different drafts of protocol v2; drop it when they agree.
+
+**What reaches the agent.** Each `--pass-env` name and, with
+`--integration buzz`, `BUZZ_PRIVATE_KEY`, `BUZZ_AUTH_TAG`, `BUZZ_RELAY_URL` and
+`BUZZ_OUTPUT_FORMAT`, from `dev`'s own environment and only when set. Values pass unchanged. They never go on a
+command line: `dev` writes them to a private file in the container, over a
+separate exec's stdin, and the adapter's launch reads and deletes that file
+before it execs the adapter. The file is created exclusively with mode `0600`,
+under `/tmp`, and exists only from the write until that read. Stderr names each
+variable passed, never its value.
+
+**Paths.** Host folder paths in the protocol map to container paths and back,
+as whole paths, inside prose and `file://` URIs alike. The folders are the
+primary (for a guarded container, the repository root, which may be above the
+folder you named) and each extra folder. A session whose `cwd` is no folder of
+the container, which is what Buzz sends for its own working directory, starts in
+the container's workspace folder, with a line on stderr.
+
+**What is dropped.** At `initialize` the client's filesystem and terminal
+capabilities are removed, so the agent uses the container's own. The client's
+MCP servers run on your machine, so they are replaced with none. An
+`additionalDirectories` entry outside the container's folders is dropped. Each
+drop is logged on stderr.
+
+**The relay URL.** `BUZZ_RELAY_URL` passes to the agent unchanged, so the relay must be reachable from inside the container. A relay on your machine's `127.0.0.1` is not: that address is the container's own.
+
+With `--integration buzz`, if no `buzz` is on the container's `PATH`, `acp` warns on stderr and starts the
+agent anyway. The agent then cannot reply in Buzz.
 
 ### worktree
 

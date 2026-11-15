@@ -153,6 +153,14 @@ dev container start-agent NAME --ssh-agent
 inside the container. Use keys made for the purpose, with spend limits and
 short expiry where the issuer offers them.
 
+**An ACP agent's Buzz key.** An agent served by `dev container acp` receives its
+own Buzz key, `BUZZ_PRIVATE_KEY`, inside the container, where it can read it.
+That key is the agent's identity, so the agent can act as that agent in Buzz and
+nothing more. The values never appear on the host's process list; see
+[Serve an agent to Buzz Desktop](USAGE.md#serve-an-agent-to-buzz-desktop-experimental).
+If `dev` is killed (SIGKILL) between writing the `0600` env file and the adapter
+starting, that file can remain in the container's `/tmp` until you remove it.
+
 ## Guarded's known gaps
 
 Guarded protects everything inside `.git`. It does not protect the files

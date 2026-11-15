@@ -22,6 +22,12 @@ green tick means what a clean local run means. The smoke job runs the local
 provider against the runner's Docker; its Kubernetes half skips there, since CI
 has no cluster or registry to name.
 
+`buzz-cli.yml` is a manual workflow that builds `block/buzz`'s CLI at a chosen
+ref on native amd64 and arm64 runners and publishes both binaries as a
+`buzz-cli-*` prerelease, never "latest", for `dev workspace buzz-binary`.
+release-please ignores those tags, and `git describe` in the Makefile and
+`release.yml` matches `v*` only, so they cannot leak into `dev`'s version.
+
 ## Structure
 
 `internal/cli` orchestrates; the work lives in the packages it calls. A command

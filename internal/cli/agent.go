@@ -102,6 +102,13 @@ type launchOpts struct {
 	// onStart runs once every check has passed, immediately before the agent
 	// starts; an error aborts the launch.
 	onStart func() error
+	// stdin and stdout, when set, replace the terminal: the agent runs without
+	// a TTY and speaks over them.
+	stdin  io.Reader
+	stdout io.Writer
+	// binary, when set, is the executable the presence check looks for instead
+	// of the agent's own, and a missing one is an error with no rebuild offer.
+	binary string
 }
 
 // launchAgent brings t's container up to the point of running argv as an
@@ -128,6 +135,13 @@ func (a *app) launchAgent(ctx context.Context, t *target, ag agent.Agent, argv [
 		if err := requireFolders(t.container); err != nil {
 			return err
 		}
+		// Up on an absent container creates it, which must carry the buzz CLI
+		// the workspace names.
+		if status == model.StatusAbsent {
+			if err := t.gitGuard.requireBuzz(); err != nil {
+				return err
+			}
+		}
 		if err := t.provider.Up(ctx, t.container, environ); err != nil {
 			return err
 		}
@@ -143,7 +157,12 @@ func (a *app) launchAgent(ctx context.Context, t *target, ag agent.Agent, argv [
 		}
 	}
 
-	if err := a.ensureAgentPresent(ctx, t, ag, environ); err != nil {
+	if o.binary != "" {
+		if !binaryInstalled(ctx, t, o.binary) {
+			return fmt.Errorf("%s is not installed in %s's image; add it to %s and rebuild",
+				o.binary, t.container.Name, t.container.ConfigPath)
+		}
+	} else if err := a.ensureAgentPresent(ctx, t, ag, environ); err != nil {
 		return err
 	}
 
@@ -182,13 +201,17 @@ func (a *app) launchAgent(ctx context.Context, t *target, ag agent.Agent, argv [
 	execEnv = append(execEnv, environ...)
 	execEnv = append(execEnv, o.env...)
 	err = a.guardedRun(ctx, t, func() error {
-		return t.provider.Exec(ctx, t.container, argv, provider.ExecOpts{
+		opts := provider.ExecOpts{
 			Env:    execEnv,
 			TTY:    true,
 			Stdin:  os.Stdin,
 			Stdout: os.Stdout,
 			Stderr: os.Stderr,
-		})
+		}
+		if o.stdout != nil {
+			opts.TTY, opts.Stdin, opts.Stdout = false, o.stdin, o.stdout
+		}
+		return t.provider.Exec(ctx, t.container, argv, opts)
 	})
 	recorded := argv
 	if o.auditArgv != nil {
@@ -248,6 +271,15 @@ func (a *app) ensureAgentPresent(ctx context.Context, t *target, ag agent.Agent,
 func agentInstalled(ctx context.Context, t *target, ag agent.Agent) bool {
 	err := t.provider.Exec(ctx, t.container,
 		[]string{"sh", "-c", "command -v " + ag.Binary},
+		provider.ExecOpts{Stdout: io.Discard, Stderr: io.Discard})
+	return err == nil
+}
+
+// binaryInstalled is agentInstalled for an arbitrary name, passed as an
+// argument so a command given after -- cannot inject shell.
+func binaryInstalled(ctx context.Context, t *target, binary string) bool {
+	err := t.provider.Exec(ctx, t.container,
+		[]string{"sh", "-c", `command -v "$1"`, "sh", binary},
 		provider.ExecOpts{Stdout: io.Discard, Stderr: io.Discard})
 	return err == nil
 }

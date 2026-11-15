@@ -484,16 +484,43 @@ func upEnv(ctx context.Context, environ []string) []string {
 			return environ
 		}
 	}
-	out, err := output(ctx, dockerBin, "version", "--format", "{{.Server.Os}}/{{.Server.Arch}}")
+	platform, err := enginePlatform(ctx)
 	if err != nil {
 		return environ
+	}
+	return append(environ, platformEnv+"="+platform)
+}
+
+// enginePlatform is the engine's os/arch, validated to be one word each.
+func enginePlatform(ctx context.Context) (string, error) {
+	out, err := output(ctx, dockerBin, "version", "--format", "{{.Server.Os}}/{{.Server.Arch}}")
+	if err != nil {
+		return "", err
 	}
 	platform := strings.TrimSpace(out)
 	osName, arch, ok := strings.Cut(platform, "/")
 	if !ok || osName == "" || arch == "" || strings.ContainsAny(platform, " \t\n") || strings.Contains(arch, "/") {
-		return environ
+		return "", fmt.Errorf("the engine reported the platform %q", platform)
 	}
-	return append(environ, platformEnv+"="+platform)
+	return platform, nil
+}
+
+// EngineArch is the architecture containers are built for: the operator's
+// DOCKER_DEFAULT_PLATFORM, else the engine's own, as upEnv pins it.
+func EngineArch(ctx context.Context) (string, error) {
+	platform := os.Getenv(platformEnv)
+	if platform == "" {
+		var err error
+		if platform, err = enginePlatform(ctx); err != nil {
+			return "", fmt.Errorf("finding the container architecture: %w", err)
+		}
+	}
+	_, arch, ok := strings.Cut(platform, "/")
+	if !ok {
+		return platform, nil
+	}
+	arch, _, _ = strings.Cut(arch, "/")
+	return arch, nil
 }
 
 // remoteEnvArgs renders environment variables as devcontainer CLI arguments.

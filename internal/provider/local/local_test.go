@@ -1018,3 +1018,35 @@ func TestRebuildWithSeedReportsAFailedHookAsALifecycleError(t *testing.T) {
 		}
 	}
 }
+
+func TestEngineArchAsksTheEngine(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, dockerBin, "linux/arm64\n", 0)
+	t.Setenv(platformEnv, "")
+
+	got, err := EngineArch(context.Background())
+	if err != nil || got != "arm64" {
+		t.Errorf("EngineArch = %q, %v; want arm64", got, err)
+	}
+}
+
+func TestEngineArchHonoursTheOperatorsPlatform(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, dockerBin, "linux/arm64\n", 0)
+	t.Setenv(platformEnv, "linux/amd64")
+
+	got, err := EngineArch(context.Background())
+	if err != nil || got != "amd64" {
+		t.Errorf("EngineArch = %q, %v; want amd64", got, err)
+	}
+}
+
+func TestEngineArchFailsWhenTheEngineAnswersNothing(t *testing.T) {
+	f := newFakePath(t)
+	f.install(t, dockerBin, "", 1)
+	t.Setenv(platformEnv, "")
+
+	if got, err := EngineArch(context.Background()); err == nil {
+		t.Errorf("EngineArch = %q with no answer, want an error", got)
+	}
+}

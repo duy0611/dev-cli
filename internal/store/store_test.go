@@ -763,3 +763,25 @@ func TestSetContainerModeOnAMissingContainer(t *testing.T) {
 		t.Errorf("SetContainerMode on a missing container = %v, want ErrNotFound", err)
 	}
 }
+
+func TestSetBuzzBinariesRoundTrips(t *testing.T) {
+	s := openTest(t)
+	seed(t, s)
+	ws, err := s.GetWorkspace("ws")
+	if err != nil || ws.BuzzArm64 != "" || ws.BuzzAmd64 != "" {
+		t.Fatalf("new workspace = %+v, %v; want no buzz binaries", ws, err)
+	}
+	if err := s.SetBuzzBinaries("ws", "/a/arm", "/a/amd"); err != nil {
+		t.Fatal(err)
+	}
+	ws, err = s.GetWorkspace("ws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ws.BuzzBinary("arm64") != "/a/arm" || ws.BuzzBinary("amd64") != "/a/amd" {
+		t.Errorf("stored %q and %q", ws.BuzzArm64, ws.BuzzAmd64)
+	}
+	if err := s.SetBuzzBinaries("nope", "", ""); !errors.Is(err, ErrNotFound) {
+		t.Errorf("unknown workspace: err = %v, want ErrNotFound", err)
+	}
+}

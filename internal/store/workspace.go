@@ -72,16 +72,28 @@ func (s *Store) CloneWorkspace(src string, w model.Workspace) (int, error) {
 	return int(n), nil
 }
 
+// SetBuzzBinaries replaces the workspace's buzz CLI host paths. An empty path
+// clears that architecture.
+func (s *Store) SetBuzzBinaries(workspace, arm64, amd64 string) error {
+	res, err := s.db.Exec(
+		`UPDATE workspaces SET buzz_arm64 = ?, buzz_amd64 = ? WHERE name = ?`,
+		arm64, amd64, workspace)
+	if err != nil {
+		return fmt.Errorf("setting the buzz binaries on workspace %s: %w", workspace, err)
+	}
+	return requireOneRow(res, ErrNotFound)
+}
+
 func (s *Store) GetWorkspace(name string) (model.Workspace, error) {
 	row := s.db.QueryRow(
-		`SELECT name, provider_name, ssh_forward, created_at
+		`SELECT name, provider_name, ssh_forward, buzz_arm64, buzz_amd64, created_at
 		 FROM workspaces WHERE name = ?`, name)
 	return scanWorkspace(row)
 }
 
 func (s *Store) ListWorkspaces() ([]model.Workspace, error) {
 	rows, err := s.db.Query(
-		`SELECT name, provider_name, ssh_forward, created_at
+		`SELECT name, provider_name, ssh_forward, buzz_arm64, buzz_amd64, created_at
 		 FROM workspaces ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("listing workspaces: %w", err)
@@ -182,7 +194,7 @@ func scanWorkspace(sc scanner) (model.Workspace, error) {
 		ssh       int
 		createdAt string
 	)
-	if err := sc.Scan(&w.Name, &w.ProviderName, &ssh, &createdAt); err != nil {
+	if err := sc.Scan(&w.Name, &w.ProviderName, &ssh, &w.BuzzArm64, &w.BuzzAmd64, &createdAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return model.Workspace{}, ErrNotFound
 		}

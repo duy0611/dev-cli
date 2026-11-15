@@ -24,6 +24,8 @@ operator. Module `github.com/duy0611/dev-cli`; version in
   wherever the two appear side by side.
 - `dev diff` is **experimental** too: its commands, flags and review file may
   change without a migration.
+- `dev container acp` and `dev workspace buzz-binary` are **experimental** too:
+  their commands, flags and behaviour may change without a migration.
 
 ## Git in the dev container
 
@@ -80,6 +82,8 @@ internal/kubetoken/   minting a ServiceAccount token into a kubeconfig
 internal/env/         assembles the env a container launches with
 internal/agent/       which agents exist, how to invoke and configure them
 internal/agentcfg/    reading a project's agents.yaml
+internal/acp/         the ACP bridge: path and capability rewrites, the env file for an adapter
+internal/buzzcli/     the host-built buzz CLI: ELF check and its read-only mount entry
 internal/audit/       the append-only audit log
 internal/dcconfig/    locating a project's .devcontainer config
 internal/dcgen/       generating one: the tool catalog, render, overlays
