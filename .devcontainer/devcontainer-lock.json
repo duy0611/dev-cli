@@ -15,6 +15,11 @@
       "resolved": "ghcr.io/devcontainers-extra/features/npm-package@sha256:ee315c064588643e1178eec33275efa55739f43761fc965b95a5d05eed70c76d",
       "integrity": "sha256:ee315c064588643e1178eec33275efa55739f43761fc965b95a5d05eed70c76d"
     },
+    "ghcr.io/devcontainers-extra/features/npm-packages:1": {
+      "version": "1.0.1",
+      "resolved": "ghcr.io/devcontainers-extra/features/npm-packages@sha256:0851cc312204f4044f22230986134026409565f9e632d8ab2b8c639e81cedd7c",
+      "integrity": "sha256:0851cc312204f4044f22230986134026409565f9e632d8ab2b8c639e81cedd7c"
+    },
     "ghcr.io/devcontainers/features/github-cli:1": {
       "version": "1.1.2",
       "resolved": "ghcr.io/devcontainers/features/github-cli@sha256:7c409bf6316ffd85f04fd92fba85a744282639e603417dd4796409866bdb6805",

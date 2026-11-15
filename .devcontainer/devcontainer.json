@@ -18,6 +18,9 @@
     "ghcr.io/devcontainers-extra/features/npm-package:1": {
       "package": "@opencode/cli"
     },
+    "ghcr.io/devcontainers-extra/features/npm-packages:1": {
+      "packages": "@agentclientprotocol/claude-agent-acp"
+    },
     "ghcr.io/devcontainers/features/github-cli:1": {},
     "ghcr.io/devcontainers/features/node:2": {}
   },
@@ -25,6 +28,9 @@
     "source=dev-cli-state,target=/var/dev-state,type=volume"
   ],
   "name": "dev-cli",
+  "overrideFeatureInstallOrder": [
+    "ghcr.io/devcontainers/features/node"
+  ],
   "postCreateCommand": "sudo chown vscode:vscode /var/dev-state && mise install",
   "remoteUser": "vscode"
 }
