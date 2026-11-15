@@ -266,6 +266,14 @@ flags given to `--print-harness`.
 a fixed script for that one container instead. Neither script sets `PATH`:
 Desktop starts harnesses with the login-shell `PATH`.
 
+**Podman.** Desktop does not read your shell's environment, so a `DOCKER_HOST`
+exported in `.zshrc` never reaches the harness. `docker` then falls back to its
+active context, usually `desktop-linux`, and the agent fails at start with
+`Cannot connect to the Docker daemon at unix:///Users/…/.docker/run/docker.sock`.
+Make the engine part of the docker config instead, which every `docker`
+process reads: `docker context use podman`. The `podman` context exists once
+Podman's machine is set up (`docker context ls`).
+
 **Lifecycle.** Starting the agent in Desktop runs `dev container acp`, which
 starts the container if it is stopped and launches the adapter. Stopping the
 agent closes the adapter's stdin, and the adapter and `dev` exit. Two things
