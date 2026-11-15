@@ -513,6 +513,24 @@ func TestACPAdaptersShareOneNpmPackagesFeature(t *testing.T) {
 	}
 }
 
+// npm-packages declares no installsAfter, so without an explicit order it runs
+// before the node feature and fails installing node on its own.
+func TestNpmPackagesInstallsAfterNode(t *testing.T) {
+	cfg, err := Render("acp", []string{"claude-agent-acp"}, Mount{}, State{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	var doc struct {
+		Order []string `json:"overrideFeatureInstallOrder"`
+	}
+	if err := json.Unmarshal([]byte(cfg), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(doc.Order, []string{"ghcr.io/devcontainers/features/node"}) {
+		t.Errorf("overrideFeatureInstallOrder = %v, want [ghcr.io/devcontainers/features/node]", doc.Order)
+	}
+}
+
 func TestACPAdaptersRequireNode(t *testing.T) {
 	for _, id := range []string{"claude-agent-acp", "codex-acp"} {
 		tool, ok := Lookup(id)

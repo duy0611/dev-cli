@@ -130,6 +130,11 @@ func Render(name string, toolIDs []string, mount Mount, state State) (string, er
 	}
 	if features := featuresFor(ids); len(features) > 0 {
 		doc["features"] = features
+		if _, ok := features[npmPackagesFeature]; ok {
+			// Left to run first, it finds no npm and installs node through a
+			// nested copy of the node feature that lacks its scripts directory.
+			doc["overrideFeatureInstallOrder"] = []string{nodeFeatureID}
+		}
 	}
 
 	var buf bytes.Buffer

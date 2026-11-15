@@ -26,8 +26,11 @@ const (
 	// npmPackagesFeature installs a comma-separated list of global npm
 	// packages. It is a different reference from npmFeature, so tools that
 	// need it can coexist with opencode, and it takes every such tool in one
-	// entry.
+	// entry. It declares no installsAfter, so Render orders it after node.
 	npmPackagesFeature = "ghcr.io/devcontainers-extra/features/npm-packages:1"
+	// nodeFeatureID is the node feature without its tag, the form
+	// overrideFeatureInstallOrder matches on.
+	nodeFeatureID = "ghcr.io/devcontainers/features/node"
 )
 
 // Tool is one installable entry in the catalog.
@@ -85,7 +88,7 @@ var catalog = []Tool{
 	{ID: "mise", Summary: "Mise",
 		Feature: "ghcr.io/devcontainers-extra/features/mise:1"},
 	{ID: "node", Summary: "Node.js", Official: true,
-		Feature: "ghcr.io/devcontainers/features/node:2"},
+		Feature: nodeFeatureID + ":2"},
 	// @opencode/cli, not opencode-ai: 1.x embeds a Bun that crashes under
 	// docker exec and kubectl exec, and 2.x is on npm only.
 	{ID: "opencode", Summary: "OpenCode agent", Feature: npmFeature,
