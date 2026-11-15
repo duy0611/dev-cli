@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.22.0](https://github.com/duy0611/dev-cli/compare/v0.21.0...v0.22.0) (2026-11-15)
+
+
+### Features
+
+* **acp:** serve a container's agent to ACP clients ([1435bfe](https://github.com/duy0611/dev-cli/commit/1435bfe1f718c67e7f548de7289c12df72f34c9a))
+* agent acp buzz integration ([c95b29a](https://github.com/duy0611/dev-cli/commit/c95b29a74e803f9aac77ceb7479ead7aed5d7855))
+
 ## [0.21.0](https://github.com/duy0611/dev-cli/compare/v0.20.0...v0.21.0) (2026-11-04)
 
 
