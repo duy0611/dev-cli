@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.3](https://github.com/duy0611/dev-cli/compare/v0.22.2...v0.22.3) (2026-11-16)
+
+
+### Bug Fixes
+
+* **dcgen:** install claude-code through npm on the node feature ([4aff4d9](https://github.com/duy0611/dev-cli/commit/4aff4d97189c2008072848cb16d7773f517415af))
+
 ## [0.22.2](https://github.com/duy0611/dev-cli/compare/v0.22.1...v0.22.2) (2026-11-15)
 
 
