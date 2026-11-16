@@ -542,3 +542,41 @@ func TestACPAdaptersRequireNode(t *testing.T) {
 		}
 	}
 }
+
+// The vendor feature installs Node 18 when none is present, and npm then
+// resolves an old Claude Code. Installing through npm-packages pulls in the
+// node feature's lts first.
+func TestClaudeCodeInstallsThroughNpmOnNode(t *testing.T) {
+	ids, err := Resolve([]string{"claude-code"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if !slices.Contains(ids, "node") {
+		t.Errorf("Resolve = %v, want node pulled in", ids)
+	}
+	cfg, err := Render("cc", ids, Mount{}, State{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	var doc struct {
+		Features map[string]map[string]any `json:"features"`
+	}
+	if err := json.Unmarshal([]byte(cfg), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if pkgs, _ := doc.Features[npmPackagesFeature]["packages"].(string); pkgs != "@anthropic-ai/claude-code" {
+		t.Errorf("packages = %q", pkgs)
+	}
+	for ref := range doc.Features {
+		if strings.Contains(ref, "anthropics/devcontainer-features") {
+			t.Errorf("vendor feature %s still present", ref)
+		}
+	}
+	back, err := ToolsOf(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(back, ids) {
+		t.Errorf("ToolsOf = %v, want %v", back, ids)
+	}
+}

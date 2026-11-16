@@ -64,8 +64,10 @@ var catalog = []Tool{
 	// feature's default (lts) satisfies.
 	{ID: "claude-agent-acp", Summary: "Claude ACP adapter",
 		Npm: "@agentclientprotocol/claude-agent-acp", Requires: []string{"node"}},
+	// Not the vendor feature: without node it installs Node 18, and npm then
+	// resolves an old Claude Code release.
 	{ID: "claude-code", Summary: "Claude Code", Official: true,
-		Feature: "ghcr.io/anthropics/devcontainer-features/claude-code:1"},
+		Npm: "@anthropic-ai/claude-code", Requires: []string{"node"}},
 	{ID: "codex-acp", Summary: "Codex ACP adapter",
 		Npm: "@agentclientprotocol/codex-acp", Requires: []string{"node"}},
 	// Codex has no official feature, so this is a community one. It pins
