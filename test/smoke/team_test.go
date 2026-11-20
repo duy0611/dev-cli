@@ -129,11 +129,14 @@ func TestSmokeAgentTeam(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("team list shows %d tasks, want exactly 1:\n%v", len(rows), rows)
 	}
-	if got := rows[0][1]; got != "coder" {
+	if got := rows[0]["ROLE"]; got != "coder" {
 		t.Errorf("task role = %q, want %q", got, "coder")
 	}
-	if got := rows[0][2]; got != "done" {
+	if got := rows[0]["STATUS"]; got != "done" {
 		t.Errorf("task status = %q, want %q", got, "done")
+	}
+	if got := rows[0]["TITLE"]; got == "" || got == "-" {
+		t.Errorf("task title = %q, want one derived from the task text", got)
 	}
 
 	logs := dev("container", "team", "logs", name)
@@ -180,15 +183,55 @@ func TestStartAgentTeamRefusesAnUnsupportedLead(t *testing.T) {
 	}
 }
 
-// teamTaskRows returns the task rows of `team list`'s table: a row starts with
-// an id of the shape the store hands out, "t" and digits.
-func teamTaskRows(out string) [][]string {
-	var rows [][]string
+// teamTaskRows returns the task rows of `team list`'s table, each keyed by its
+// column header. Titles hold spaces, so cells are cut at the header's offsets
+// (in runes: the table pads by rune count and a title may end in "…") rather
+// than split on whitespace. A row starts with an id of the shape the store
+// hands out, "t" and digits.
+func teamTaskRows(out string) []map[string]string {
+	var names []string
+	var starts []int
+	var rows []map[string]string
 	for _, line := range strings.Split(out, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) >= 3 && isTaskID(fields[0]) {
-			rows = append(rows, fields)
+		if names == nil {
+			if strings.HasPrefix(line, "ID") && strings.Contains(line, "ROLE") &&
+				strings.Contains(line, "TITLE") && strings.Contains(line, "STATUS") {
+				inWord := false
+				for i, r := range []rune(line) {
+					switch {
+					case r != ' ' && !inWord:
+						names = append(names, "")
+						starts = append(starts, i)
+						inWord = true
+					case r == ' ':
+						inWord = false
+					}
+				}
+				for i := range names {
+					end := len([]rune(line))
+					if i+1 < len(starts) {
+						end = starts[i+1]
+					}
+					names[i] = strings.TrimSpace(string([]rune(line)[starts[i]:end]))
+				}
+			}
+			continue
 		}
+		fields := strings.Fields(line)
+		if len(fields) == 0 || !isTaskID(fields[0]) {
+			continue
+		}
+		cells := []rune(line)
+		row := make(map[string]string, len(names))
+		for i, name := range names {
+			from := min(starts[i], len(cells))
+			to := len(cells)
+			if i+1 < len(starts) {
+				to = min(starts[i+1], len(cells))
+			}
+			row[name] = strings.TrimSpace(string(cells[from:to]))
+		}
+		rows = append(rows, row)
 	}
 	return rows
 }
