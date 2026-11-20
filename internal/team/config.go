@@ -23,6 +23,7 @@ const (
 type Tool struct {
 	ID    string `json:"id"`
 	Model string `json:"model,omitempty"`
+	Tier  Tier   `json:"tier,omitempty"`
 }
 
 // Config is the team a launch was asked for, as written to <run>/config.json.
@@ -30,6 +31,7 @@ type Config struct {
 	Lead     Tool            `json:"lead"`
 	Workers  string          `json:"workers"`
 	Models   map[Role]string `json:"models"`
+	Tiers    map[Role]Tier   `json:"tiers,omitempty"`
 	MaxTurns int             `json:"max_turns"`
 	Timeout  time.Duration   `json:"timeout"`
 }
@@ -55,24 +57,24 @@ func (r Role) ReadOnly() bool {
 // Edits reports whether the role changes the project, so at most one runs at a time.
 func (r Role) Edits() bool { return r == RoleCoder || r == RoleTester }
 
-// ParseWorkers parses repeated --worker ROLE=MODEL values. The model is passed
-// through untouched, so a value may itself contain '='.
+// ParseWorkers parses repeated --worker ROLE[=MODEL] values. A bare ROLE takes
+// its default tier. The model is passed through untouched, so a value may
+// itself contain '='; tier names are resolved later, not here.
 func ParseWorkers(specs []string) (map[Role]string, error) {
 	models := make(map[Role]string, len(specs))
 	for _, spec := range specs {
 		name, model, ok := strings.Cut(spec, "=")
-		if !ok {
-			return nil, fmt.Errorf("invalid --worker %q: want ROLE=MODEL", spec)
-		}
 		if name == "" {
 			return nil, fmt.Errorf("invalid --worker %q: role is empty", spec)
-		}
-		if model == "" {
-			return nil, fmt.Errorf("invalid --worker %q: model is empty", spec)
 		}
 		role := Role(name)
 		if !role.Valid() {
 			return nil, fmt.Errorf("invalid --worker %q: unknown role %q", spec, name)
+		}
+		if !ok {
+			model = string(DefaultTier(role))
+		} else if model == "" {
+			return nil, fmt.Errorf("invalid --worker %q: model is empty", spec)
 		}
 		if _, repeated := models[role]; repeated {
 			return nil, fmt.Errorf("invalid --worker %q: role %q given more than once", spec, name)

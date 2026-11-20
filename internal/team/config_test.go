@@ -1,6 +1,7 @@
 package team
 
 import (
+	"encoding/json"
 	"maps"
 	"slices"
 	"strings"
@@ -45,8 +46,13 @@ func TestParseWorkers(t *testing.T) {
 			wantErr: "=x",
 		},
 		{
-			name:    "no equals",
-			specs:   []string{"coder"},
+			name:    "unknown bare role",
+			specs:   []string{"qa"},
+			wantErr: "qa",
+		},
+		{
+			name:    "repeated bare role",
+			specs:   []string{"coder", "coder=x"},
 			wantErr: "coder",
 		},
 		{
@@ -217,5 +223,35 @@ func TestRoleLocks(t *testing.T) {
 	}
 	if Role("qa").Valid() {
 		t.Error(`Role("qa").Valid() = true`)
+	}
+}
+
+func TestParseWorkersBareRole(t *testing.T) {
+	got, err := ParseWorkers([]string{"coder", "architect"})
+	if err != nil {
+		t.Fatalf("ParseWorkers: %v", err)
+	}
+	want := map[Role]string{RoleCoder: "medium", RoleArchitect: "large"}
+	if !maps.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+	if _, err := ParseWorkers([]string{"coder="}); err == nil {
+		t.Error("coder= should still be an error")
+	}
+}
+
+func TestConfigLoadsWithoutTiers(t *testing.T) {
+	old := `{"lead":{"id":"claude","model":"opus"},"workers":"opencode",
+"models":{"researcher":"a/b","coder":"c/d","reviewer":"e/f"},
+"max_turns":30,"timeout":1800000000000}`
+	var c Config
+	if err := json.Unmarshal([]byte(old), &c); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if c.Tiers != nil || c.Lead.Tier != "" {
+		t.Errorf("tiers = %v, lead tier = %q, want none", c.Tiers, c.Lead.Tier)
 	}
 }
