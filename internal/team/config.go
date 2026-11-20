@@ -3,6 +3,7 @@ package team
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -11,9 +12,11 @@ import (
 type Role string
 
 const (
-	RoleCoder      Role = "coder"
-	RoleReviewer   Role = "reviewer"
 	RoleResearcher Role = "researcher"
+	RoleArchitect  Role = "architect"
+	RoleCoder      Role = "coder"
+	RoleTester     Role = "tester"
+	RoleReviewer   Role = "reviewer"
 )
 
 // Tool is an agent CLI, optionally pinned to a model.
@@ -36,11 +39,21 @@ const (
 	DefaultTimeout  = 30 * time.Minute
 )
 
-var roleOrder = []Role{RoleCoder, RoleReviewer, RoleResearcher}
+var roleOrder = []Role{RoleResearcher, RoleArchitect, RoleCoder, RoleTester, RoleReviewer}
 
-func (r Role) valid() bool {
-	return r == RoleCoder || r == RoleReviewer || r == RoleResearcher
+// AllRoles returns every role in the fixed order a task flows through them.
+func AllRoles() []Role { return slices.Clone(roleOrder) }
+
+// Valid reports whether r is a built-in role.
+func (r Role) Valid() bool { return slices.Contains(roleOrder, r) }
+
+// ReadOnly reports whether the worker tool is locked out of editing files.
+func (r Role) ReadOnly() bool {
+	return r == RoleResearcher || r == RoleArchitect || r == RoleReviewer
 }
+
+// Edits reports whether the role changes the project, so at most one runs at a time.
+func (r Role) Edits() bool { return r == RoleCoder || r == RoleTester }
 
 // ParseWorkers parses repeated --worker ROLE=MODEL values. The model is passed
 // through untouched, so a value may itself contain '='.
@@ -58,7 +71,7 @@ func ParseWorkers(specs []string) (map[Role]string, error) {
 			return nil, fmt.Errorf("invalid --worker %q: model is empty", spec)
 		}
 		role := Role(name)
-		if !role.valid() {
+		if !role.Valid() {
 			return nil, fmt.Errorf("invalid --worker %q: unknown role %q", spec, name)
 		}
 		if _, repeated := models[role]; repeated {
@@ -79,11 +92,11 @@ func (c Config) Validate() error {
 	if err := validateTool("worker", c.Workers); err != nil {
 		return err
 	}
-	if n := len(c.Models); n < 1 || n > 3 {
-		return fmt.Errorf("team has %d workers, want 1 to 3", n)
+	if n := len(c.Models); n < 1 || n > len(roleOrder) {
+		return fmt.Errorf("team has %d workers, want 1 to 5", n)
 	}
 	for role := range c.Models {
-		if !role.valid() {
+		if !role.Valid() {
 			return fmt.Errorf("unknown worker role %q", role)
 		}
 	}
@@ -104,8 +117,7 @@ func validateTool(kind, id string) error {
 	return fmt.Errorf("%s tool %q cannot join a team: only claude and opencode run unattended workers", kind, id)
 }
 
-// Roles returns the roles present in the team, in the fixed coder, reviewer,
-// researcher order.
+// Roles returns the roles present in the team, in the fixed AllRoles order.
 func (c Config) Roles() []Role {
 	roles := make([]Role, 0, len(c.Models))
 	for _, role := range roleOrder {

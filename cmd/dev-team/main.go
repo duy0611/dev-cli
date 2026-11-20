@@ -138,10 +138,13 @@ func runStart(args []string, stdin io.Reader, stdout, stderr io.Writer, env []st
 		return fail(stderr, exitUsage, "start takes one role, got %d arguments", len(positional))
 	}
 	role := team.Role(positional[0])
-	switch role {
-	case team.RoleCoder, team.RoleReviewer, team.RoleResearcher:
-	default:
-		return fail(stderr, exitUsage, "unknown role %q: want coder, reviewer or researcher", role)
+	if !role.Valid() {
+		names := make([]string, 0, len(team.AllRoles()))
+		for _, r := range team.AllRoles() {
+			names = append(names, string(r))
+		}
+		last := len(names) - 1
+		return fail(stderr, exitUsage, "unknown role %q: want %s or %s", role, strings.Join(names[:last], ", "), names[last])
 	}
 	if *retry != "" {
 		if err := validTaskID(*retry); err != nil {

@@ -104,13 +104,13 @@ func (r Run) Start(role Role, text, retryOf string, self string) (Task, error) {
 		}
 	}
 
-	if role == RoleCoder {
-		other, running, err := r.runningCoder("")
+	if role.Edits() {
+		other, running, err := r.runningEditor("")
 		if err != nil {
 			return Task{}, err
 		}
 		if running {
-			return Task{}, coderRunningError(other.ID)
+			return Task{}, editorRunningError(other)
 		}
 	}
 
@@ -132,18 +132,18 @@ func (r Run) Start(role Role, text, retryOf string, self string) (Task, error) {
 		return Task{}, err
 	}
 	taskCreatedHook()
-	if role == RoleCoder {
+	if role.Edits() {
 		// The pre-check and NewTask are not atomic: a concurrent start may have
 		// created a lower id between them, so re-check now that ours is visible.
-		other, running, err := r.runningCoder(task.ID)
+		other, running, err := r.runningEditor(task.ID)
 		if err != nil {
 			return Task{}, err
 		}
 		if running {
-			if err := r.failTask(task.ID, "refused: coder "+other.ID+" is running"); err != nil {
+			if err := r.failTask(task.ID, "refused: "+string(other.Role)+" "+other.ID+" is running"); err != nil {
 				return Task{}, err
 			}
-			return Task{}, coderRunningError(other.ID)
+			return Task{}, editorRunningError(other)
 		}
 	}
 
@@ -194,15 +194,15 @@ func validTaskID(id string) error {
 	return nil
 }
 
-func coderRunningError(id string) error {
-	return fmt.Errorf("a coder is already running as task %s; wait for it to finish", id)
+func editorRunningError(t Task) error {
+	return fmt.Errorf("a %s is already running as task %s; wait for it to finish", t.Role, t.ID)
 }
 
-// runningCoder returns a coder whose supervisor is alive. A running record
+// runningEditor returns an editor (coder or tester) whose supervisor is alive. A running record
 // whose supervisor is gone is marked failed instead of blocking the gate
 // forever. With olderThan set only a lower id counts: of two concurrent starts,
 // the higher id is the one that must yield.
-func (r Run) runningCoder(olderThan string) (Task, bool, error) {
+func (r Run) runningEditor(olderThan string) (Task, bool, error) {
 	tasks, err := r.List()
 	if err != nil {
 		return Task{}, false, err
@@ -212,7 +212,7 @@ func (r Run) runningCoder(olderThan string) (Task, bool, error) {
 		limit, _ = taskNumber(olderThan)
 	}
 	for _, task := range tasks {
-		if task.Role != RoleCoder || task.Status != StatusRunning {
+		if !task.Role.Edits() || task.Status != StatusRunning {
 			continue
 		}
 		if limit > 0 {

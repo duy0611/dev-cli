@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseWorkers(t *testing.T) {
@@ -27,6 +28,11 @@ func TestParseWorkers(t *testing.T) {
 				RoleReviewer:   "c/d",
 				RoleResearcher: "e/f",
 			},
+		},
+		{
+			name:  "architect and tester",
+			specs: []string{"architect=x", "tester=y"},
+			want:  map[Role]string{RoleArchitect: "x", RoleTester: "y"},
 		},
 		{
 			name:    "empty model",
@@ -144,7 +150,18 @@ func TestRolesOrder(t *testing.T) {
 				RoleCoder:      "a/b",
 				RoleReviewer:   "c/d",
 			},
-			want: []Role{RoleCoder, RoleReviewer, RoleResearcher},
+			want: []Role{RoleResearcher, RoleCoder, RoleReviewer},
+		},
+		{
+			name: "all five",
+			models: map[Role]string{
+				RoleReviewer:   "a",
+				RoleTester:     "b",
+				RoleCoder:      "c",
+				RoleArchitect:  "d",
+				RoleResearcher: "e",
+			},
+			want: []Role{RoleResearcher, RoleArchitect, RoleCoder, RoleTester, RoleReviewer},
 		},
 		{
 			name:   "one role",
@@ -160,5 +177,45 @@ func TestRolesOrder(t *testing.T) {
 				t.Errorf("Roles() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestValidateWorkerCount(t *testing.T) {
+	base := Config{Lead: Tool{ID: "claude"}, Workers: "claude", MaxTurns: 1, Timeout: time.Minute}
+	all := map[Role]string{}
+	for _, r := range AllRoles() {
+		all[r] = "m"
+	}
+	c := base
+	c.Models = all
+	if err := c.Validate(); err != nil {
+		t.Errorf("five workers: %v", err)
+	}
+	c.Models = map[Role]string{}
+	err := c.Validate()
+	if err == nil || !strings.Contains(err.Error(), "team has 0 workers, want 1 to 5") {
+		t.Errorf("zero workers error = %v, want 'team has 0 workers, want 1 to 5'", err)
+	}
+}
+
+func TestRoleLocks(t *testing.T) {
+	readOnly := []Role{RoleResearcher, RoleArchitect, RoleReviewer}
+	edits := []Role{RoleCoder, RoleTester}
+	if got := AllRoles(); !slices.Equal(got, []Role{RoleResearcher, RoleArchitect, RoleCoder, RoleTester, RoleReviewer}) {
+		t.Fatalf("AllRoles() = %v", got)
+	}
+	for _, r := range AllRoles() {
+		if !r.Valid() {
+			t.Errorf("%s.Valid() = false", r)
+		}
+		if got, want := r.ReadOnly(), slices.Contains(readOnly, r); got != want {
+			t.Errorf("%s.ReadOnly() = %v, want %v", r, got, want)
+		}
+		if got, want := r.Edits(), slices.Contains(edits, r); got != want {
+			t.Errorf("%s.Edits() = %v, want %v", r, got, want)
+		}
+	}
+	if Role("qa").Valid() {
+		t.Error(`Role("qa").Valid() = true`)
 	}
 }

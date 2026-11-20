@@ -130,12 +130,27 @@ func TestRunDirComesFromEnv(t *testing.T) {
 
 func TestUnknownRole(t *testing.T) {
 	env := []string{"DEV_TEAM_RUN=" + newRunDir(t, map[team.Role]string{team.RoleCoder: "haiku"})}
-	res := runCLI(t, env, "task", "start", "reviewerr")
+	res := runCLI(t, env, "", "start", "reviewerr")
 	if res.code != 2 {
 		t.Fatalf("exit = %d, want 2; stderr = %q", res.code, res.stderr)
 	}
-	if !strings.Contains(res.stderr, "reviewerr") {
-		t.Errorf("stderr = %q, want it to name the role", res.stderr)
+	want := `unknown role "reviewerr": want researcher, architect, coder, tester or reviewer`
+	if !strings.Contains(res.stderr, want) {
+		t.Errorf("stderr = %q, want it to contain %q", res.stderr, want)
+	}
+}
+
+func TestStartAcceptsArchitectAndTester(t *testing.T) {
+	for _, role := range []string{"architect", "tester"} {
+		t.Run(role, func(t *testing.T) {
+			dir := newRunDir(t, map[team.Role]string{team.Role(role): "haiku"})
+			t.Setenv("DEV_TEAM_RUN", dir)
+			t.Setenv("PATH", stubClaude(t))
+			res := runCLI(t, os.Environ(), "a task", "start", role)
+			if res.code != 0 {
+				t.Fatalf("exit = %d, want 0; stderr = %q", res.code, res.stderr)
+			}
+		})
 	}
 }
 

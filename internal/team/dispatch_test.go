@@ -809,6 +809,98 @@ func TestResearcherAlongsideCoderAllowed(t *testing.T) {
 	}
 }
 
+func startRunning(t *testing.T, h *harness, role Role, id string) {
+	t.Helper()
+	task := h.task(role, "running", t.TempDir())
+	if task.ID != id {
+		t.Fatalf("task id = %s, want %s", task.ID, id)
+	}
+	task.Pid = os.Getpid()
+	if err := h.run.Save(task); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+}
+
+func allRolesHarness(t *testing.T) *harness {
+	t.Helper()
+	models := map[Role]string{}
+	for _, r := range AllRoles() {
+		models[r] = "haiku"
+	}
+	return newHarness(t, testConfig(models))
+}
+
+func TestEditorRefusedWhileOtherEditorRuns(t *testing.T) {
+	for _, tt := range []struct{ running, start Role }{
+		{RoleCoder, RoleTester},
+		{RoleTester, RoleCoder},
+		{RoleTester, RoleTester},
+	} {
+		t.Run(string(tt.running)+"/"+string(tt.start), func(t *testing.T) {
+			h := allRolesHarness(t)
+			startRunning(t, h, tt.running, "t1")
+			_, err := h.run.Start(tt.start, "go", "", writeSelf(t))
+			want := "a " + string(tt.running) + " is already running as task t1; wait for it to finish"
+			if err == nil || err.Error() != want {
+				t.Errorf("error = %v, want %q", err, want)
+			}
+		})
+	}
+}
+
+func TestTesterRefusedWhileCoderRuns(t *testing.T) {
+	h := allRolesHarness(t)
+	startRunning(t, h, RoleCoder, "t1")
+	_, err := h.run.Start(RoleTester, "go", "", writeSelf(t))
+	if err == nil || err.Error() != "a coder is already running as task t1; wait for it to finish" {
+		t.Errorf("error = %v", err)
+	}
+}
+
+func TestCoderRefusedWhileTesterRuns(t *testing.T) {
+	h := allRolesHarness(t)
+	startRunning(t, h, RoleTester, "t1")
+	_, err := h.run.Start(RoleCoder, "go", "", writeSelf(t))
+	if err == nil || err.Error() != "a tester is already running as task t1; wait for it to finish" {
+		t.Errorf("error = %v", err)
+	}
+}
+
+func TestReviewerAlongsideTesterAllowed(t *testing.T) {
+	h := allRolesHarness(t)
+	startRunning(t, h, RoleTester, "t1")
+	if _, err := h.run.Start(RoleReviewer, "look", "", writeSelf(t)); err != nil {
+		t.Errorf("Start reviewer alongside a tester: %v", err)
+	}
+}
+
+func TestArchitectAlongsideCoderAllowed(t *testing.T) {
+	h := allRolesHarness(t)
+	startRunning(t, h, RoleCoder, "t1")
+	if _, err := h.run.Start(RoleArchitect, "design", "", writeSelf(t)); err != nil {
+		t.Errorf("Start architect alongside a coder: %v", err)
+	}
+}
+
+func TestDeadTesterDoesNotBlockCoder(t *testing.T) {
+	h := allRolesHarness(t)
+	dead := h.task(RoleTester, "dead", t.TempDir())
+	dead.Pid = deadPid(t)
+	if err := h.run.Save(dead); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	next, err := h.run.Start(RoleCoder, "next", "", writeSelf(t))
+	if err != nil {
+		t.Fatalf("Start coder after a dead tester: %v", err)
+	}
+	if next.Status != StatusRunning {
+		t.Errorf("coder status = %q, want running", next.Status)
+	}
+	if got := h.load(dead.ID); got.Status != StatusFailed {
+		t.Errorf("dead tester status = %q, want failed", got.Status)
+	}
+}
+
 func TestRetryBoundedAtThreeAttempts(t *testing.T) {
 	h := newHarness(t, testConfig(map[Role]string{RoleCoder: "haiku"}))
 	argvFile := filepath.Join(t.TempDir(), "argv")

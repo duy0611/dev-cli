@@ -96,7 +96,7 @@ func TestInstructionCarriesTheRules(t *testing.T) {
 		instructionTestDispatch + " takeover ID --reason",
 		instructionTestDispatch + " list",
 		instructionTestDispatch + " start ROLE --retry ID",
-		"\n" + instructionTestDispatch + " start coder <<'EOF'\n",
+		"\n" + instructionTestDispatch + " start researcher <<'EOF'\n",
 		"\nEOF\n",
 	} {
 		if !strings.Contains(got, want) {
