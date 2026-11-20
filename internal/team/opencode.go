@@ -21,6 +21,7 @@ type opencodePermission struct {
 
 type opencodeAgentConfig struct {
 	Mode        string               `json:"mode"`
+	System      string               `json:"system,omitempty"`
 	Steps       *int                 `json:"steps,omitempty"`
 	Permissions []opencodePermission `json:"permissions,omitempty"`
 }
@@ -42,14 +43,15 @@ func opencodeWorker(w WorkerSpec) (WorkerCmd, Parser) {
 		argv = append(argv, "-s", w.SessionID)
 	}
 
-	agent := opencodeAgentConfig{Mode: "primary"}
+	// system is the v2 agent field that carries the system prompt; prompt is ignored.
+	agent := opencodeAgentConfig{Mode: "primary", System: RolePrompt(w.Role)}
 	if w.MaxTurns > 0 {
 		// Dispatch counts step_start and stops first; steps only bounds a run
 		// whose supervisor is gone.
 		steps := w.MaxTurns + 1
 		agent.Steps = &steps
 	}
-	if w.Role == RoleReviewer || w.Role == RoleResearcher {
+	if w.Role.ReadOnly() {
 		for _, action := range readOnlyDeniedActions {
 			agent.Permissions = append(agent.Permissions, opencodePermission{
 				Action: action, Resource: "*", Effect: "deny",
