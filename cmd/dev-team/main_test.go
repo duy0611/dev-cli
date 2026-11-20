@@ -448,3 +448,39 @@ func TestPositionalCounts(t *testing.T) {
 		})
 	}
 }
+
+func TestStartTitleFlag(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		text string
+		want string
+	}{
+		{"flag after role", []string{"start", "coder", "--title", "Task 3: saved tiers"}, "body\n", "Task 3: saved tiers"},
+		{"flag before role", []string{"start", "--title", "  spaced \n", "coder"}, "body\n", "spaced"},
+		{"derived from text", []string{"start", "coder"}, "\nfirst line\nsecond\n", "first line"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := newRunDir(t, map[team.Role]string{team.RoleCoder: "haiku"})
+			t.Setenv("DEV_TEAM_RUN", dir)
+			t.Setenv("PATH", stubClaude(t))
+			env := os.Environ()
+
+			start := runCLI(t, env, tc.text, tc.args...)
+			if start.code != 0 {
+				t.Fatalf("start exit = %d, stderr = %q", start.code, start.stderr)
+			}
+			id := strings.TrimSpace(start.stdout)
+			if wait := runCLI(t, env, "", "wait", id); wait.code != 0 {
+				t.Fatalf("wait exit = %d, stderr = %q", wait.code, wait.stderr)
+			}
+			task, err := team.Run{Dir: dir}.Load(id)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if task.Title != tc.want {
+				t.Errorf("title = %q, want %q", task.Title, tc.want)
+			}
+		})
+	}
+}

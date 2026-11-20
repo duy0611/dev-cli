@@ -100,7 +100,7 @@ func TestInstructionCarriesTheRules(t *testing.T) {
 		instructionTestDispatch + " takeover ID --reason",
 		instructionTestDispatch + " list",
 		instructionTestDispatch + " start ROLE --retry ID",
-		"\n" + instructionTestDispatch + " start researcher <<'EOF'\n",
+		"\n" + instructionTestDispatch + " start researcher --title \"short title\" <<'EOF'\n",
 		"\nEOF\n",
 	} {
 		if !strings.Contains(got, want) {
@@ -246,5 +246,20 @@ func TestInstructionAcceptanceChecksWithoutTester(t *testing.T) {
 	}
 	if got := Instruction(teamOf(RoleReviewer), instructionTestDispatch); strings.Contains(got, "run the acceptance checks yourself") {
 		t.Errorf("no coder: nothing to check:\n%s", got)
+	}
+}
+
+func TestInstructionAsksForTitles(t *testing.T) {
+	got := Instruction(testConfig(map[Role]string{RoleResearcher: "haiku", RoleCoder: "sonnet"}), "/x/dev-team")
+	for _, want := range []string{
+		"/x/dev-team start researcher --title \"short title\" <<'EOF'\n",
+		"start ROLE --title \"...\"",
+		"start ROLE --retry ID",
+		"short title naming the plan task",
+		"Task 3: saved tiers",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("instruction lacks %q:\n%s", want, got)
+		}
 	}
 }

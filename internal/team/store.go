@@ -28,6 +28,7 @@ const (
 type Task struct {
 	ID             string    `json:"id"`
 	Role           Role      `json:"role"`
+	Title          string    `json:"title,omitempty"`
 	Tool           string    `json:"tool,omitempty"`
 	Model          string    `json:"model,omitempty"`
 	SessionID      string    `json:"session_id,omitempty"`

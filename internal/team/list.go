@@ -3,6 +3,7 @@ package team
 import (
 	"bytes"
 	"fmt"
+	"strconv"
 	"text/tabwriter"
 )
 
@@ -24,14 +25,29 @@ func FormatTasks(tasks []Task) string {
 
 	var buf bytes.Buffer
 	tw := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tROLE\tSTATUS\tATTEMPTS\tCOST\tTAKEOVER\tUNCOLLECTED")
+	fmt.Fprintln(tw, "ID\tROLE\tTITLE\tSTATUS\tATTEMPTS\tCOST\tTAKEOVER\tUNCOLLECTED")
 	for _, task := range tasks {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
-			task.ID, task.Role, task.Status, task.Attempts, formatCost(task.CostUSD),
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			task.ID, task.Role, dashIfEmpty(task.Title), task.Status, formatAttempts(task), formatCost(task.CostUSD),
 			yesOrDash(task.TookOver), yesOrDash(uncollected(task)))
 	}
 	_ = tw.Flush()
 	return buf.String()
+}
+
+func dashIfEmpty(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
+}
+
+// formatAttempts shows the attempt count, and which task a retry continues.
+func formatAttempts(task Task) string {
+	if task.RetryOf == "" {
+		return strconv.Itoa(task.Attempts)
+	}
+	return fmt.Sprintf("%d (%s)", task.Attempts, task.RetryOf)
 }
 
 // formatCost renders a task's cost, or a dash when the worker has not reported

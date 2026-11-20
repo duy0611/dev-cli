@@ -203,8 +203,11 @@ tools are not locked.
 
 Hand-offs go through a `dev-team` binary installed in the container beside the
 runs. `dev-team start ROLE` takes the task text on stdin and prints an id at
-once; `dev-team start ROLE --retry ID` sends a finished task back to the same
-worker, with the new text from stdin, continuing its session. `dev-team wait ID`
+once; `--title TEXT` names the task (trimmed to one line and 60 characters;
+without it the title is the first line of the text). `dev-team start ROLE
+--retry ID` sends a finished task back to the same worker, with the new text
+from stdin, continuing its session; the retry keeps the original's title unless
+you give `--title`. `dev-team wait ID`
 blocks until the task ends or 60 seconds pass, then prints its status and
 answer; `STATUS: running` means call it again. `dev-team result ID` prints a
 finished task's answer, and `dev-team takeover` takes an id plus `--reason TEXT`
@@ -285,9 +288,18 @@ dev container team logs api -f       # the running task, rendered
 dev container team logs api --task t3
 ```
 
-`team list` shows each task's role, status, attempts, cost, takeover and whether
-its result has been collected; a `-` under COST means the worker never reported
-one. A finished task nobody collected still has its result in the folder.
+`team list` shows each task's role, title, status, attempts, cost, takeover and
+whether its result has been collected; a `-` under COST means the worker never
+reported one, and under TITLE that the task has none (records from before titles
+existed). A retry shows its attempt count and the task it retries, `2 (t1)`:
+
+```
+ID  ROLE        TITLE                STATUS   ATTEMPTS  COST     TAKEOVER  UNCOLLECTED
+t1  coder       Task 3: saved tiers  failed   1         $0.0123  -         -
+t2  coder       Task 3: saved tiers  running  2 (t1)    -        -         -
+```
+
+ A finished task nobody collected still has its result in the folder.
 `team logs` renders a worker's stream as messages, tool calls and edits, and
 `-f` follows it until the task ends. Both need the container running.
 
@@ -2102,7 +2114,8 @@ workspace, and `set` and `unset` go in the audit log as `team-tier-set` and
 
 **`team list`** lists the container's runs, newest first, then the newest run's
 tasks; `--run` shows one run's tasks alone. The table gives each task's role,
-status, attempts, cost, takeover and whether its result has been collected. No
+title, status, attempts (`2 (t1)` for a retry of `t1`), cost, takeover and
+whether its result has been collected. No
 run yet prints a message and exits 0. A run named by `--run` that does not exist
 is exit 3.
 

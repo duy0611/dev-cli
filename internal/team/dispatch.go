@@ -56,7 +56,9 @@ var waitProbeHook = func() {}
 
 // Start records a task and launches its supervisor detached, so the worker
 // outlives a lead that dies. It returns as soon as the supervisor is running.
-func (r Run) Start(role Role, text, retryOf string, self string) (Task, error) {
+// An empty title is derived: a retry keeps the previous task's, otherwise it
+// is the first line of the text.
+func (r Run) Start(role Role, text, title, retryOf string, self string) (Task, error) {
 	cfg, err := r.Config()
 	if err != nil {
 		return Task{}, err
@@ -123,6 +125,7 @@ func (r Run) Start(role Role, text, retryOf string, self string) (Task, error) {
 		return Task{}, err
 	}
 	task.Cwd = cwd
+	task.Title = deriveTitle(title, text, previous.Title)
 	if retryOf != "" {
 		task.Attempts = previous.Attempts + 1
 		task.RetryOf = previous.ID
@@ -155,6 +158,35 @@ func (r Run) Start(role Role, text, retryOf string, self string) (Task, error) {
 		return Task{}, fmt.Errorf("start supervisor for task %s: %w", task.ID, err)
 	}
 	return r.updateTask(task.ID, func(task *Task) { task.Pid = pid })
+}
+
+const titleLimit = 60
+
+// deriveTitle picks a task's title: the one given, else the one inherited from
+// the task being retried, else the first non-empty line of the text.
+func deriveTitle(given, text, inherited string) string {
+	switch {
+	case strings.TrimSpace(given) != "":
+		return cleanTitle(given)
+	case inherited != "":
+		return inherited
+	}
+	for line := range strings.Lines(text) {
+		if strings.TrimSpace(line) != "" {
+			return cleanTitle(line)
+		}
+	}
+	return ""
+}
+
+// cleanTitle trims s, folds line breaks to single spaces and cuts it to
+// titleLimit runes, marking the cut.
+func cleanTitle(s string) string {
+	s = strings.Join(strings.FieldsFunc(strings.TrimSpace(s), func(r rune) bool { return r == '\n' || r == '\r' }), " ")
+	if r := []rune(s); len(r) > titleLimit {
+		return string(r[:titleLimit]) + "…"
+	}
+	return s
 }
 
 func spawn(self, id, cwd string) (int, error) {

@@ -136,18 +136,18 @@ func Instruction(c Config, dispatch string) string {
 		b.WriteString(".\n")
 	}
 
-	fmt.Fprintf(&b, "\nHand each task to a worker with %s. The task text goes on stdin, never in argv:\n\n", dispatch)
+	fmt.Fprintf(&b, "\nHand each task to a worker with %s. The task text goes on stdin, never in argv. Give every task a short title naming the plan task, e.g. \"Task 3: saved tiers\":\n\n", dispatch)
 	// A validated config has at least one role; the example must not name an absent one.
 	// Column 0 throughout: a quoted heredoc ends only on an unindented EOF, so a
 	// lead copying the example verbatim would otherwise swallow what follows.
-	fmt.Fprintf(&b, "%s start %s <<'EOF'\n...the task, with acceptance criteria...\nEOF\n\n", dispatch, roles[0])
+	fmt.Fprintf(&b, "%s start %s --title \"short title\" <<'EOF'\n...the task, with acceptance criteria...\nEOF\n\n", dispatch, roles[0])
 	b.WriteString("The commands:\n")
-	fmt.Fprintf(&b, "  %s start ROLE            # start a task on a role, text on stdin; prints the task id at once\n", dispatch)
-	fmt.Fprintf(&b, "  %s start ROLE --retry ID # send the task back to the same worker\n", dispatch)
-	fmt.Fprintf(&b, "  %s wait ID               # wait up to 60 s; prints STATUS: running if the task is still going, else its final status and answer\n", dispatch)
-	fmt.Fprintf(&b, "  %s result ID             # print a finished task's final answer\n", dispatch)
-	fmt.Fprintf(&b, "  %s takeover ID --reason \"...\"  # only if the operator tells you to do the task yourself: record it\n", dispatch)
-	fmt.Fprintf(&b, "  %s list                  # list the tasks in this run with id, role, status and attempts\n", dispatch)
+	fmt.Fprintf(&b, "  %s start ROLE --title \"...\"   # start a task on a role, text on stdin; prints the task id at once\n", dispatch)
+	fmt.Fprintf(&b, "  %s start ROLE --retry ID      # send the task back to the same worker; keeps the title unless you give --title\n", dispatch)
+	fmt.Fprintf(&b, "  %s wait ID                    # wait up to 60 s; prints STATUS: running if the task is still going, else its final status and answer\n", dispatch)
+	fmt.Fprintf(&b, "  %s result ID                  # print a finished task's final answer\n", dispatch)
+	fmt.Fprintf(&b, "  %s takeover ID --reason \"...\" # only if the operator tells you to do the task yourself: record it\n", dispatch)
+	fmt.Fprintf(&b, "  %s list                       # list the tasks in this run with id, role, title, status and attempts\n", dispatch)
 
 	b.WriteString("\nwait is bounded: when it prints STATUS: running the task is still going, so call wait again; never give up on a task because your tool call timed out, and never treat a timeout as a failed attempt.\n")
 	b.WriteString("\nAt most two retries per task. If the third attempt still falls short, stop and ask the operator what to do. Never take the work over on your own.\n")

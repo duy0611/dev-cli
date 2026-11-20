@@ -754,7 +754,7 @@ sleep 300
 		}
 	})
 
-	first, err := h.run.Start(RoleCoder, "one", "", self)
+	first, err := h.run.Start(RoleCoder, "one", "", "", self)
 	if err != nil {
 		t.Fatalf("Start coder: %v", err)
 	}
@@ -762,7 +762,7 @@ sleep 300
 	if first.Pid == 0 {
 		t.Error("pid = 0, want the supervisor's pid")
 	}
-	_, err = h.run.Start(RoleCoder, "two", "", self)
+	_, err = h.run.Start(RoleCoder, "two", "", "", self)
 	if err == nil {
 		t.Fatal("second coder start = nil error")
 	}
@@ -770,7 +770,7 @@ sleep 300
 		t.Errorf("error = %q, want it to name the running task %s", err, first.ID)
 	}
 
-	second, err := h.run.Start(RoleResearcher, "look", "", self)
+	second, err := h.run.Start(RoleResearcher, "look", "", "", self)
 	if err != nil {
 		t.Fatalf("Start researcher alongside a coder: %v", err)
 	}
@@ -796,11 +796,11 @@ func TestResearcherAlongsideCoderAllowed(t *testing.T) {
 	}))
 	self := writeSelf(t)
 
-	coder, err := h.run.Start(RoleCoder, "one", "", self)
+	coder, err := h.run.Start(RoleCoder, "one", "", "", self)
 	if err != nil {
 		t.Fatalf("Start coder: %v", err)
 	}
-	researcher, err := h.run.Start(RoleResearcher, "look", "", self)
+	researcher, err := h.run.Start(RoleResearcher, "look", "", "", self)
 	if err != nil {
 		t.Fatalf("Start researcher: %v", err)
 	}
@@ -839,7 +839,7 @@ func TestEditorRefusedWhileOtherEditorRuns(t *testing.T) {
 		t.Run(string(tt.running)+"/"+string(tt.start), func(t *testing.T) {
 			h := allRolesHarness(t)
 			startRunning(t, h, tt.running, "t1")
-			_, err := h.run.Start(tt.start, "go", "", writeSelf(t))
+			_, err := h.run.Start(tt.start, "go", "", "", writeSelf(t))
 			want := "a " + string(tt.running) + " is already running as task t1; wait for it to finish"
 			if err == nil || err.Error() != want {
 				t.Errorf("error = %v, want %q", err, want)
@@ -851,7 +851,7 @@ func TestEditorRefusedWhileOtherEditorRuns(t *testing.T) {
 func TestTesterRefusedWhileCoderRuns(t *testing.T) {
 	h := allRolesHarness(t)
 	startRunning(t, h, RoleCoder, "t1")
-	_, err := h.run.Start(RoleTester, "go", "", writeSelf(t))
+	_, err := h.run.Start(RoleTester, "go", "", "", writeSelf(t))
 	if err == nil || err.Error() != "a coder is already running as task t1; wait for it to finish" {
 		t.Errorf("error = %v", err)
 	}
@@ -860,7 +860,7 @@ func TestTesterRefusedWhileCoderRuns(t *testing.T) {
 func TestCoderRefusedWhileTesterRuns(t *testing.T) {
 	h := allRolesHarness(t)
 	startRunning(t, h, RoleTester, "t1")
-	_, err := h.run.Start(RoleCoder, "go", "", writeSelf(t))
+	_, err := h.run.Start(RoleCoder, "go", "", "", writeSelf(t))
 	if err == nil || err.Error() != "a tester is already running as task t1; wait for it to finish" {
 		t.Errorf("error = %v", err)
 	}
@@ -869,7 +869,7 @@ func TestCoderRefusedWhileTesterRuns(t *testing.T) {
 func TestReviewerAlongsideTesterAllowed(t *testing.T) {
 	h := allRolesHarness(t)
 	startRunning(t, h, RoleTester, "t1")
-	if _, err := h.run.Start(RoleReviewer, "look", "", writeSelf(t)); err != nil {
+	if _, err := h.run.Start(RoleReviewer, "look", "", "", writeSelf(t)); err != nil {
 		t.Errorf("Start reviewer alongside a tester: %v", err)
 	}
 }
@@ -877,7 +877,7 @@ func TestReviewerAlongsideTesterAllowed(t *testing.T) {
 func TestArchitectAlongsideCoderAllowed(t *testing.T) {
 	h := allRolesHarness(t)
 	startRunning(t, h, RoleCoder, "t1")
-	if _, err := h.run.Start(RoleArchitect, "design", "", writeSelf(t)); err != nil {
+	if _, err := h.run.Start(RoleArchitect, "design", "", "", writeSelf(t)); err != nil {
 		t.Errorf("Start architect alongside a coder: %v", err)
 	}
 }
@@ -889,7 +889,7 @@ func TestDeadTesterDoesNotBlockCoder(t *testing.T) {
 	if err := h.run.Save(dead); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	next, err := h.run.Start(RoleCoder, "next", "", writeSelf(t))
+	next, err := h.run.Start(RoleCoder, "next", "", "", writeSelf(t))
 	if err != nil {
 		t.Fatalf("Start coder after a dead tester: %v", err)
 	}
@@ -913,7 +913,7 @@ cat "$TEAM_TEST_FIXTURE"
 `)
 	self := writeSelf(t)
 
-	first, err := h.run.Start(RoleCoder, "first", "", self)
+	first, err := h.run.Start(RoleCoder, "first", "", "", self)
 	if err != nil {
 		t.Fatalf("Start first: %v", err)
 	}
@@ -925,7 +925,7 @@ cat "$TEAM_TEST_FIXTURE"
 		t.Fatalf("first = %+v, want done with session %s", first, fixtureSession)
 	}
 
-	second, err := h.run.Start(RoleCoder, "second", first.ID, self)
+	second, err := h.run.Start(RoleCoder, "second", "", first.ID, self)
 	if err != nil {
 		t.Fatalf("Start retry: %v", err)
 	}
@@ -943,7 +943,7 @@ cat "$TEAM_TEST_FIXTURE"
 		t.Errorf("worker argv = %q, want --resume %s", argv, fixtureSession)
 	}
 
-	third, err := h.run.Start(RoleCoder, "third", second.ID, self)
+	third, err := h.run.Start(RoleCoder, "third", "", second.ID, self)
 	if err != nil {
 		t.Fatalf("Start third attempt: %v", err)
 	}
@@ -954,7 +954,7 @@ cat "$TEAM_TEST_FIXTURE"
 		t.Fatalf("Supervise third attempt: %v", err)
 	}
 
-	if _, err := h.run.Start(RoleCoder, "fourth", third.ID, self); err == nil {
+	if _, err := h.run.Start(RoleCoder, "fourth", "", third.ID, self); err == nil {
 		t.Fatal("fourth attempt = nil error")
 	} else if !strings.Contains(err.Error(), "takeover") {
 		t.Errorf("error = %q, want it to point at takeover", err)
@@ -966,13 +966,13 @@ func TestRetryOfAnAlreadyRetriedTaskRefused(t *testing.T) {
 	self := writeSelf(t)
 
 	first := h.finished(RoleCoder, "first", "")
-	second, err := h.run.Start(RoleCoder, "second", first.ID, self)
+	second, err := h.run.Start(RoleCoder, "second", "", first.ID, self)
 	if err != nil {
 		t.Fatalf("Start retry: %v", err)
 	}
 	h.markDone(second.ID)
 
-	_, err = h.run.Start(RoleCoder, "again", first.ID, self)
+	_, err = h.run.Start(RoleCoder, "again", "", first.ID, self)
 	if err == nil {
 		t.Fatal("retrying the same task twice = nil error")
 	}
@@ -996,7 +996,7 @@ func TestRetryChainCountsAttemptsThenRefuses(t *testing.T) {
 
 	current := h.finished(RoleCoder, "first", "")
 	for attempt := 2; attempt <= MaxAttempts; attempt++ {
-		next, err := h.run.Start(RoleCoder, "again", current.ID, self)
+		next, err := h.run.Start(RoleCoder, "again", "", current.ID, self)
 		if err != nil {
 			t.Fatalf("retry %d: %v", attempt, err)
 		}
@@ -1006,7 +1006,7 @@ func TestRetryChainCountsAttemptsThenRefuses(t *testing.T) {
 		h.markDone(next.ID)
 		current = h.load(next.ID)
 	}
-	_, err := h.run.Start(RoleCoder, "once more", current.ID, self)
+	_, err := h.run.Start(RoleCoder, "once more", "", current.ID, self)
 	if err == nil || !strings.Contains(err.Error(), "takeover") {
 		t.Fatalf("retry past MaxAttempts error = %v, want one pointing at takeover", err)
 	}
@@ -1016,7 +1016,7 @@ func TestRetryWithAnotherRoleRefused(t *testing.T) {
 	h := newHarness(t, testConfig(map[Role]string{RoleCoder: "haiku", RoleReviewer: "haiku"}))
 
 	coder := h.finished(RoleCoder, "build", "session-c")
-	_, err := h.run.Start(RoleReviewer, "review", coder.ID, writeSelf(t))
+	_, err := h.run.Start(RoleReviewer, "review", "", coder.ID, writeSelf(t))
 	if err == nil {
 		t.Fatal("a reviewer retrying a coder task = nil error")
 	}
@@ -1165,7 +1165,7 @@ func TestStartAllowsCoderAfterDeadSupervisor(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	next, err := h.run.Start(RoleCoder, "next", "", writeSelf(t))
+	next, err := h.run.Start(RoleCoder, "next", "", "", writeSelf(t))
 	if err != nil {
 		t.Fatalf("Start after a dead supervisor: %v", err)
 	}
@@ -1186,7 +1186,7 @@ func TestRetryAfterDeadSupervisor(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	retry, err := h.run.Start(RoleCoder, "retry", dead.ID, writeSelf(t))
+	retry, err := h.run.Start(RoleCoder, "retry", "", dead.ID, writeSelf(t))
 	if err != nil {
 		t.Fatalf("retry after a dead supervisor: %v", err)
 	}
@@ -1218,7 +1218,7 @@ func TestStartRechecksCoderAfterNewTask(t *testing.T) {
 	}
 	t.Cleanup(func() { taskCreatedHook = oldHook })
 
-	_, err := h.run.Start(RoleCoder, "second", "", writeSelf(t))
+	_, err := h.run.Start(RoleCoder, "second", "", "", writeSelf(t))
 	if err == nil {
 		t.Fatal("Start = nil error, want the older coder refused")
 	}
@@ -1522,7 +1522,7 @@ func TestRejectsBadTaskIDs(t *testing.T) {
 	for _, id := range bad {
 		t.Run("id="+strconv.Quote(id), func(t *testing.T) {
 			if id != "" {
-				if _, err := h.run.Start(RoleCoder, "x", id, self); err == nil {
+				if _, err := h.run.Start(RoleCoder, "x", "", id, self); err == nil {
 					t.Error("Start with a bad retry id = nil error")
 				} else if !strings.Contains(err.Error(), "task id") {
 					t.Errorf("Start error = %q, want it to name the invalid task id", err)
@@ -1611,5 +1611,59 @@ func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func TestDeriveTitle(t *testing.T) {
+	long := strings.Repeat("é", 70)
+	for _, tt := range []struct {
+		name, given, text, inherited, want string
+	}{
+		{"given", "  Task 3: saved tiers \n", "ignored", "old", "Task 3: saved tiers"},
+		{"given newlines collapse", "a\nb\r\nc", "x", "", "a b c"},
+		{"first non-empty line", "", "\n  \n  first line \nsecond\n", "", "first line"},
+		{"inherited on retry", "", "new text", "old title", "old title"},
+		{"given overrides inherited", "new", "text", "old", "new"},
+		{"empty text", "", " \n\n", "", ""},
+		{"long given cut", long, "x", "", strings.Repeat("é", 60) + "…"},
+		{"long line cut", "", long + "\nmore", "", strings.Repeat("é", 60) + "…"},
+		{"exactly 60 kept", strings.Repeat("a", 60), "x", "", strings.Repeat("a", 60)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := deriveTitle(tt.given, tt.text, tt.inherited); got != tt.want {
+				t.Errorf("deriveTitle = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStartRecordsTitle(t *testing.T) {
+	h := newHarness(t, testConfig(map[Role]string{RoleCoder: "haiku"}))
+	self := writeSelf(t)
+
+	first, err := h.run.Start(RoleCoder, "do the thing\nmore", "Task 3: saved tiers", "", self)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if first.Title != "Task 3: saved tiers" {
+		t.Errorf("title = %q", first.Title)
+	}
+	h.markDone(first.ID)
+
+	inherit, err := h.run.Start(RoleCoder, "again", "", first.ID, self)
+	if err != nil {
+		t.Fatalf("Start retry: %v", err)
+	}
+	if inherit.Title != first.Title {
+		t.Errorf("retry title = %q, want inherited %q", inherit.Title, first.Title)
+	}
+	h.markDone(inherit.ID)
+
+	override, err := h.run.Start(RoleCoder, "again", "fixes", inherit.ID, self)
+	if err != nil {
+		t.Fatalf("Start override: %v", err)
+	}
+	if override.Title != "fixes" {
+		t.Errorf("override title = %q", override.Title)
 	}
 }

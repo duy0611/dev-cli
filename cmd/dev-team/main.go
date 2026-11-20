@@ -126,13 +126,14 @@ func validTaskID(id string) error {
 func runStart(args []string, stdin io.Reader, stdout, stderr io.Writer, env []string) int {
 	fs := flag.NewFlagSet("start", flag.ContinueOnError)
 	retry := fs.String("retry", "", "task id to send the work back to")
+	title := fs.String("title", "", "short title for the task")
 	positional, err := parseFlags(fs, args)
 	if err != nil {
 		return fail(stderr, exitUsage, "%v", err)
 	}
 	switch len(positional) {
 	case 0:
-		return fail(stderr, exitUsage, "start needs a role: start ROLE [--retry ID]")
+		return fail(stderr, exitUsage, "start needs a role: start ROLE [--title TEXT] [--retry ID]")
 	case 1:
 	default:
 		return fail(stderr, exitUsage, "start takes one role, got %d arguments", len(positional))
@@ -163,7 +164,7 @@ func runStart(args []string, stdin io.Reader, stdout, stderr io.Writer, env []st
 	if err != nil {
 		return fail(stderr, exitFailure, "locate dev-team binary: %v", err)
 	}
-	task, err := run.Start(role, string(text), *retry, self)
+	task, err := run.Start(role, string(text), *title, *retry, self)
 	if err != nil {
 		return fail(stderr, exitFailure, "%v", err)
 	}
