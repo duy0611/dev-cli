@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.23.0](https://github.com/duy0611/dev-cli/compare/v0.22.3...v0.23.0) (2026-11-20)
+
+
+### Features
+
+* **cli:** pick team models by tier and save tiers per tool ([f3acb66](https://github.com/duy0611/dev-cli/commit/f3acb669410acefe90c1ba50a9d80c7ea709dd2b))
+* **store:** save team model tiers per tool ([61f646f](https://github.com/duy0611/dev-cli/commit/61f646f5a27102af2af254e7762b8227d5159ca4))
+* **team:** add architect and tester roles behind a single-editor gate ([2ab5348](https://github.com/duy0611/dev-cli/commit/2ab5348e123ed445081d48d2a2c66f41e4f884ff))
+* **team:** give each worker a role persona and report format ([94e8fc7](https://github.com/duy0611/dev-cli/commit/94e8fc7c24e0bcd1ddf32c9309e44c36d0dca02b))
+* **team:** make the lead a chief of staff that escalates ([ae59c2a](https://github.com/duy0611/dev-cli/commit/ae59c2a843c22fb64fbc22215f53623424556fb6))
+* **team:** resolve worker models from tiers ([6227415](https://github.com/duy0611/dev-cli/commit/62274155cfa2b10e4ea8abb353fed61be69cdfb5))
+* **team:** title each task and show what a retry belongs to ([e04bdad](https://github.com/duy0611/dev-cli/commit/e04bdad97415b0b7ac35f13b326c06c034649726))
+
+
+### Bug Fixes
+
+* **team:** build a resumed lead's instruction from its run and tighten the rules ([c6ce16a](https://github.com/duy0611/dev-cli/commit/c6ce16ab828e30d1dd74116c8b0e839d8f169dcb))
+
 ## [0.22.3](https://github.com/duy0611/dev-cli/compare/v0.22.2...v0.22.3) (2026-11-16)
 
 
