@@ -88,7 +88,7 @@ func newContainerStartAgentTeamCmd(a *app) *cobra.Command {
 		"one worker as ROLE or ROLE=MODEL; ROLE is researcher, architect, coder, tester or reviewer; "+
 			"MODEL is a tier (small, medium, large) or a model name; ROLE alone uses its default tier; repeat for up to five")
 	cmd.Flags().StringArrayVar(&o.tierSpecs, "tier", nil,
-		"TIER=MODEL for the workers' tool, this launch only; repeatable")
+		"TIER=MODEL for the workers' tool, this launch only; repeatable (a tier no worker uses is ignored)")
 	cmd.Flags().IntVar(&o.maxTurns, "worker-max-turns", team.DefaultMaxTurns,
 		"stop a worker after this many turns")
 	cmd.Flags().DurationVar(&o.timeout, "worker-timeout", team.DefaultTimeout,
@@ -108,15 +108,6 @@ func runContainerStartAgentTeam(ctx context.Context, a *app, workspace, name str
 	if err != nil {
 		return err
 	}
-	lead, err := agent.Lookup(cfg.Lead.ID)
-	if err != nil {
-		return usageError(err)
-	}
-	worker, err := agent.Lookup(cfg.Workers)
-	if err != nil {
-		return usageError(err)
-	}
-
 	t, err := a.resolve(ctx, workspace, name)
 	if err != nil {
 		return err
@@ -132,12 +123,28 @@ func runContainerStartAgentTeam(ctx context.Context, a *app, workspace, name str
 	// the folder the team already wrote. The lookup needs a running container;
 	// a stopped one is started by launchAgent below, so a new run is the only
 	// fallback there.
+	// The run's own config.json is what dispatch reads, so the instruction and
+	// the print-out follow it, not this launch's flags. A config that cannot be
+	// read or decoded means no usable run: start a new one.
 	resumed := false
 	if resumeFlag(extra) {
 		if id, ok := newestRun(ctx, t, base); ok {
-			run = team.Run{Dir: path.Join(base, "runs", id)}
-			resumed = true
+			dir := path.Join(base, "runs", id)
+			if stored, ok := runConfig(ctx, t, dir); ok {
+				run = team.Run{Dir: dir}
+				cfg = stored
+				picks = storedPicks(stored)
+				resumed = true
+			}
 		}
+	}
+	lead, err := agent.Lookup(cfg.Lead.ID)
+	if err != nil {
+		return usageError(err)
+	}
+	worker, err := agent.Lookup(cfg.Workers)
+	if err != nil {
+		return usageError(err)
 	}
 	instruction := team.Instruction(cfg, dispatch)
 	instructionFile := path.Join(run.Dir, "lead-instruction.md")
@@ -228,15 +235,9 @@ func runContainerStartAgentTeam(ctx context.Context, a *app, workspace, name str
 	})
 }
 
-// teamConfig checks the flags before anything is resolved or started, and
-// returns the config every later step reads.
-func teamConfig(o teamOpts, saved func(tool string) (map[string]string, error)) (team.Config, error) {
-	cfg, _, err := resolveTeam(o, saved)
-	return cfg, err
-}
-
-// resolveTeam is teamConfig plus the launch print-out: one line per role, then
-// the lead when --lead-model was given.
+// resolveTeam checks the flags before anything is resolved or started, and
+// returns the config every later step reads plus the launch print-out: one
+// line per role, then the lead when --lead-model was given.
 func resolveTeam(o teamOpts, saved func(tool string) (map[string]string, error)) (team.Config, []string, error) {
 	switch {
 	case o.lead == "":
@@ -565,6 +566,37 @@ func newestRun(ctx context.Context, t *target, base string) (string, bool) {
 	return name, true
 }
 
+// runConfig reads a run's stored team config. A missing or undecodable file
+// reports false so the caller starts a new run.
+func runConfig(ctx context.Context, t *target, dir string) (team.Config, bool) {
+	var out bytes.Buffer
+	argv := []string{"cat", path.Join(dir, "config.json")}
+	if err := t.provider.Exec(ctx, t.container, argv,
+		provider.ExecOpts{Stdout: &out, Stderr: io.Discard}); err != nil {
+		return team.Config{}, false
+	}
+	var cfg team.Config
+	if err := json.Unmarshal(out.Bytes(), &cfg); err != nil {
+		return team.Config{}, false
+	}
+	if len(cfg.Models) == 0 || cfg.Lead.ID == "" || cfg.Workers == "" {
+		return team.Config{}, false
+	}
+	return cfg, true
+}
+
+// storedPicks is the launch print-out for a resumed run: its stored models.
+func storedPicks(cfg team.Config) []string {
+	var picks []string
+	for _, role := range cfg.Roles() {
+		picks = append(picks, pickLine(string(role), cfg.Models[role], cfg.Tiers[role], "run"))
+	}
+	if cfg.Lead.Model != "" {
+		picks = append(picks, pickLine("lead", cfg.Lead.Model, cfg.Lead.Tier, "run"))
+	}
+	return picks
+}
+
 // --- team tier ------------------------------------------------------------------
 
 // teamTools are the tools a tier can be saved for: the ones that run workers.
@@ -675,6 +707,16 @@ func runTeamTierUnset(a *app, tool string, names []string) error {
 	st, err := a.store()
 	if err != nil {
 		return err
+	}
+	// Check every name first so a missing one leaves the others saved.
+	saved, err := st.ListTeamTiers(tool)
+	if err != nil {
+		return err
+	}
+	for _, tier := range tiers {
+		if _, ok := saved[tier]; !ok {
+			return notFoundErrorf("no saved %s tier for %s", tier, tool)
+		}
 	}
 	for _, tier := range tiers {
 		if err := st.UnsetTeamTier(tool, tier); err != nil {

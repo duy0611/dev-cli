@@ -66,7 +66,37 @@ func Instruction(c Config, dispatch string) string {
 		}
 	}
 
-	b.WriteString("\nWork no worker on your team covers: do research, design and review yourself; your own subagents may help. Never implement yourself: with no worker to implement, stop and ask the operator. With no worker to test, the implementer's own tests stand.\n")
+	var gaps []string
+	for _, g := range []struct {
+		role Role
+		work string
+	}{{RoleResearcher, "research"}, {RoleArchitect, "design"}, {RoleReviewer, "review"}} {
+		if !has(g.role) {
+			gaps = append(gaps, g.work)
+		}
+	}
+	var rules []string
+	if len(gaps) > 0 {
+		rules = append(rules, fmt.Sprintf("Work no worker on your team covers: do %s yourself; your own subagents may help.", joinAnd(gaps)))
+	}
+	if !has(RoleCoder) {
+		rules = append(rules, "Never implement yourself: with no worker to implement, stop and ask the operator.")
+	} else if !has(RoleTester) {
+		rules = append(rules, "With no worker to test, the implementer's own tests stand.")
+	}
+	if !has(RoleCoder) && (has(RoleTester) || has(RoleReviewer)) {
+		var from []string
+		if has(RoleTester) {
+			from = append(from, "tester failures")
+		}
+		if has(RoleReviewer) {
+			from = append(from, "reviewer blockers")
+		}
+		rules = append(rules, fmt.Sprintf("%s go to the operator, since no worker can implement the fix.", capitalize(strings.Join(from, " and "))))
+	}
+	if len(rules) > 0 {
+		b.WriteString("\n" + strings.Join(rules, " ") + "\n")
+	}
 
 	if has(RoleCoder) && (has(RoleTester) || has(RoleReviewer)) {
 		var from []string
@@ -124,3 +154,15 @@ func Instruction(c Config, dispatch string) string {
 
 	return b.String()
 }
+
+func joinAnd(items []string) string {
+	switch len(items) {
+	case 1:
+		return items[0]
+	case 2:
+		return items[0] + " and " + items[1]
+	}
+	return strings.Join(items[:len(items)-1], ", ") + " and " + items[len(items)-1]
+}
+
+func capitalize(s string) string { return strings.ToUpper(s[:1]) + s[1:] }

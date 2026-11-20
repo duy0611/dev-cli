@@ -15,6 +15,7 @@ func (s *Store) SetTeamTier(tool, tier, model string) error {
 	return nil
 }
 
+// UnsetTeamTier removes a saved tier; ErrNotFound when it was not saved.
 func (s *Store) UnsetTeamTier(tool, tier string) error {
 	res, err := s.db.Exec(
 		`DELETE FROM team_tiers WHERE tool = ? AND tier = ?`, tool, tier)

@@ -89,8 +89,7 @@ func TestInstructionCarriesTheRules(t *testing.T) {
 		"only approval point",
 		"never do leaf work yourself",
 		"bounded tasks with acceptance criteria",
-		"do research, design and review yourself",
-		"stop and ask the operator",
+		"do design yourself",
 		"Never take the work over on your own",
 		"only if the operator tells you",
 		"not your built-in subagents",
@@ -152,18 +151,44 @@ func TestInstructionFlowNamesPresentRolesInOrder(t *testing.T) {
 	}
 }
 
-func TestInstructionMissingRoleRuleForEveryTeam(t *testing.T) {
-	for _, roles := range [][]Role{{RoleCoder}, {RoleReviewer}, AllRoles()} {
-		got := Instruction(teamOf(roles...), instructionTestDispatch)
-		for _, want := range []string{
-			"do research, design and review yourself",
-			"your own subagents may help",
-			"with no worker to implement, stop and ask the operator",
-			"the implementer's own tests stand",
-		} {
+func TestInstructionMissingRoleRules(t *testing.T) {
+	tests := []struct {
+		roles    []Role
+		want     []string
+		unwanted []string
+	}{
+		{[]Role{RoleCoder},
+			[]string{"do research, design and review yourself", "your own subagents may help", "the implementer's own tests stand"},
+			[]string{"Never implement yourself", "go to the operator"}},
+		{[]Role{RoleReviewer},
+			[]string{"do research and design yourself", "Never implement yourself: with no worker to implement, stop and ask the operator.", "Reviewer blockers go to the operator, since no worker can implement the fix."},
+			[]string{"the implementer's own tests", "Tester failures"}},
+		{[]Role{RoleTester, RoleReviewer},
+			[]string{"Tester failures and reviewer blockers go to the operator, since no worker can implement the fix."},
+			nil},
+		{[]Role{RoleResearcher},
+			[]string{"do design and review yourself", "stop and ask the operator"},
+			[]string{"go to the operator"}},
+		{[]Role{RoleCoder, RoleTester, RoleReviewer, RoleArchitect},
+			[]string{"do research yourself"},
+			[]string{"Never implement yourself", "own tests stand", "design and", "go to the operator"}},
+		{AllRoles(), nil,
+			[]string{"Work no worker", "Never implement yourself", "own tests stand", "go to the operator"}},
+	}
+	for _, tt := range tests {
+		got := Instruction(teamOf(tt.roles...), instructionTestDispatch)
+		for _, want := range tt.want {
 			if !strings.Contains(got, want) {
-				t.Errorf("%v: missing %q:\n%s", roles, want, got)
+				t.Errorf("%v: missing %q:\n%s", tt.roles, want, got)
 			}
+		}
+		for _, unwanted := range tt.unwanted {
+			if strings.Contains(got, unwanted) {
+				t.Errorf("%v: has %q:\n%s", tt.roles, unwanted, got)
+			}
+		}
+		if !strings.Contains(got, "stop and ask the operator what to do") {
+			t.Errorf("%v: retry escalation missing", tt.roles)
 		}
 	}
 }

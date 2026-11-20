@@ -142,7 +142,7 @@ func TestTeamConfigAcceptsOpencodeWorkers(t *testing.T) {
 	o := validTeamOpts()
 	o.workers = "opencode"
 
-	cfg, err := teamConfig(o, noSavedTiers)
+	cfg, _, err := resolveTeam(o, noSavedTiers)
 	if err != nil {
 		t.Fatalf("teamConfig refused opencode workers: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestStartAgentTeamOpencodeLeadWritesInstructionOutsideTree(t *testing.T) {
 		}
 	}
 
-	teamCfg, err := teamConfig(o, noSavedTiers)
+	teamCfg, _, err := resolveTeam(o, noSavedTiers)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestStartAgentTeamAuditsPlaceholderNotInstruction(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	teamCfg, err := teamConfig(o, noSavedTiers)
+	teamCfg, _, err := resolveTeam(o, noSavedTiers)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -591,7 +591,7 @@ func teamRunDir(t *testing.T, e recordedExec) string {
 // configWritten reports the index of the exec that writes a run's config.json.
 func configWritten() int {
 	return slices.IndexFunc(fake.execs, func(e recordedExec) bool {
-		return strings.Contains(strings.Join(e.cmd, " "), "config.json")
+		return strings.Contains(strings.Join(e.cmd, " "), `cat > "$1/config.json"`)
 	})
 }
 
@@ -626,6 +626,25 @@ func lsRan() bool {
 	})
 }
 
+// storedTeam seeds the config.json a run folder already holds and returns it.
+func storedTeam(t *testing.T, runID, lead string, roles ...team.Role) team.Config {
+	t.Helper()
+	cfg := team.Config{
+		Lead: team.Tool{ID: lead}, Workers: "claude",
+		Models:   map[team.Role]string{},
+		MaxTurns: team.DefaultMaxTurns, Timeout: team.DefaultTimeout,
+	}
+	for _, r := range roles {
+		cfg.Models[r] = "stored-" + string(r)
+	}
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.outputs["cat "+team.Base(false)+"/runs/"+runID+"/config.json"] = string(raw)
+	return cfg
+}
+
 func TestContinueReusesNewestRun(t *testing.T) {
 	const existing = "api-20261026T101500Z"
 	for _, flag := range []string{"--continue", "-c", "--resume", "-r"} {
@@ -633,6 +652,7 @@ func TestContinueReusesNewestRun(t *testing.T) {
 			a := seedFakeTeamRunning(t)
 			fixedNow(t, time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC))
 			fake.outputs["ls -1t "+team.Base(false)+"/runs"] = existing + "\n"
+			storedTeam(t, existing, "claude", team.RoleCoder)
 
 			if err := runContainerStartAgentTeam(t.Context(), a, "", "api", validTeamOpts(),
 				[]string{flag}, false, nil); err != nil {
@@ -661,6 +681,7 @@ func TestContinueRewritesOpencodeInstruction(t *testing.T) {
 	o := validTeamOpts()
 	o.lead = "opencode"
 	o.workerSpecs = []string{"coder=sonnet", "reviewer=haiku"}
+	stored := storedTeam(t, "api-20261026T101500Z", "opencode", "coder", "reviewer")
 
 	if err := runContainerStartAgentTeam(t.Context(), a, "", "api", o,
 		[]string{"--continue"}, false, nil); err != nil {
@@ -679,19 +700,67 @@ func TestContinueRewritesOpencodeInstruction(t *testing.T) {
 	if got := fake.execs[idx].cmd[len(fake.execs[idx].cmd)-1]; got != wantFile {
 		t.Errorf("wrote %q, want the resumed run's %q", got, wantFile)
 	}
-	cfg, err := teamConfig(o, noSavedTiers)
-	if err != nil {
-		t.Fatal(err)
-	}
-	instruction := team.Instruction(cfg, team.BinPath(team.Base(false)))
+	instruction := team.Instruction(stored, team.BinPath(team.Base(false)))
 	if fake.execs[idx].stdin != instruction {
-		t.Errorf("the resumed instruction does not follow this launch's flags")
+		t.Errorf("the resumed instruction does not follow the run's stored config")
 	}
 	if idx >= len(fake.execs)-1 {
 		t.Errorf("instruction write at %d, lead at %d: the write must precede the lead", idx, len(fake.execs)-1)
 	}
 	if configWritten() >= 0 {
 		t.Errorf("rewrote config.json on resume: %v", fake.execs[configWritten()].cmd)
+	}
+}
+
+func TestContinueBuildsInstructionFromStoredConfig(t *testing.T) {
+	const existing = "api-20261026T101500Z"
+	a := seedFakeTeamRunning(t)
+	fixedNow(t, time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC))
+	fake.outputs["ls -1t "+team.Base(false)+"/runs"] = existing + "\n"
+	storedTeam(t, existing, "opencode", team.RoleCoder)
+	o := validTeamOpts()
+	o.lead = "opencode"
+	o.workerSpecs = []string{"coder=sonnet", "tester=haiku"}
+	var out bytes.Buffer
+	a.out = &out
+
+	if err := runContainerStartAgentTeam(t.Context(), a, "", "api", o,
+		[]string{"--continue"}, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	idx := instructionFileWritten()
+	if idx < 0 {
+		t.Fatalf("no instruction written: %v", fake.log)
+	}
+	if got := fake.execs[idx].stdin; strings.Contains(got, "tester") || !strings.Contains(got, "stored-coder") {
+		t.Errorf("instruction does not follow the stored config:\n%s", got)
+	}
+	if strings.Contains(out.String(), "tester") || !strings.Contains(out.String(), "stored-coder") {
+		t.Errorf("print-out does not follow the stored config:\n%s", out.String())
+	}
+}
+
+func TestContinueWithUnreadableConfigStartsOne(t *testing.T) {
+	const existing = "api-20261026T101500Z"
+	for name, raw := range map[string]string{"empty": "", "garbage": "{not json"} {
+		t.Run(name, func(t *testing.T) {
+			a := seedFakeTeamRunning(t)
+			fixedNow(t, time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC))
+			fake.outputs["ls -1t "+team.Base(false)+"/runs"] = existing + "\n"
+			fake.outputs["cat "+team.Base(false)+"/runs/"+existing+"/config.json"] = raw
+
+			if err := runContainerStartAgentTeam(t.Context(), a, "", "api", validTeamOpts(),
+				[]string{"--continue"}, false, nil); err != nil {
+				t.Fatal(err)
+			}
+			want := team.Base(false) + "/runs/api-20261026T120000Z"
+			if got := teamRunDir(t, fake.execs[len(fake.execs)-1]); got != want {
+				t.Errorf("DEV_TEAM_RUN = %q, want a new run at %q", got, want)
+			}
+			if configWritten() < 0 {
+				t.Errorf("no run folder was created: %v", fake.log)
+			}
+		})
 	}
 }
 
@@ -1549,7 +1618,7 @@ func savedTiers(m map[string]map[string]string) func(string) (map[string]string,
 func TestTeamConfigBareRoleUsesDefaultTier(t *testing.T) {
 	o := validTeamOpts()
 	o.workerSpecs = []string{"coder"}
-	cfg, err := teamConfig(o, noSavedTiers)
+	cfg, _, err := resolveTeam(o, noSavedTiers)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1563,7 +1632,7 @@ func TestTeamConfigTierFlagBeatsSaved(t *testing.T) {
 	o.workers = "opencode"
 	o.workerSpecs = []string{"coder"}
 	o.tierSpecs = []string{"medium=flag/m"}
-	cfg, err := teamConfig(o, savedTiers(map[string]map[string]string{"opencode": {"medium": "saved/m"}}))
+	cfg, _, err := resolveTeam(o, savedTiers(map[string]map[string]string{"opencode": {"medium": "saved/m"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1575,7 +1644,7 @@ func TestTeamConfigTierFlagBeatsSaved(t *testing.T) {
 func TestTeamConfigSavedBeatsBuiltin(t *testing.T) {
 	o := validTeamOpts()
 	o.workerSpecs = []string{"coder"}
-	cfg, err := teamConfig(o, savedTiers(map[string]map[string]string{"claude": {"medium": "saved-sonnet"}}))
+	cfg, _, err := resolveTeam(o, savedTiers(map[string]map[string]string{"claude": {"medium": "saved-sonnet"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1587,7 +1656,7 @@ func TestTeamConfigSavedBeatsBuiltin(t *testing.T) {
 func TestTeamConfigLiteralPassesThrough(t *testing.T) {
 	o := validTeamOpts()
 	o.workerSpecs = []string{"coder=claude-sonnet-5-5"}
-	cfg, err := teamConfig(o, noSavedTiers)
+	cfg, _, err := resolveTeam(o, noSavedTiers)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1603,7 +1672,7 @@ func TestTeamConfigOpencodeUnmappedTier(t *testing.T) {
 	o := validTeamOpts()
 	o.workers = "opencode"
 	o.workerSpecs = []string{"coder=medium"}
-	_, err := teamConfig(o, noSavedTiers)
+	_, _, err := resolveTeam(o, noSavedTiers)
 	if err == nil || exitCodeOf(err) != exitUsage {
 		t.Fatalf("err = %v, want a usage error", err)
 	}
@@ -1616,7 +1685,7 @@ func TestTeamConfigOpencodeUnmappedTier(t *testing.T) {
 func TestTeamConfigBadTierFlagIsUsage(t *testing.T) {
 	o := validTeamOpts()
 	o.tierSpecs = []string{"huge=x"}
-	if _, err := teamConfig(o, noSavedTiers); err == nil || exitCodeOf(err) != exitUsage {
+	if _, _, err := resolveTeam(o, noSavedTiers); err == nil || exitCodeOf(err) != exitUsage {
 		t.Fatalf("err = %v, want a usage error", err)
 	}
 }
@@ -1624,7 +1693,7 @@ func TestTeamConfigBadTierFlagIsUsage(t *testing.T) {
 func TestTeamConfigLeadModelTier(t *testing.T) {
 	o := validTeamOpts()
 	o.leadModel = "large"
-	cfg, err := teamConfig(o, noSavedTiers)
+	cfg, _, err := resolveTeam(o, noSavedTiers)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1639,7 +1708,7 @@ func TestTeamConfigTierFlagSkipsLead(t *testing.T) {
 	o.workers = "opencode"
 	o.workerSpecs = []string{"coder"}
 	o.tierSpecs = []string{"medium=x/y"}
-	cfg, err := teamConfig(o, noSavedTiers)
+	cfg, _, err := resolveTeam(o, noSavedTiers)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1654,15 +1723,15 @@ func TestTeamConfigTierFlagSkipsLead(t *testing.T) {
 func TestTeamConfigFiveWorkers(t *testing.T) {
 	o := validTeamOpts()
 	o.workerSpecs = []string{"researcher", "architect", "coder", "tester", "reviewer"}
-	if _, err := teamConfig(o, noSavedTiers); err != nil {
+	if _, _, err := resolveTeam(o, noSavedTiers); err != nil {
 		t.Fatalf("five workers refused: %v", err)
 	}
 	o.workerSpecs = append(o.workerSpecs, "coder")
-	if _, err := teamConfig(o, noSavedTiers); err == nil || exitCodeOf(err) != exitUsage {
+	if _, _, err := resolveTeam(o, noSavedTiers); err == nil || exitCodeOf(err) != exitUsage {
 		t.Fatalf("a sixth worker: err = %v, want a usage error", err)
 	}
 	o.workerSpecs = nil
-	_, err := teamConfig(o, noSavedTiers)
+	_, _, err := resolveTeam(o, noSavedTiers)
 	if err == nil || !strings.Contains(err.Error(), "--worker is required, as ROLE or ROLE=MODEL; give one to five") {
 		t.Fatalf("err = %v", err)
 	}
@@ -1707,6 +1776,24 @@ func TestStartAgentTeamConfigRecordsTiers(t *testing.T) {
 	}
 	if got.Tiers[team.RoleCoder] != team.TierMedium {
 		t.Errorf("tiers = %v", got.Tiers)
+	}
+}
+
+func TestTeamTierUnsetDeletesNothingWhenOneIsMissing(t *testing.T) {
+	a, _ := newTestApp(t)
+	if err := runTeamTierSet(a, "claude", []string{"small=haiku-x"}); err != nil {
+		t.Fatal(err)
+	}
+	err := runTeamTierUnset(a, "claude", []string{"small", "large"})
+	if err == nil || exitCodeOf(err) != exitNotFound || !strings.Contains(err.Error(), "large") {
+		t.Fatalf("err = %v, want a not-found error naming large", err)
+	}
+	st, err := a.store()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := st.ListTeamTiers("claude"); got["small"] != "haiku-x" {
+		t.Errorf("small was deleted: %v", got)
 	}
 }
 

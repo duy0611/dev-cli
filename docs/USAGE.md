@@ -176,9 +176,12 @@ retry of its task, with the failures on stdin; nits do not. A coder that reports
 there is one, and asks you if the fix changes the approved scope.
 
 A role with no worker is handled by a rule, not named in the lead's
-instructions. Reading and thinking work (research, design, review) the lead
-does itself and may use its own subagents for. Implementing with no coder it
-never does: it stops and asks you. With no tester the coder's own tests stand.
+instructions, and the rule is stated only for the roles that are missing.
+Reading and thinking work (research, design, review) the lead does itself and
+may use its own subagents for. Implementing with no coder it never does: it
+stops and asks you, and a tester failure or reviewer blocker goes to you too,
+since no worker can fix it. With a coder but no tester the coder's own tests
+stand. A full team gets none of these sentences.
 
 A task is retried at most twice. If the third attempt still falls short, the
 lead stops and asks you what to do. It never takes the work over by itself; if
@@ -290,10 +293,10 @@ one. A finished task nobody collected still has its result in the folder.
 
 Resuming the lead with `--continue` (or `-c`, `--resume`, `-r`) keeps the newest
 run instead of starting another, so its next task lands in the same folder. The
-run's stored team is what dispatches the work: roles, models and limits given
-again on the command line are ignored by dispatch, while the standing
-instruction is built from them. On a stopped container, or one with no run yet,
-`--continue` starts a new run.
+run's stored team is what dispatches the work, and the standing instruction and
+the launch print-out are built from it too: roles, models and limits given again
+on the command line are ignored. On a stopped container, one with no run yet, or
+a run whose stored team cannot be read, `--continue` starts a new run.
 
 With an opencode lead, `--lead-model` goes into its config's top-level `model`,
 because the interactive opencode has no model flag. Give it provider-qualified,
@@ -2074,7 +2077,7 @@ different tools; all workers are the same tool.
 | `--lead-model` | the lead's model or tier; default is the tool's own. For an opencode lead it goes in its config's `model`, provider-qualified (`litellm/NAME`) |
 | `--workers` | `claude` or `opencode`; required. Every worker runs this tool |
 | `--worker` | `ROLE` alone or `ROLE=MODEL`, one to five; `ROLE` is `researcher`, `architect`, `coder`, `tester` or `reviewer`, each at most once. `MODEL` is a tier (`small`, `medium`, `large`) or a model name; `ROLE` alone uses its default tier |
-| `--tier` | `TIER=MODEL` for the workers' tool, this launch only; repeatable, one per tier. Beats a saved tier, which beats the built-in one |
+| `--tier` | `TIER=MODEL` for the workers' tool, this launch only; repeatable (a tier no worker uses is ignored), one per tier. Beats a saved tier, which beats the built-in one |
 | `--worker-max-turns` | stop a worker after this many turns; default `30` |
 | `--worker-timeout` | stop a worker after this long, as a Go duration; default `30m` |
 | `--agent-name` | the lead's name in Herdr, as on `start-agent` |
