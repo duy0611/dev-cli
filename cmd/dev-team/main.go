@@ -126,22 +126,26 @@ func validTaskID(id string) error {
 func runStart(args []string, stdin io.Reader, stdout, stderr io.Writer, env []string) int {
 	fs := flag.NewFlagSet("start", flag.ContinueOnError)
 	retry := fs.String("retry", "", "task id to send the work back to")
+	title := fs.String("title", "", "short title for the task")
 	positional, err := parseFlags(fs, args)
 	if err != nil {
 		return fail(stderr, exitUsage, "%v", err)
 	}
 	switch len(positional) {
 	case 0:
-		return fail(stderr, exitUsage, "start needs a role: start ROLE [--retry ID]")
+		return fail(stderr, exitUsage, "start needs a role: start ROLE [--title TEXT] [--retry ID]")
 	case 1:
 	default:
 		return fail(stderr, exitUsage, "start takes one role, got %d arguments", len(positional))
 	}
 	role := team.Role(positional[0])
-	switch role {
-	case team.RoleCoder, team.RoleReviewer, team.RoleResearcher:
-	default:
-		return fail(stderr, exitUsage, "unknown role %q: want coder, reviewer or researcher", role)
+	if !role.Valid() {
+		names := make([]string, 0, len(team.AllRoles()))
+		for _, r := range team.AllRoles() {
+			names = append(names, string(r))
+		}
+		last := len(names) - 1
+		return fail(stderr, exitUsage, "unknown role %q: want %s or %s", role, strings.Join(names[:last], ", "), names[last])
 	}
 	if *retry != "" {
 		if err := validTaskID(*retry); err != nil {
@@ -160,7 +164,7 @@ func runStart(args []string, stdin io.Reader, stdout, stderr io.Writer, env []st
 	if err != nil {
 		return fail(stderr, exitFailure, "locate dev-team binary: %v", err)
 	}
-	task, err := run.Start(role, string(text), *retry, self)
+	task, err := run.Start(role, string(text), *title, *retry, self)
 	if err != nil {
 		return fail(stderr, exitFailure, "%v", err)
 	}

@@ -81,25 +81,29 @@ dev container shell api
 > **Experimental.** The command, its flags and the team folder may change
 > without a migration.
 
-A team is a lead agent plus one to three workers it hands tasks to. The point is
-cost: an expensive model plans and reviews, cheaper ones implement.
+A team is a lead agent plus one to five workers it hands tasks to. The point is
+cost and a second pair of eyes: an expensive model plans and reviews, cheaper
+ones implement, and each worker has a role that limits what it does.
 
 ```sh
+dev container team tier set opencode small=deepseek/deepseek-v4.1-flash \
+  medium=moonshot/kimi-k3 large=anthropic/claude-opus-5-5   # once
+
 dev container start-agent-team api \
-  --lead claude --lead-model opus \
+  --lead claude --lead-model large \
   --workers opencode \
-  --worker coder=litellm/deepseek-v4.1-flash \
-  --worker reviewer=litellm/claude-sonnet-5-5
+  --worker researcher --worker architect --worker coder \
+  --worker tester --worker reviewer
 ```
 
 `--lead` and `--workers` take `claude` or `opencode`, in any combination, and
 both tools have to be installed in the image already. `hermes` and `codex` are
 refused, exit 2: neither runs unattended the way a worker has to. `--worker` is
-`ROLE=MODEL`, one per role, and repeats up to three times. `coder` implements
-and edits; `reviewer` and `researcher` read and report. The model is passed
-through in the worker tool's own syntax, so opencode wants `provider/model` and
-Claude an alias or a full ID; `dev` does not check it. Without `--lead-model`
-the lead uses its tool's default.
+`ROLE` or `ROLE=MODEL`, one per role, and repeats up to five times. The model
+is a tier (see [Model tiers](#model-tiers)) or a model name, passed through in
+the worker tool's own syntax: opencode wants `provider/model` and Claude an
+alias or a full ID. `dev` does not check a name. Without `--lead-model` the
+lead uses its tool's default.
 
 The launch is `start-agent` with team wiring: the same container start,
 settings, ssh agent, kube token and Herdr name, and the same interactive
@@ -111,34 +115,160 @@ go to the lead, as for `start-agent`:
 dev container start-agent-team api --lead claude --workers claude --worker coder=haiku -- --continue
 ```
 
+#### Roles
+
+| Role | Does | Boundary |
+|---|---|---|
+| `researcher` | gathers facts from code, docs and constraints; cites each claim and lists unknowns as open questions | no edits |
+| `architect` | turns requirements and research into a spec: files, interfaces, inputs, outputs, error states, an ordered checklist | no edits; the spec comes back in its report |
+| `coder` | implements the spec test-first, writing and running its own unit tests | never approves its own work; never changes a test it did not write; no unrelated refactors |
+| `tester` | tries to break the result with adversarial tests written from the spec, on top of the coder's, and runs the suite | edits tests only, never other source; reports failures with steps to reproduce |
+| `reviewer` | audits logic, security, maintainability and fit to intent; splits findings into blockers and nits | no edits; never blocks on style |
+
+Some boundaries are locked by the tool and some are only instructions.
+`researcher`, `architect` and `reviewer` have the edit tools removed; on
+opencode the lock also denies the shell, subagent and execute tools. `coder`
+and `tester` have to edit and run commands, so nothing is locked for them: that
+the tester touches only tests, and the coder leaves alone tests it did not
+write, rests on the role's instructions. Neither tool can scope an edit lock to
+paths. As for any agent, the container's guarded or isolated mode is the fence
+that holds.
+
+Only one editor runs at a time. `coder` and `tester` never run together: a
+`dev-team start` for either is refused while the other, or another task of the
+same role, is running, and the error names that task. The other roles run
+alongside anything.
+
+Each worker gets its role's instructions on top of the task text. For Claude
+they go in `--append-system-prompt`; for opencode in the agent's `system` field
+in `OPENCODE_CONFIG_CONTENT`. The task text stays on stdin, and neither lands in
+your working tree.
+
+Every worker ends its answer with one JSON block, the last thing in it:
+
+```json
+{
+  "status": "done | failed | blocked",
+  "summary": "what was done or found, briefly",
+  "artifacts": ["paths changed or produced"],
+  "blockers": ["what must change before this can ship"],
+  "nits": ["optional polish, reviewer only"]
+}
+```
+
+A tester's blockers each carry the steps to reproduce; a researcher's are open
+questions for the lead. Dispatch passes the answer through unchanged and does
+not parse the block. A missing or malformed one is judged from the prose, and a
+tester or reviewer that leaves it out has not passed anything.
+
+#### The lead
+
+The lead is a Chief of Staff: it decomposes, routes, checks results against the
+plan's acceptance criteria and escalates. It does not do leaf work that changes
+files. The plan you approve with it is the one approval point. An architect's
+spec refines that plan and needs no second sign-off, unless it would change what
+you approved; then the lead asks.
+
+The flow runs through the roles present: researcher, architect, coder, tester,
+reviewer. A tester failure or a reviewer blocker goes back to the coder as a
+retry of its task, with the failures on stdin; nits do not. A coder that reports
+`blocked` on a flaw in the spec gets a fixed spec, through the architect when
+there is one, and asks you if the fix changes the approved scope.
+
+A role with no worker is handled by a rule, not named in the lead's
+instructions, and the rule is stated only for the roles that are missing.
+Reading and thinking work (research, design, review) the lead does itself and
+may use its own subagents for. Implementing with no coder it never does: it
+stops and asks you, and a tester failure or reviewer blocker goes to you too,
+since no worker can fix it. With a coder but no tester the coder's own tests
+stand. A full team gets none of these sentences.
+
+A task is retried at most twice. If the third attempt still falls short, the
+lead stops and asks you what to do. It never takes the work over by itself; if
+you tell it to, it records that with `dev-team takeover ID --reason TEXT`.
+
 A worker runs headless, with its permissions pre-approved because nobody is
-there to answer a prompt; the container's guarded or isolated mode is the fence,
-as for any agent. Every task stops at its turn cap and wall-clock limit:
+there to answer a prompt. Every task stops at its turn cap and wall-clock limit:
 `--worker-max-turns` (default 30) and `--worker-timeout` (default `30m`). The
 cap is counted from the worker's stream and enforced by dispatch, not handed to
 the tool. A task cut off that way comes back to the lead as a failure with the
-tail of its log, and counts as an attempt. The lead is told to retry it at most
-twice, with `dev-team start ROLE --retry ID`, before doing the work itself and
-recording the takeover. Quitting the lead does not stop a worker already
-running: it reaches its limits and leaves its result in the folder. A task's
-cost is recorded when the worker's tool reports one.
+tail of its log, and counts as an attempt. Quitting the lead does not stop a
+worker already running: it reaches its limits and leaves its result in the
+folder. A task's cost is recorded when the worker's tool reports one.
 
 The lead gets a standing instruction describing the team it has and how to hand
 work over. It travels in the lead's argv (`--append-system-prompt` for Claude)
-or in a file in the run folder (opencode), never in your working tree.
-`reviewer` and `researcher` are told not to edit, and the edit tools are removed
-where the tool allows it; for opencode the lock also denies the shell, subagent
-and execute tools. The instruction remains the fence, as it is for any agent.
+or in a file in the run folder (opencode), never in your working tree. Its
+tools are not locked.
 
 Hand-offs go through a `dev-team` binary installed in the container beside the
 runs. `dev-team start ROLE` takes the task text on stdin and prints an id at
-once; `dev-team start ROLE --retry ID` sends a finished task back to the same
-worker, with the new text from stdin, continuing its session. `dev-team wait ID`
+once; `--title TEXT` names the task (trimmed to one line and 60 characters;
+without it the title is the first line of the text). `dev-team start ROLE
+--retry ID` sends a finished task back to the same worker, with the new text
+from stdin, continuing its session; the retry keeps the original's title unless
+you give `--title`. `dev-team wait ID`
 blocks until the task ends or 60 seconds pass, then prints its status and
 answer; `STATUS: running` means call it again. `dev-team result ID` prints a
 finished task's answer, and `dev-team takeover` takes an id plus `--reason TEXT`
-and records the lead doing the work itself. `dev-team list` lists the run's
-tasks.
+and records the lead doing the work itself, only when you said so.
+`dev-team list` lists the run's tasks.
+
+#### Model tiers
+
+A tier is a name for a model, so a launch need not spell one out for every role.
+The tiers are `small`, `medium` and `large`. `--worker ROLE` alone takes the
+role's default; `--worker ROLE=small|medium|large` picks a tier; any other value
+is a model name.
+
+| Role | Default tier |
+|---|---|
+| `researcher` | `small` |
+| `architect` | `large` |
+| `coder` | `medium` |
+| `tester` | `medium` |
+| `reviewer` | `large` |
+
+`--lead-model` takes a tier or a model name too. A tier means a model for one
+tool, and is looked up in this order, the first hit winning:
+
+1. `--tier TIER=MODEL` on this launch, repeatable.
+2. The model saved for that tool with `dev container team tier set`.
+3. The built-in one. Claude has `small=haiku`, `medium=sonnet` and
+   `large=opus`, its own aliases, which follow the newest models. opencode has
+   none, because its models are whatever providers you configured.
+
+`--tier` applies to the workers' tool only. The lead may be another tool, and a
+one-off lead model is just a name given to `--lead-model`. A tier with no model
+is exit 2 before anything starts, and the error gives both fixes:
+
+```
+tier "medium" has no model for opencode: run dev container team tier set opencode medium=MODEL, or pass --tier medium=MODEL
+```
+
+Save mappings once per tool, and see what a launch would pick:
+
+```sh
+dev container team tier set opencode small=deepseek/deepseek-v4.1-flash medium=moonshot/kimi-k3
+dev container team tier list opencode
+dev container team tier unset opencode small
+```
+
+Before the session starts, the launch prints what each role and the lead will
+run, with where a tier's model came from:
+
+```
+researcher: small → haiku (built-in)
+coder: medium → sonnet (built-in)
+reviewer: large → opus (saved)
+lead: large → opus (built-in)
+```
+
+A role given a model name prints as `coder: litellm/deepseek-v4.1-flash`, with no
+tier. `config.json` in the run folder records each role's tier, when it had one,
+and the model used.
+
+#### The run folder
 
 The team folder is a base in the container: `/var/dev-state/dev-team` on the
 state volume, `/tmp/dev-team` for a container created with `--no-persist-state`.
@@ -158,18 +288,27 @@ dev container team logs api -f       # the running task, rendered
 dev container team logs api --task t3
 ```
 
-`team list` shows each task's role, status, attempts, cost, takeover and whether
-its result has been collected; a `-` under COST means the worker never reported
-one. A finished task nobody collected still has its result in the folder.
+`team list` shows each task's role, title, status, attempts, cost, takeover and
+whether its result has been collected; a `-` under COST means the worker never
+reported one, and under TITLE that the task has none (records from before titles
+existed). A retry shows its attempt count and the task it retries, `2 (t1)`:
+
+```
+ID  ROLE        TITLE                STATUS   ATTEMPTS  COST     TAKEOVER  UNCOLLECTED
+t1  coder       Task 3: saved tiers  failed   1         $0.0123  -         -
+t2  coder       Task 3: saved tiers  running  2 (t1)    -        -         -
+```
+
+ A finished task nobody collected still has its result in the folder.
 `team logs` renders a worker's stream as messages, tool calls and edits, and
 `-f` follows it until the task ends. Both need the container running.
 
 Resuming the lead with `--continue` (or `-c`, `--resume`, `-r`) keeps the newest
 run instead of starting another, so its next task lands in the same folder. The
-run's stored team is what dispatches the work: roles, models and limits given
-again on the command line are ignored by dispatch, while the standing
-instruction is built from them. On a stopped container, or one with no run yet,
-`--continue` starts a new run.
+run's stored team is what dispatches the work, and the standing instruction and
+the launch print-out are built from it too: roles, models and limits given again
+on the command line are ignored. On a stopped container, one with no run yet, or
+a run whose stored team cannot be read, `--continue` starts a new run.
 
 With an opencode lead, `--lead-model` goes into its config's top-level `model`,
 because the interactive opencode has no model flag. Give it provider-qualified,
@@ -1743,8 +1882,9 @@ dev container logs NAME [-f]
 dev container shell NAME [--kube-token] [--ssh-agent|--no-ssh-agent]
 dev container exec NAME [--kube-token] [--ssh-agent|--no-ssh-agent] -- CMD [ARGS...]
 dev container start-agent NAME [--agent claude|codex|hermes|opencode] [--agent-name NAME] [--kube-token] [--ssh-agent|--no-ssh-agent] [-- ARGS...]
-dev container start-agent-team NAME --lead claude|opencode [--lead-model MODEL]
-                                --workers claude|opencode --worker ROLE=MODEL
+dev container start-agent-team NAME --lead claude|opencode [--lead-model MODEL|TIER]
+                                --workers claude|opencode --worker ROLE[=MODEL|TIER]...
+                                [--tier TIER=MODEL]...
                                 [--worker-max-turns N] [--worker-timeout DURATION]
                                 [--agent-name NAME] [--kube-token] [--ssh-agent|--no-ssh-agent] [-- ARGS...]
 dev container acp [NAME] [--workspace W] [--agent claude|codex|hermes|opencode] [--pass-env NAME]...
@@ -1752,6 +1892,9 @@ dev container acp [NAME] [--workspace W] [--agent claude|codex|hermes|opencode] 
                        [-- COMMAND [ARGS...]]
 dev container team list NAME [--run ID]
 dev container team logs NAME [--run ID] [--task ID] [-f]
+dev container team tier set TOOL TIER=MODEL [TIER=MODEL...]
+dev container team tier unset TOOL TIER [TIER...]
+dev container team tier list [TOOL]
 dev container sync NAME
 dev container fetch NAME
 dev container tools
@@ -1943,9 +2086,10 @@ different tools; all workers are the same tool.
 | Flag | Meaning |
 |---|---|
 | `--lead` | `claude` or `opencode`; required |
-| `--lead-model` | the lead's model; default is the tool's own. For an opencode lead it goes in its config's `model`, provider-qualified (`litellm/NAME`) |
+| `--lead-model` | the lead's model or tier; default is the tool's own. For an opencode lead it goes in its config's `model`, provider-qualified (`litellm/NAME`) |
 | `--workers` | `claude` or `opencode`; required. Every worker runs this tool |
-| `--worker` | `ROLE=MODEL`, one to three; `ROLE` is `coder`, `reviewer` or `researcher`, each at most once |
+| `--worker` | `ROLE` alone or `ROLE=MODEL`, one to five; `ROLE` is `researcher`, `architect`, `coder`, `tester` or `reviewer`, each at most once. `MODEL` is a tier (`small`, `medium`, `large`) or a model name; `ROLE` alone uses its default tier |
+| `--tier` | `TIER=MODEL` for the workers' tool, this launch only; repeatable (a tier no worker uses is ignored), one per tier. Beats a saved tier, which beats the built-in one |
 | `--worker-max-turns` | stop a worker after this many turns; default `30` |
 | `--worker-timeout` | stop a worker after this long, as a Go duration; default `30m` |
 | `--agent-name` | the lead's name in Herdr, as on `start-agent` |
@@ -1957,9 +2101,21 @@ behave as they do on `start-agent`. A lead or a worker that is not installed in
 the image is reported before the session starts, naming the project's
 configuration.
 
+**`team tier`** saves which model each tier means for a tool; see
+[Model tiers](#model-tiers). It is experimental too. `team tier set TOOL
+TIER=MODEL...` saves one or more, `team tier unset TOOL TIER...` forgets them so
+the built-in one applies again, and `team tier list [TOOL]` prints TOOL, TIER,
+MODEL and SOURCE (`saved`, `built-in`, or `-` for a tier with no model) for each
+tool and tier. `TOOL` is `claude` or `opencode` and `TIER` one of `small`,
+`medium`, `large`; anything else, or a malformed `TIER=MODEL`, is exit 2. Unsetting
+a tier that is not saved is exit 3. Saved tiers are per tool, not per project or
+workspace, and `set` and `unset` go in the audit log as `team-tier-set` and
+`team-tier-unset`.
+
 **`team list`** lists the container's runs, newest first, then the newest run's
 tasks; `--run` shows one run's tasks alone. The table gives each task's role,
-status, attempts, cost, takeover and whether its result has been collected. No
+title, status, attempts (`2 (t1)` for a retry of `t1`), cost, takeover and
+whether its result has been collected. No
 run yet prints a message and exits 0. A run named by `--run` that does not exist
 is exit 3.
 
@@ -2215,7 +2371,7 @@ container, event, and a summary. See
 | `--json` | the matching records as raw JSON lines, for `jq` |
 
 Events: `create`, `rebuild`, `start`, `stop`, `remove`, `exec`, `shell`,
-`start-agent`, `start-agent-team`, `kube-token`, `relay`, `sync`, `refused` for
+`start-agent`, `start-agent-team`, `team-tier-set`, `team-tier-unset`, `kube-token`, `relay`, `sync`, `refused` for
 a command a guard stopped (with the reason — `escape`, `drift` or `git` — and
 what it found), and `accept-config` for a rebuild told to take a changed
 configuration (with what changed).

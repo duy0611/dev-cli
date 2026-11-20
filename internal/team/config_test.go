@@ -1,10 +1,12 @@
 package team
 
 import (
+	"encoding/json"
 	"maps"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseWorkers(t *testing.T) {
@@ -29,6 +31,11 @@ func TestParseWorkers(t *testing.T) {
 			},
 		},
 		{
+			name:  "architect and tester",
+			specs: []string{"architect=x", "tester=y"},
+			want:  map[Role]string{RoleArchitect: "x", RoleTester: "y"},
+		},
+		{
 			name:    "empty model",
 			specs:   []string{"coder="},
 			wantErr: "coder",
@@ -39,8 +46,13 @@ func TestParseWorkers(t *testing.T) {
 			wantErr: "=x",
 		},
 		{
-			name:    "no equals",
-			specs:   []string{"coder"},
+			name:    "unknown bare role",
+			specs:   []string{"qa"},
+			wantErr: "qa",
+		},
+		{
+			name:    "repeated bare role",
+			specs:   []string{"coder", "coder=x"},
 			wantErr: "coder",
 		},
 		{
@@ -144,7 +156,18 @@ func TestRolesOrder(t *testing.T) {
 				RoleCoder:      "a/b",
 				RoleReviewer:   "c/d",
 			},
-			want: []Role{RoleCoder, RoleReviewer, RoleResearcher},
+			want: []Role{RoleResearcher, RoleCoder, RoleReviewer},
+		},
+		{
+			name: "all five",
+			models: map[Role]string{
+				RoleReviewer:   "a",
+				RoleTester:     "b",
+				RoleCoder:      "c",
+				RoleArchitect:  "d",
+				RoleResearcher: "e",
+			},
+			want: []Role{RoleResearcher, RoleArchitect, RoleCoder, RoleTester, RoleReviewer},
 		},
 		{
 			name:   "one role",
@@ -160,5 +183,75 @@ func TestRolesOrder(t *testing.T) {
 				t.Errorf("Roles() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestValidateWorkerCount(t *testing.T) {
+	base := Config{Lead: Tool{ID: "claude"}, Workers: "claude", MaxTurns: 1, Timeout: time.Minute}
+	all := map[Role]string{}
+	for _, r := range AllRoles() {
+		all[r] = "m"
+	}
+	c := base
+	c.Models = all
+	if err := c.Validate(); err != nil {
+		t.Errorf("five workers: %v", err)
+	}
+	c.Models = map[Role]string{}
+	err := c.Validate()
+	if err == nil || !strings.Contains(err.Error(), "team has 0 workers, want 1 to 5") {
+		t.Errorf("zero workers error = %v, want 'team has 0 workers, want 1 to 5'", err)
+	}
+}
+
+func TestRoleLocks(t *testing.T) {
+	readOnly := []Role{RoleResearcher, RoleArchitect, RoleReviewer}
+	edits := []Role{RoleCoder, RoleTester}
+	if got := AllRoles(); !slices.Equal(got, []Role{RoleResearcher, RoleArchitect, RoleCoder, RoleTester, RoleReviewer}) {
+		t.Fatalf("AllRoles() = %v", got)
+	}
+	for _, r := range AllRoles() {
+		if !r.Valid() {
+			t.Errorf("%s.Valid() = false", r)
+		}
+		if got, want := r.ReadOnly(), slices.Contains(readOnly, r); got != want {
+			t.Errorf("%s.ReadOnly() = %v, want %v", r, got, want)
+		}
+		if got, want := r.Edits(), slices.Contains(edits, r); got != want {
+			t.Errorf("%s.Edits() = %v, want %v", r, got, want)
+		}
+	}
+	if Role("qa").Valid() {
+		t.Error(`Role("qa").Valid() = true`)
+	}
+}
+
+func TestParseWorkersBareRole(t *testing.T) {
+	got, err := ParseWorkers([]string{"coder", "architect"})
+	if err != nil {
+		t.Fatalf("ParseWorkers: %v", err)
+	}
+	want := map[Role]string{RoleCoder: "medium", RoleArchitect: "large"}
+	if !maps.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+	if _, err := ParseWorkers([]string{"coder="}); err == nil {
+		t.Error("coder= should still be an error")
+	}
+}
+
+func TestConfigLoadsWithoutTiers(t *testing.T) {
+	old := `{"lead":{"id":"claude","model":"opus"},"workers":"opencode",
+"models":{"researcher":"a/b","coder":"c/d","reviewer":"e/f"},
+"max_turns":30,"timeout":1800000000000}`
+	var c Config
+	if err := json.Unmarshal([]byte(old), &c); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if c.Tiers != nil || c.Lead.Tier != "" {
+		t.Errorf("tiers = %v, lead tier = %q, want none", c.Tiers, c.Lead.Tier)
 	}
 }

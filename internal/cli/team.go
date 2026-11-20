@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"path"
 	"slices"
 	"strings"
@@ -14,6 +16,7 @@ import (
 	"github.com/duy0611/dev-cli/internal/agent"
 	"github.com/duy0611/dev-cli/internal/model"
 	"github.com/duy0611/dev-cli/internal/provider"
+	"github.com/duy0611/dev-cli/internal/store"
 	"github.com/duy0611/dev-cli/internal/team"
 	"github.com/duy0611/dev-cli/internal/teambin"
 	"github.com/spf13/cobra"
@@ -32,6 +35,7 @@ type teamOpts struct {
 	leadModel   string
 	workers     string
 	workerSpecs []string
+	tierSpecs   []string
 	maxTurns    int
 	timeout     time.Duration
 	agentName   string
@@ -77,11 +81,14 @@ func newContainerStartAgentTeamCmd(a *app) *cobra.Command {
 	cmd.Flags().StringVar(&o.lead, "lead", "",
 		"which tool leads the team (claude, opencode)")
 	cmd.Flags().StringVar(&o.leadModel, "lead-model", "",
-		"the lead's model (default: the tool's own)")
+		"the lead's model or tier (default: the tool's own)")
 	cmd.Flags().StringVar(&o.workers, "workers", "",
 		"which tool runs the workers (claude, opencode)")
 	cmd.Flags().StringArrayVar(&o.workerSpecs, "worker", nil,
-		"one worker as ROLE=MODEL, where ROLE is coder, reviewer or researcher; repeat for up to three")
+		"one worker as ROLE or ROLE=MODEL; ROLE is researcher, architect, coder, tester or reviewer; "+
+			"MODEL is a tier (small, medium, large) or a model name; ROLE alone uses its default tier; repeat for up to five")
+	cmd.Flags().StringArrayVar(&o.tierSpecs, "tier", nil,
+		"TIER=MODEL for the workers' tool, this launch only; repeatable (a tier no worker uses is ignored)")
 	cmd.Flags().IntVar(&o.maxTurns, "worker-max-turns", team.DefaultMaxTurns,
 		"stop a worker after this many turns")
 	cmd.Flags().DurationVar(&o.timeout, "worker-timeout", team.DefaultTimeout,
@@ -93,7 +100,7 @@ func newContainerStartAgentTeamCmd(a *app) *cobra.Command {
 
 func runContainerStartAgentTeam(ctx context.Context, a *app, workspace, name string, o teamOpts,
 	extra []string, kubeToken bool, sshOverride *bool) error {
-	cfg, err := teamConfig(o)
+	cfg, picks, err := resolveTeam(o, a.savedTiers)
 	if err != nil {
 		return err
 	}
@@ -101,15 +108,6 @@ func runContainerStartAgentTeam(ctx context.Context, a *app, workspace, name str
 	if err != nil {
 		return err
 	}
-	lead, err := agent.Lookup(cfg.Lead.ID)
-	if err != nil {
-		return usageError(err)
-	}
-	worker, err := agent.Lookup(cfg.Workers)
-	if err != nil {
-		return usageError(err)
-	}
-
 	t, err := a.resolve(ctx, workspace, name)
 	if err != nil {
 		return err
@@ -125,12 +123,28 @@ func runContainerStartAgentTeam(ctx context.Context, a *app, workspace, name str
 	// the folder the team already wrote. The lookup needs a running container;
 	// a stopped one is started by launchAgent below, so a new run is the only
 	// fallback there.
+	// The run's own config.json is what dispatch reads, so the instruction and
+	// the print-out follow it, not this launch's flags. A config that cannot be
+	// read or decoded means no usable run: start a new one.
 	resumed := false
 	if resumeFlag(extra) {
 		if id, ok := newestRun(ctx, t, base); ok {
-			run = team.Run{Dir: path.Join(base, "runs", id)}
-			resumed = true
+			dir := path.Join(base, "runs", id)
+			if stored, ok := runConfig(ctx, t, dir); ok {
+				run = team.Run{Dir: dir}
+				cfg = stored
+				picks = storedPicks(stored)
+				resumed = true
+			}
 		}
+	}
+	lead, err := agent.Lookup(cfg.Lead.ID)
+	if err != nil {
+		return usageError(err)
+	}
+	worker, err := agent.Lookup(cfg.Workers)
+	if err != nil {
+		return usageError(err)
 	}
 	instruction := team.Instruction(cfg, dispatch)
 	instructionFile := path.Join(run.Dir, "lead-instruction.md")
@@ -207,6 +221,9 @@ func runContainerStartAgentTeam(ctx context.Context, a *app, workspace, name str
 
 	env := append([]provider.EnvVar{}, leadEnv...)
 	env = append(env, provider.EnvVar{Key: teamRunEnv, Value: run.Dir})
+	for _, p := range picks {
+		a.printf("%s\n", p)
+	}
 	return a.launchAgent(ctx, t, lead, argv, launchOpts{
 		herdrName:   herdrName,
 		kubeToken:   kubeToken,
@@ -218,46 +235,112 @@ func runContainerStartAgentTeam(ctx context.Context, a *app, workspace, name str
 	})
 }
 
-// teamConfig checks the flags before anything is resolved or started, and
-// returns the config every later step reads.
-func teamConfig(o teamOpts) (team.Config, error) {
+// resolveTeam checks the flags before anything is resolved or started, and
+// returns the config every later step reads plus the launch print-out: one
+// line per role, then the lead when --lead-model was given.
+func resolveTeam(o teamOpts, saved func(tool string) (map[string]string, error)) (team.Config, []string, error) {
 	switch {
 	case o.lead == "":
-		return team.Config{}, usageErrorf("--lead is required (claude or opencode)")
+		return team.Config{}, nil, usageErrorf("--lead is required (claude or opencode)")
 	case o.workers == "":
-		return team.Config{}, usageErrorf("--workers is required (claude or opencode)")
+		return team.Config{}, nil, usageErrorf("--workers is required (claude or opencode)")
 	case len(o.workerSpecs) == 0:
-		return team.Config{}, usageErrorf("--worker is required, as ROLE=MODEL; give one to three")
+		return team.Config{}, nil, usageErrorf("--worker is required, as ROLE or ROLE=MODEL; give one to five")
 	}
 
-	models, err := team.ParseWorkers(o.workerSpecs)
+	values, err := team.ParseWorkers(o.workerSpecs)
 	if err != nil {
-		return team.Config{}, usageError(err)
+		return team.Config{}, nil, usageError(err)
+	}
+	overrides, err := team.ParseTierOverrides(o.tierSpecs)
+	if err != nil {
+		return team.Config{}, nil, usageError(err)
 	}
 	if o.maxTurns <= 0 {
-		return team.Config{}, usageErrorf("--worker-max-turns must be positive, got %d", o.maxTurns)
+		return team.Config{}, nil, usageErrorf("--worker-max-turns must be positive, got %d", o.maxTurns)
 	}
 	if o.timeout <= 0 {
-		return team.Config{}, usageErrorf("--worker-timeout must be positive, got %s", o.timeout)
+		return team.Config{}, nil, usageErrorf("--worker-timeout must be positive, got %s", o.timeout)
 	}
 	// Named here rather than by Validate, which reports the field: the operator
 	// needs the flag to correct.
 	if o.lead != "claude" && o.lead != "opencode" {
-		return team.Config{}, usageErrorf("--lead %q cannot join a team: only claude and opencode run unattended workers", o.lead)
+		return team.Config{}, nil, usageErrorf("--lead %q cannot join a team: only claude and opencode run unattended workers", o.lead)
 	}
 	if o.workers != "claude" && o.workers != "opencode" {
-		return team.Config{}, usageErrorf("--workers %q cannot join a team: only claude and opencode run unattended workers", o.workers)
+		return team.Config{}, nil, usageErrorf("--workers %q cannot join a team: only claude and opencode run unattended workers", o.workers)
+	}
+
+	// Saved tiers are read only for a value that is a tier, so a launch with
+	// model names never opens the store.
+	resolver := func(tool string, overrides map[team.Tier]string, values ...string) (team.Resolver, error) {
+		r := team.Resolver{Tool: tool, Overrides: overrides}
+		if !slices.ContainsFunc(values, func(v string) bool { _, ok := team.ParseTier(v); return ok }) {
+			return r, nil
+		}
+		m, err := saved(tool)
+		if err != nil {
+			return r, err
+		}
+		r.Saved = make(map[team.Tier]string, len(m))
+		for name, model := range m {
+			if tier, ok := team.ParseTier(name); ok {
+				r.Saved[tier] = model
+			}
+		}
+		return r, nil
+	}
+
+	wr, err := resolver(o.workers, overrides, slices.Collect(maps.Values(values))...)
+	if err != nil {
+		return team.Config{}, nil, err
+	}
+	models := make(map[team.Role]string, len(values))
+	var tiers map[team.Role]team.Tier
+	var picks []string
+	for _, role := range team.AllRoles() {
+		value, ok := values[role]
+		if !ok {
+			continue
+		}
+		m, tier, source, err := wr.Resolve(value)
+		if err != nil {
+			return team.Config{}, nil, usageError(err)
+		}
+		models[role] = m
+		picks = append(picks, pickLine(string(role), m, tier, source))
+		if tier != "" {
+			if tiers == nil {
+				tiers = map[team.Role]team.Tier{}
+			}
+			tiers[role] = tier
+		}
+	}
+
+	lead := team.Tool{ID: o.lead, Model: o.leadModel}
+	if o.leadModel != "" {
+		lr, err := resolver(o.lead, nil, o.leadModel)
+		if err != nil {
+			return team.Config{}, nil, err
+		}
+		m, tier, source, err := lr.Resolve(o.leadModel)
+		if err != nil {
+			return team.Config{}, nil, usageError(err)
+		}
+		lead.Model, lead.Tier = m, tier
+		picks = append(picks, pickLine("lead", m, tier, source))
 	}
 
 	cfg := team.Config{
-		Lead:     team.Tool{ID: o.lead, Model: o.leadModel},
+		Lead:     lead,
 		Workers:  o.workers,
 		Models:   models,
+		Tiers:    tiers,
 		MaxTurns: o.maxTurns,
 		Timeout:  o.timeout,
 	}
 	if err := cfg.Validate(); err != nil {
-		return team.Config{}, usageError(err)
+		return team.Config{}, nil, usageError(err)
 	}
 	// Every role is built once here, so a tool the command accepts but dispatch
 	// cannot run is refused before the container is brought up.
@@ -265,10 +348,26 @@ func teamConfig(o teamOpts) (team.Config, error) {
 		if _, _, err := team.Worker(cfg.Workers, team.WorkerSpec{
 			Role: role, Model: cfg.Models[role], MaxTurns: cfg.MaxTurns,
 		}); err != nil {
-			return team.Config{}, usageError(err)
+			return team.Config{}, nil, usageError(err)
 		}
 	}
-	return cfg, nil
+	return cfg, picks, nil
+}
+
+func pickLine(role, model string, tier team.Tier, source team.TierSource) string {
+	if tier == "" {
+		return fmt.Sprintf("%s: %s", role, model)
+	}
+	return fmt.Sprintf("%s: %s → %s (%s)", role, tier, model, source)
+}
+
+// savedTiers is the saved tier -> model map of one tool.
+func (a *app) savedTiers(tool string) (map[string]string, error) {
+	st, err := a.store()
+	if err != nil {
+		return nil, err
+	}
+	return st.ListTeamTiers(tool)
 }
 
 // teamPaths is where a launch's dispatch binary and run folder live inside the
@@ -295,7 +394,7 @@ func resumeFlag(extra []string) bool {
 func newContainerTeamCmd(a *app) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "team",
-		Short: "Watch an agent team's progress (experimental)",
+		Short: "Watch an agent team and set its model tiers (experimental)",
 		Args:  noArgs(),
 		RunE:  groupRunE,
 	}
@@ -349,7 +448,7 @@ func newContainerTeamCmd(a *app) *cobra.Command {
 		"read this task (default: the run's running task, or its most recent one)")
 	logs.Flags().BoolVarP(&follow, "follow", "f", false, "keep printing new output until the task finishes")
 
-	cmd.AddCommand(list, logs)
+	cmd.AddCommand(list, logs, newContainerTeamTierCmd(a))
 	return cmd
 }
 
@@ -465,4 +564,201 @@ func newestRun(ctx context.Context, t *target, base string) (string, bool) {
 		return "", false
 	}
 	return name, true
+}
+
+// runConfig reads a run's stored team config. A missing or undecodable file
+// reports false so the caller starts a new run.
+func runConfig(ctx context.Context, t *target, dir string) (team.Config, bool) {
+	var out bytes.Buffer
+	argv := []string{"cat", path.Join(dir, "config.json")}
+	if err := t.provider.Exec(ctx, t.container, argv,
+		provider.ExecOpts{Stdout: &out, Stderr: io.Discard}); err != nil {
+		return team.Config{}, false
+	}
+	var cfg team.Config
+	if err := json.Unmarshal(out.Bytes(), &cfg); err != nil {
+		return team.Config{}, false
+	}
+	if len(cfg.Models) == 0 || cfg.Lead.ID == "" || cfg.Workers == "" {
+		return team.Config{}, false
+	}
+	return cfg, true
+}
+
+// storedPicks is the launch print-out for a resumed run: its stored models.
+func storedPicks(cfg team.Config) []string {
+	var picks []string
+	for _, role := range cfg.Roles() {
+		picks = append(picks, pickLine(string(role), cfg.Models[role], cfg.Tiers[role], "run"))
+	}
+	if cfg.Lead.Model != "" {
+		picks = append(picks, pickLine("lead", cfg.Lead.Model, cfg.Lead.Tier, "run"))
+	}
+	return picks
+}
+
+// --- team tier ------------------------------------------------------------------
+
+// teamTools are the tools a tier can be saved for: the ones that run workers.
+var teamTools = []string{"claude", "opencode"}
+
+func checkTeamTool(tool string) error {
+	if !slices.Contains(teamTools, tool) {
+		return usageErrorf("tool %q has no team tiers: want claude or opencode", tool)
+	}
+	return nil
+}
+
+func newContainerTeamTierCmd(a *app) *cobra.Command {
+	const experimental = "\n\nExperimental: the command, its flags and the output may change without\n" +
+		"a migration."
+	cmd := &cobra.Command{
+		Use:   "tier",
+		Short: "Save the model each team tier means per tool (experimental)",
+		Args:  noArgs(),
+		RunE:  groupRunE,
+	}
+	set := &cobra.Command{
+		Use:   "set TOOL TIER=MODEL [TIER=MODEL...]",
+		Short: "Save the model a tier means for a tool (experimental)",
+		Long: "Save the model a tier (small, medium or large) means for a tool, claude\n" +
+			"or opencode. A launch's --tier beats a saved tier, which beats the\n" +
+			"built-in one (claude only)." + experimental,
+		Args: minArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runTeamTierSet(a, args[0], args[1:])
+		},
+	}
+	unset := &cobra.Command{
+		Use:   "unset TOOL TIER [TIER...]",
+		Short: "Forget a saved tier for a tool (experimental)",
+		Long:  "Forget the model saved for a tier, so the built-in one applies again." + experimental,
+		Args:  minArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runTeamTierUnset(a, args[0], args[1:])
+		},
+	}
+	list := &cobra.Command{
+		Use:   "list [TOOL]",
+		Short: "Show the model each tier means (experimental)",
+		Long: "Show the model each tier means for each tool, or for one. SOURCE is saved,\n" +
+			"built-in, or - when the tier has no model." + experimental,
+		Args: func(cmd *cobra.Command, args []string) error {
+			return wrapArgs(cobra.MaximumNArgs(1))(cmd, args)
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			tool := ""
+			if len(args) > 0 {
+				tool = args[0]
+			}
+			return runTeamTierList(a, tool)
+		},
+	}
+	cmd.AddCommand(set, unset, list)
+	return cmd
+}
+
+func runTeamTierSet(a *app, tool string, specs []string) error {
+	if err := checkTeamTool(tool); err != nil {
+		return err
+	}
+	// Everything is checked before anything is written.
+	type pair struct{ tier, model string }
+	var pairs []pair
+	for _, spec := range specs {
+		name, model, ok := strings.Cut(spec, "=")
+		tier, valid := team.ParseTier(name)
+		switch {
+		case !ok:
+			return usageErrorf("invalid %q: want TIER=MODEL", spec)
+		case !valid:
+			return usageErrorf("invalid %q: unknown tier %q: want small, medium or large", spec, name)
+		case model == "":
+			return usageErrorf("invalid %q: model is empty", spec)
+		}
+		pairs = append(pairs, pair{string(tier), model})
+	}
+	st, err := a.store()
+	if err != nil {
+		return err
+	}
+	for _, p := range pairs {
+		if err := st.SetTeamTier(tool, p.tier, p.model); err != nil {
+			return err
+		}
+		a.record("team-tier-set", "", "", map[string]any{"tool": tool, "tier": p.tier, "model": p.model})
+		a.printf("%s %s = %s\n", tool, p.tier, p.model)
+	}
+	return nil
+}
+
+func runTeamTierUnset(a *app, tool string, names []string) error {
+	if err := checkTeamTool(tool); err != nil {
+		return err
+	}
+	tiers := make([]string, 0, len(names))
+	for _, name := range names {
+		tier, ok := team.ParseTier(name)
+		if !ok {
+			return usageErrorf("unknown tier %q: want small, medium or large", name)
+		}
+		tiers = append(tiers, string(tier))
+	}
+	st, err := a.store()
+	if err != nil {
+		return err
+	}
+	// Check every name first so a missing one leaves the others saved.
+	saved, err := st.ListTeamTiers(tool)
+	if err != nil {
+		return err
+	}
+	for _, tier := range tiers {
+		if _, ok := saved[tier]; !ok {
+			return notFoundErrorf("no saved %s tier for %s", tier, tool)
+		}
+	}
+	for _, tier := range tiers {
+		if err := st.UnsetTeamTier(tool, tier); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return notFoundErrorf("no saved %s tier for %s", tier, tool)
+			}
+			return err
+		}
+		a.record("team-tier-unset", "", "", map[string]any{"tool": tool, "tier": tier})
+		a.printf("%s %s unset\n", tool, tier)
+	}
+	return nil
+}
+
+func runTeamTierList(a *app, tool string) error {
+	tools := teamTools
+	if tool != "" {
+		if err := checkTeamTool(tool); err != nil {
+			return err
+		}
+		tools = []string{tool}
+	}
+	st, err := a.store()
+	if err != nil {
+		return err
+	}
+	return a.table(func(w io.Writer) {
+		header(w, "TOOL", "TIER", "MODEL", "SOURCE")
+		for _, tl := range tools {
+			saved, err := st.ListTeamTiers(tl)
+			if err != nil {
+				warnf(a, "%v", err)
+			}
+			for _, tier := range team.AllTiers() {
+				if m := saved[string(tier)]; m != "" {
+					row(w, tl, string(tier), m, "saved")
+				} else if m, ok := team.BuiltinModel(tl, tier); ok {
+					row(w, tl, string(tier), m, "built-in")
+				} else {
+					row(w, tl, string(tier), "-", "-")
+				}
+			}
+		}
+	})
 }

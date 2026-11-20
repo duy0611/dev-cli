@@ -64,6 +64,24 @@ func TestOpencodeArgvAndEnv(t *testing.T) {
 			},
 		},
 		{
+			name:  "architect is read-only",
+			spec:  WorkerSpec{Role: RoleArchitect, Model: "m", MaxTurns: 4},
+			agent: "architect",
+			want: []string{
+				"opencode", "run", "--standalone", "--auto", "--format", "json",
+				"-m", "m", "--agent", "architect",
+			},
+		},
+		{
+			name:  "tester is not locked",
+			spec:  WorkerSpec{Role: RoleTester, Model: "m", MaxTurns: 4},
+			agent: "tester",
+			want: []string{
+				"opencode", "run", "--standalone", "--auto", "--format", "json",
+				"-m", "m", "--agent", "tester",
+			},
+		},
+		{
 			name:  "resume",
 			spec:  WorkerSpec{Role: RoleCoder, Model: "m", SessionID: "ses_abc", MaxTurns: 3},
 			agent: "coder",
@@ -106,6 +124,15 @@ func TestOpencodeArgvAndEnv(t *testing.T) {
 				t.Errorf("steps = %d, want %d (the MaxTurns+1 backstop)", steps, tt.spec.MaxTurns+1)
 			}
 
+			if agent.System != RolePrompt(tt.spec.Role) {
+				t.Errorf("agent system = %q, want the %s persona", agent.System, tt.spec.Role)
+			}
+			for _, arg := range cmd.Argv {
+				if strings.Contains(arg, "report") {
+					t.Errorf("argv element %q carries persona text", arg)
+				}
+			}
+
 			var denied []string
 			for _, rule := range agent.Permissions {
 				if rule.Effect != "deny" {
@@ -116,8 +143,7 @@ func TestOpencodeArgvAndEnv(t *testing.T) {
 				}
 				denied = append(denied, rule.Action)
 			}
-			readOnly := tt.spec.Role == RoleReviewer || tt.spec.Role == RoleResearcher
-			if readOnly {
+			if tt.spec.Role.ReadOnly() {
 				want := []string{"edit", "write", "shell", "subagent", "execute"}
 				if !slices.Equal(denied, want) {
 					t.Errorf("denied actions = %q, want %q", denied, want)
@@ -150,6 +176,7 @@ type testOpencodePermission struct {
 
 type testOpencodeAgent struct {
 	Mode        string                   `json:"mode"`
+	System      string                   `json:"system"`
 	Steps       *int                     `json:"steps"`
 	Permissions []testOpencodePermission `json:"permissions"`
 }

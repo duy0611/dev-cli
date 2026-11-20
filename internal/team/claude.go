@@ -174,11 +174,11 @@ func claudeWorker(w WorkerSpec) (WorkerCmd, Parser) {
 	if w.Model != "" {
 		argv = append(argv, "--model", w.Model)
 	}
-	argv = append(argv, "--permission-mode", "auto")
+	argv = append(argv, "--permission-mode", "auto", "--append-system-prompt", RolePrompt(w.Role))
 	if w.SessionID != "" {
 		argv = append(argv, "--resume", w.SessionID)
 	}
-	if w.Role == RoleReviewer || w.Role == RoleResearcher {
+	if w.Role.ReadOnly() {
 		// --disallowedTools is variadic and would swallow a following
 		// positional, so it stays last.
 		argv = append(argv, "--disallowedTools", "Edit", "Write", "MultiEdit", "NotebookEdit")

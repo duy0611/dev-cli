@@ -19,9 +19,12 @@ func TestClaudeArgv(t *testing.T) {
 			"--verbose",
 			"--model", model,
 			"--permission-mode", "auto",
+			"--append-system-prompt", RolePrompt(RoleCoder),
 		}
 	}
-	locked := func(argv []string) []string {
+	locked := func(role Role, argv []string) []string {
+		argv = slices.Clone(argv)
+		argv[slices.Index(argv, "--append-system-prompt")+1] = RolePrompt(role)
 		return append(argv, "--disallowedTools", "Edit", "Write", "MultiEdit", "NotebookEdit")
 	}
 
@@ -43,17 +46,32 @@ func TestClaudeArgv(t *testing.T) {
 				"--output-format", "stream-json",
 				"--verbose",
 				"--permission-mode", "auto",
+				"--append-system-prompt", RolePrompt(RoleCoder),
 			},
 		},
 		{
 			name: "reviewer locks editing",
 			spec: WorkerSpec{Role: RoleReviewer, Model: "M"},
-			want: locked(base("M")),
+			want: locked(RoleReviewer, base("M")),
 		},
 		{
 			name: "researcher locks editing",
 			spec: WorkerSpec{Role: RoleResearcher, Model: "M"},
-			want: locked(base("M")),
+			want: locked(RoleResearcher, base("M")),
+		},
+		{
+			name: "architect locks editing",
+			spec: WorkerSpec{Role: RoleArchitect, Model: "M"},
+			want: locked(RoleArchitect, base("M")),
+		},
+		{
+			name: "tester is not locked",
+			spec: WorkerSpec{Role: RoleTester, Model: "M"},
+			want: func() []string {
+				argv := slices.Clone(base("M"))
+				argv[len(argv)-1] = RolePrompt(RoleTester)
+				return argv
+			}(),
 		},
 		{
 			name: "resume",
@@ -63,7 +81,7 @@ func TestClaudeArgv(t *testing.T) {
 		{
 			name: "resume with a lock keeps the lock last",
 			spec: WorkerSpec{Role: RoleReviewer, Model: "M", SessionID: "s1"},
-			want: locked(append(base("M"), "--resume", "s1")),
+			want: locked(RoleReviewer, append(base("M"), "--resume", "s1")),
 		},
 		{
 			name: "max turns is dispatch's job",

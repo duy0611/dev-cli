@@ -130,12 +130,27 @@ func TestRunDirComesFromEnv(t *testing.T) {
 
 func TestUnknownRole(t *testing.T) {
 	env := []string{"DEV_TEAM_RUN=" + newRunDir(t, map[team.Role]string{team.RoleCoder: "haiku"})}
-	res := runCLI(t, env, "task", "start", "reviewerr")
+	res := runCLI(t, env, "", "start", "reviewerr")
 	if res.code != 2 {
 		t.Fatalf("exit = %d, want 2; stderr = %q", res.code, res.stderr)
 	}
-	if !strings.Contains(res.stderr, "reviewerr") {
-		t.Errorf("stderr = %q, want it to name the role", res.stderr)
+	want := `unknown role "reviewerr": want researcher, architect, coder, tester or reviewer`
+	if !strings.Contains(res.stderr, want) {
+		t.Errorf("stderr = %q, want it to contain %q", res.stderr, want)
+	}
+}
+
+func TestStartAcceptsArchitectAndTester(t *testing.T) {
+	for _, role := range []string{"architect", "tester"} {
+		t.Run(role, func(t *testing.T) {
+			dir := newRunDir(t, map[team.Role]string{team.Role(role): "haiku"})
+			t.Setenv("DEV_TEAM_RUN", dir)
+			t.Setenv("PATH", stubClaude(t))
+			res := runCLI(t, os.Environ(), "a task", "start", role)
+			if res.code != 0 {
+				t.Fatalf("exit = %d, want 0; stderr = %q", res.code, res.stderr)
+			}
+		})
 	}
 }
 
@@ -429,6 +444,42 @@ func TestPositionalCounts(t *testing.T) {
 			}
 			if !strings.Contains(res.stderr, tc.want) {
 				t.Errorf("stderr = %q, want it to contain %q", res.stderr, tc.want)
+			}
+		})
+	}
+}
+
+func TestStartTitleFlag(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		text string
+		want string
+	}{
+		{"flag after role", []string{"start", "coder", "--title", "Task 3: saved tiers"}, "body\n", "Task 3: saved tiers"},
+		{"flag before role", []string{"start", "--title", "  spaced \n", "coder"}, "body\n", "spaced"},
+		{"derived from text", []string{"start", "coder"}, "\nfirst line\nsecond\n", "first line"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := newRunDir(t, map[team.Role]string{team.RoleCoder: "haiku"})
+			t.Setenv("DEV_TEAM_RUN", dir)
+			t.Setenv("PATH", stubClaude(t))
+			env := os.Environ()
+
+			start := runCLI(t, env, tc.text, tc.args...)
+			if start.code != 0 {
+				t.Fatalf("start exit = %d, stderr = %q", start.code, start.stderr)
+			}
+			id := strings.TrimSpace(start.stdout)
+			if wait := runCLI(t, env, "", "wait", id); wait.code != 0 {
+				t.Fatalf("wait exit = %d, stderr = %q", wait.code, wait.stderr)
+			}
+			task, err := team.Run{Dir: dir}.Load(id)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if task.Title != tc.want {
+				t.Errorf("title = %q, want %q", task.Title, tc.want)
 			}
 		})
 	}

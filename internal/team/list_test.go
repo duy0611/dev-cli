@@ -1,51 +1,45 @@
 package team
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
 
-// taskRow splits one formatted line into its columns.
-func taskRow(t *testing.T, line string) []string {
-	t.Helper()
-	fields := strings.Fields(line)
-	if len(fields) != 7 {
-		t.Fatalf("row %q has %d columns, want 7", line, len(fields))
-	}
-	return fields
-}
-
 func TestFormatTasks(t *testing.T) {
 	cost := 0.0123
 	tasks := []Task{
-		{ID: "t1", Role: RoleCoder, Status: StatusDone, Attempts: 1, Collected: true, CostUSD: &cost},
+		{ID: "t1", Role: RoleCoder, Title: "Task 3: saved tiers", Status: StatusDone, Attempts: 1, Collected: true, CostUSD: &cost},
 		{ID: "t2", Role: RoleReviewer, Status: StatusFailed, Attempts: 2},
-		{ID: "t3", Role: RoleResearcher, Status: StatusRunning, Attempts: 1, TookOver: true,
+		{ID: "t3", Role: RoleResearcher, Title: "map the CLI", Status: StatusRunning, Attempts: 1, TookOver: true,
 			TakeoverReason: "the lead finished the review itself"},
+		{ID: "t4", Role: RoleCoder, Title: "Task 3: saved tiers", Status: StatusRunning, Attempts: 2, RetryOf: "t1"},
 	}
 
-	lines := strings.Split(strings.TrimSuffix(FormatTasks(tasks), "\n"), "\n")
-	if len(lines) != len(tasks)+1 {
-		t.Fatalf("output has %d lines, want a header and %d rows:\n%s",
-			len(lines), len(tasks), FormatTasks(tasks))
+	want := "ID  ROLE        TITLE                STATUS   ATTEMPTS  COST     TAKEOVER  UNCOLLECTED\n" +
+		"t1  coder       Task 3: saved tiers  done     1         $0.0123  -         -\n" +
+		"t2  reviewer    -                    failed   2         -        -         yes\n" +
+		"t3  researcher  map the CLI          running  1         -        yes       -\n" +
+		"t4  coder       Task 3: saved tiers  running  2 (t1)    -        -         -\n"
+	if got := FormatTasks(tasks); got != want {
+		t.Errorf("FormatTasks =\n%s\nwant\n%s", got, want)
 	}
-	wantHeader := []string{"ID", "ROLE", "STATUS", "ATTEMPTS", "COST", "TAKEOVER", "UNCOLLECTED"}
-	if got := strings.Fields(lines[0]); strings.Join(got, " ") != strings.Join(wantHeader, " ") {
-		t.Errorf("header = %q, want %q", got, wantHeader)
-	}
+}
 
-	for i, tt := range []struct {
-		line string
-		want []string
-	}{
-		{"t1", []string{"t1", "coder", "done", "1", "$0.0123", "-", "-"}},
-		{"t2", []string{"t2", "reviewer", "failed", "2", "-", "-", "yes"}},
-		{"t3", []string{"t3", "researcher", "running", "1", "-", "yes", "-"}},
-	} {
-		got := taskRow(t, lines[i+1])
-		if strings.Join(got, " ") != strings.Join(tt.want, " ") {
-			t.Errorf("%s: row = %q, want %q", tt.line, got, tt.want)
-		}
+// An old record has no title and no retry link; it must still render.
+func TestFormatTasksOldRecord(t *testing.T) {
+	var task Task
+	if err := json.Unmarshal([]byte(`{"id":"t1","role":"coder","status":"done","attempts":1}`), &task); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(FormatTasks([]Task{task}), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("got %d lines, want 2", len(lines))
+	}
+	got := strings.Fields(lines[1])
+	want := []string{"t1", "coder", "-", "done", "1", "-", "-", "yes"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("row = %q, want %q", got, want)
 	}
 }
 
