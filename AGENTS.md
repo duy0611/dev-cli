@@ -67,43 +67,11 @@ make hooks      # copy .githooks into .git/hooks — once per clone
 
 ## Layout
 
-```
-cmd/dev/              main; exits with the code cli.Execute returns
-cmd/dev-relay/        the in-container half of the ssh agent relay
-cmd/dev-team/         the in-container dispatch binary a team lead calls
-internal/cli/         one file per noun; arg parsing and orchestration only
-internal/store/       SQLite, all persistence; schema in migrations/*.sql
-internal/model/       plain persisted types, no behaviour
-internal/provider/    Provider interface + registry
-internal/provider/local/  devcontainer CLI and docker adapter
-internal/provider/k8s/    devcontainer CLI, kubectl, manifests, lifecycle
-internal/secret/      spec -> value: literal, keychain, op
-internal/kubetoken/   minting a ServiceAccount token into a kubeconfig
-internal/env/         assembles the env a container launches with
-internal/agent/       which agents exist, how to invoke and configure them
-internal/agentcfg/    reading a project's agents.yaml
-internal/acp/         the ACP bridge: path and capability rewrites, the env file for an adapter
-internal/buzzcli/     the host-built buzz CLI: ELF check and its read-only mount entry
-internal/audit/       the append-only audit log
-internal/dcconfig/    locating a project's .devcontainer config
-internal/dcgen/       generating one: the tool catalog, render, overlays
-internal/gitguard/    what host git runs: the guarded mounts, the tree search
-internal/folders/     a container's extra folders: where each appears, which sets are refused
-internal/guard/       refusing configurations that reach the host
-internal/gitwt/       git worktrees: add, remove, list, which repository
-internal/wtseed/      copying .worktreeinclude files into a new checkout
-internal/seed/        an isolated container's first contents: tree + bundle
-internal/relay/, relaybin/  the ssh agent relay and its embedded binary
-internal/team/        an agent team's config, workers, run folder and dispatch
-internal/teambin/     the dispatch binary, embedded
-internal/review/       a guarded container's diff, the review file, the message for the agent
-internal/herdr/       optional Herdr registration
-internal/xpath/       physical paths, name and env-key validation
-test/smoke/           end-to-end, behind the `smoke` build tag
-```
+`cmd/` contains binaries; implementation lives in `internal/`.
 
-`internal/cli` resolves inputs, calls a package and prints. Logic beyond that
-belongs in the package it calls.
+`internal/cli` resolves inputs, calls the package that owns the behavior, and prints.
+`internal/store` owns SQLite persistence; `internal/model` contains persisted types
+without behavior.
 
 ## Invariants
 
