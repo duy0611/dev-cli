@@ -12,6 +12,7 @@ import (
 const (
 	schemeLiteral     = "literal"
 	schemeKeychain    = "keychain"
+	schemeKeyring     = "keyring"
 	schemeOnePassword = "op"
 )
 
@@ -54,6 +55,59 @@ func (keychainBackend) Get(ctx context.Context, ref string) (string, error) {
 	}
 	// -w appends a newline; trim only that, never the value's own spaces.
 	return strings.Trim(out, "\r\n"), nil
+}
+
+// --- freedesktop Secret Service -----------------------------------------------
+
+// keyringBackend reads a secret from the freedesktop Secret Service, which
+// Ubuntu's GNOME Keyring and KWallet both expose through secret-tool.
+type keyringBackend struct{}
+
+func (keyringBackend) Scheme() string { return schemeKeyring }
+
+func (keyringBackend) Available(context.Context) bool {
+	_, err := exec.LookPath("secret-tool")
+	return err == nil
+}
+
+// Get reads the secret matching ref's attributes. A bare name means the
+// `service` attribute, matching `secret-tool store --label=SERVICE service
+// SERVICE`; comma-separated key=value pairs name several attributes.
+func (keyringBackend) Get(ctx context.Context, ref string) (string, error) {
+	attributes, err := keyringAttributes(ref)
+	if err != nil {
+		return "", fmt.Errorf("keyring spec %q: %w", ref, err)
+	}
+
+	out, err := run(ctx, "secret-tool", append([]string{"lookup"}, attributes...)...)
+	if err != nil {
+		return "", fmt.Errorf("keyring lookup of %q failed: %w", ref, err)
+	}
+	return strings.Trim(out, "\r\n"), nil
+}
+
+// keyringAttributes turns the part after `keyring:` into secret-tool's
+// attribute/value argv. A bare name is shorthand for service=NAME.
+func keyringAttributes(ref string) ([]string, error) {
+	if !strings.Contains(ref, "=") {
+		return []string{"service", ref}, nil
+	}
+
+	var attributes []string
+	seen := map[string]bool{}
+	for _, pair := range strings.Split(ref, ",") {
+		key, value, found := strings.Cut(strings.TrimSpace(pair), "=")
+		key, value = strings.TrimSpace(key), strings.TrimSpace(value)
+		if !found || key == "" || value == "" {
+			return nil, fmt.Errorf("attribute %q is not key=value", strings.TrimSpace(pair))
+		}
+		if seen[key] {
+			return nil, fmt.Errorf("attribute %q is repeated", key)
+		}
+		seen[key] = true
+		attributes = append(attributes, key, value)
+	}
+	return attributes, nil
 }
 
 // --- 1Password -------------------------------------------------------------------

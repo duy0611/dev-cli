@@ -101,11 +101,12 @@ refer to them by number, so the numbers are stable.
    rebuild.
 
 3. **A setting's spec is never a value.** The database stores
-   `keychain:NAME` or `op://…`; resolution happens per invocation, in
-   `internal/secret`. That is what keeps tokens out of the database, out of
-   `workspace show`, and out of any backup of either. Resolving per invocation
-   is also why a rotated secret needs no restart — fully true on local; on k8s
-   an exec'd command sees the new value immediately, but the pod's own
+   `keychain:NAME`, `keyring:NAME` or `op://…`; resolution happens per
+   invocation, in `internal/secret`. That is what keeps tokens out of the
+   database, out of `workspace show`, and out of any backup of either.
+   Resolving per invocation is also why a rotated secret needs no restart —
+   fully true on local; on k8s an exec'd command sees the new value
+   immediately, but the pod's own
    environment comes from `envFrom` and is fixed until a stop and start.
 
    `container sync` is what makes the cluster's copy current without one. It

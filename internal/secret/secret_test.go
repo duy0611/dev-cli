@@ -68,6 +68,50 @@ func TestResolveKeychain(t *testing.T) {
 	}
 }
 
+func TestResolveKeyring(t *testing.T) {
+	// argv is: lookup service SERVICE
+	stub(t, "secret-tool", `printf '%s\n' "tok-for-$3"`)
+
+	got, err := NewResolver().Resolve(context.Background(), "keyring:MY_TOKEN")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	// Checks the service name reached the `service` attribute and the newline
+	// was trimmed.
+	if got != "tok-for-MY_TOKEN" {
+		t.Errorf("Resolve = %q, want %q", got, "tok-for-MY_TOKEN")
+	}
+}
+
+func TestResolveKeyringAttributes(t *testing.T) {
+	// argv is: lookup service litellm username dnguyen-nuc
+	stub(t, "secret-tool", `printf '%s\n' "$*"`)
+
+	got, err := NewResolver().Resolve(context.Background(),
+		"keyring:service=litellm,username=dnguyen-nuc")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got != "lookup service litellm username dnguyen-nuc" {
+		t.Errorf("Resolve = %q, want every attribute passed in order", got)
+	}
+}
+
+func TestResolveKeyringRejectsBadAttributes(t *testing.T) {
+	stub(t, "secret-tool", `printf 'ran\n'`)
+
+	for _, spec := range []string{
+		"keyring:service=",
+		"keyring:=litellm",
+		"keyring:service=litellm,",
+		"keyring:service=a,service=b",
+	} {
+		if _, err := NewResolver().Resolve(context.Background(), spec); err == nil {
+			t.Errorf("Resolve(%q) succeeded, want an error", spec)
+		}
+	}
+}
+
 func TestResolveOnePasswordKeepsTheWholeURI(t *testing.T) {
 	stub(t, "op", `printf '%s' "read:$3"`)
 
@@ -121,6 +165,14 @@ func TestUnavailableBackendIsNamed(t *testing.T) {
 		t.Fatal("Resolve succeeded with no security binary")
 	}
 	if !strings.Contains(err.Error(), "keychain") {
+		t.Errorf("error %q does not say which backend is unavailable", err)
+	}
+
+	_, err = NewResolver().Resolve(context.Background(), "keyring:X")
+	if err == nil {
+		t.Fatal("Resolve succeeded with no secret-tool binary")
+	}
+	if !strings.Contains(err.Error(), "not available") || !strings.Contains(err.Error(), "keyring") {
 		t.Errorf("error %q does not say which backend is unavailable", err)
 	}
 }
