@@ -818,9 +818,17 @@ dev workspace set ANTHROPIC_API_KEY keychain:anthropic
 dev workspace set API_URL literal:https://api.example.invalid
 ```
 
-Specs are resolved on every invocation, so rotating the secret in 1Password or
-the Keychain needs no rebuild and no restart — the next command picks it up. On
-the k8s provider that holds for anything you `exec`, but the pod's own
+`keychain:` reads the macOS Keychain. On Linux, use `keyring:` for the
+freedesktop Secret Service (GNOME Keyring or KWallet) through `secret-tool`:
+
+```sh
+secret-tool store --label=anthropic service anthropic
+dev workspace set ANTHROPIC_API_KEY keyring:anthropic
+```
+
+Specs are resolved on every invocation, so rotating the secret in 1Password, the
+Keychain or the keyring needs no rebuild and no restart — the next command picks
+it up. On the k8s provider that holds for anything you `exec`, but the pod's own
 environment comes from a Secret read at pod start, so a process already running
 there keeps the old value until `dev container stop` and `start`.
 
@@ -1468,10 +1476,10 @@ reliably apply there.)
 
 Plainly: **a container opened directly in VS Code gets no workspace
 settings.** A workspace setting is stored as a spec — `keychain:NAME`,
-`op://…` — and resolved to a value fresh on every `dev` command; no field in
-a `devcontainer.json` can call that resolver. Opened outside `dev`, the
-container starts, the agents have their state volume, and the secrets are
-simply absent.
+`keyring:NAME`, `op://…` — and resolved to a value fresh on every `dev`
+command; no field in a `devcontainer.json` can call that resolver. Opened
+outside `dev`, the container starts, the agents have their state volume, and
+the secrets are simply absent.
 
 ### Query a cluster from inside a container
 
@@ -1837,6 +1845,7 @@ copied.
 |---|---|
 | `literal:https://example.invalid` | used as written |
 | `keychain:SERVICE` | `security find-generic-password -a "$USER" -s SERVICE -w` |
+| `keyring:SERVICE` | `secret-tool lookup service SERVICE` |
 | `op://vault/item/field` | `op read` |
 
 `show` names its workspace outright rather than defaulting to the active one:

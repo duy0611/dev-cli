@@ -52,6 +52,7 @@ Requires Go 1.26 or newer to build. At runtime you need:
 | `kubectl` | for the k8s provider, and for `--kube-token` |
 | [`fzf`](https://github.com/junegunn/fzf) | optional; `--kube-token` picks from lists with it when it is installed |
 | [`op`](https://developer.1password.com/docs/cli/) | only if you use `op://` settings |
+| `secret-tool` (libsecret) | only if you use `keyring:` settings |
 
 ## Concepts
 
@@ -86,6 +87,7 @@ experiment.
 |---|---|
 | `literal:https://example.com` | used as written |
 | `keychain:SERVICE` | `security find-generic-password -a "$USER" -s SERVICE -w` |
+| `keyring:SERVICE` | `secret-tool lookup service SERVICE` |
 | `op://vault/item/field` | `op read` |
 
 Specs are resolved on every launch, so rotating a secret needs no restart and no

@@ -68,6 +68,21 @@ func TestResolveKeychain(t *testing.T) {
 	}
 }
 
+func TestResolveKeyring(t *testing.T) {
+	// argv is: lookup service SERVICE
+	stub(t, "secret-tool", `printf '%s\n' "tok-for-$3"`)
+
+	got, err := NewResolver().Resolve(context.Background(), "keyring:MY_TOKEN")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	// Checks the service name reached the `service` attribute and the newline
+	// was trimmed.
+	if got != "tok-for-MY_TOKEN" {
+		t.Errorf("Resolve = %q, want %q", got, "tok-for-MY_TOKEN")
+	}
+}
+
 func TestResolveOnePasswordKeepsTheWholeURI(t *testing.T) {
 	stub(t, "op", `printf '%s' "read:$3"`)
 
@@ -121,6 +136,14 @@ func TestUnavailableBackendIsNamed(t *testing.T) {
 		t.Fatal("Resolve succeeded with no security binary")
 	}
 	if !strings.Contains(err.Error(), "keychain") {
+		t.Errorf("error %q does not say which backend is unavailable", err)
+	}
+
+	_, err = NewResolver().Resolve(context.Background(), "keyring:X")
+	if err == nil {
+		t.Fatal("Resolve succeeded with no secret-tool binary")
+	}
+	if !strings.Contains(err.Error(), "not available") || !strings.Contains(err.Error(), "keyring") {
 		t.Errorf("error %q does not say which backend is unavailable", err)
 	}
 }

@@ -26,7 +26,7 @@ type Resolver struct {
 // NewResolver returns a resolver with the backends this host can use.
 func NewResolver() *Resolver {
 	r := &Resolver{backends: map[string]Backend{}}
-	for _, b := range []Backend{literalBackend{}, keychainBackend{}, onePasswordBackend{}} {
+	for _, b := range []Backend{literalBackend{}, keychainBackend{}, keyringBackend{}, onePasswordBackend{}} {
 		r.backends[b.Scheme()] = b
 	}
 	return r
@@ -74,7 +74,7 @@ func splitSpec(spec string) (scheme, ref string, err error) {
 	scheme, ref, found := strings.Cut(spec, ":")
 	if !found {
 		return "", "", fmt.Errorf(
-			"spec %q has no scheme; use literal:VALUE, keychain:SERVICE or op://vault/item/field", spec)
+			"spec %q has no scheme; use literal:VALUE, keychain:SERVICE, keyring:SERVICE or op://vault/item/field", spec)
 	}
 	if ref == "" {
 		return "", "", fmt.Errorf("spec %q has an empty reference", spec)

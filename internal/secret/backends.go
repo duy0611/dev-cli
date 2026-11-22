@@ -12,6 +12,7 @@ import (
 const (
 	schemeLiteral     = "literal"
 	schemeKeychain    = "keychain"
+	schemeKeyring     = "keyring"
 	schemeOnePassword = "op"
 )
 
@@ -53,6 +54,29 @@ func (keychainBackend) Get(ctx context.Context, ref string) (string, error) {
 		return "", fmt.Errorf("keychain lookup of %q failed: %w", ref, err)
 	}
 	// -w appends a newline; trim only that, never the value's own spaces.
+	return strings.Trim(out, "\r\n"), nil
+}
+
+// --- freedesktop Secret Service -----------------------------------------------
+
+// keyringBackend reads a secret from the freedesktop Secret Service, which
+// Ubuntu's GNOME Keyring and KWallet both expose through secret-tool.
+type keyringBackend struct{}
+
+func (keyringBackend) Scheme() string { return schemeKeyring }
+
+func (keyringBackend) Available(context.Context) bool {
+	_, err := exec.LookPath("secret-tool")
+	return err == nil
+}
+
+// Get reads the secret stored under the `service` attribute ref, matching what
+// `secret-tool store --label=SERVICE service SERVICE` writes.
+func (keyringBackend) Get(ctx context.Context, ref string) (string, error) {
+	out, err := run(ctx, "secret-tool", "lookup", "service", ref)
+	if err != nil {
+		return "", fmt.Errorf("keyring lookup of %q failed: %w", ref, err)
+	}
 	return strings.Trim(out, "\r\n"), nil
 }
 
