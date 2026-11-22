@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.24.0](https://github.com/duy0611/dev-cli/compare/v0.23.0...v0.24.0) (2026-11-22)
+
+
+### Features
+
+* **secret:** add keyring backend for the freedesktop Secret Service ([8eceb7f](https://github.com/duy0611/dev-cli/commit/8eceb7ff5d8e07ca12670ab8a72b4dd894c1171e))
+* **secret:** match multiple keyring attributes ([0d694b8](https://github.com/duy0611/dev-cli/commit/0d694b820906714d2eaf080ebc9b607de41c42d2))
+
 ## [0.23.0](https://github.com/duy0611/dev-cli/compare/v0.22.3...v0.23.0) (2026-11-20)
 
 
