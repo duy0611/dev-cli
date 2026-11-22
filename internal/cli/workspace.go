@@ -314,6 +314,7 @@ func newWorkspaceSetCmd(a *app) *cobra.Command {
 			"  literal:https://example.invalid   used as written\n" +
 			"  keychain:SERVICE                  read from the macOS Keychain\n" +
 			"  keyring:SERVICE                   read from the freedesktop Secret Service\n" +
+			"  keyring:K=V[,K=V...]              match several attributes\n" +
 			"  op://vault/item/field             read with the 1Password CLI\n",
 		Args: exactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {

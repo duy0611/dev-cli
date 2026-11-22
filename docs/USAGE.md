@@ -826,6 +826,14 @@ secret-tool store --label=anthropic service anthropic
 dev workspace set ANTHROPIC_API_KEY keyring:anthropic
 ```
 
+A bare `keyring:SERVICE` is shorthand for the `service` attribute. An item
+stored with more attributes is matched by naming them all, comma-separated:
+
+```sh
+secret-tool store --label=litellm service litellm username dnguyen
+dev workspace set LITELLM_API_KEY keyring:service=litellm,username=dnguyen
+```
+
 Specs are resolved on every invocation, so rotating the secret in 1Password, the
 Keychain or the keyring needs no rebuild and no restart — the next command picks
 it up. On the k8s provider that holds for anything you `exec`, but the pod's own
@@ -1846,6 +1854,7 @@ copied.
 | `literal:https://example.invalid` | used as written |
 | `keychain:SERVICE` | `security find-generic-password -a "$USER" -s SERVICE -w` |
 | `keyring:SERVICE` | `secret-tool lookup service SERVICE` |
+| `keyring:KEY=VALUE[,KEY=VALUE…]` | `secret-tool lookup KEY VALUE …` |
 | `op://vault/item/field` | `op read` |
 
 `show` names its workspace outright rather than defaulting to the active one:

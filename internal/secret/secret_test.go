@@ -83,6 +83,35 @@ func TestResolveKeyring(t *testing.T) {
 	}
 }
 
+func TestResolveKeyringAttributes(t *testing.T) {
+	// argv is: lookup service litellm username dnguyen-nuc
+	stub(t, "secret-tool", `printf '%s\n' "$*"`)
+
+	got, err := NewResolver().Resolve(context.Background(),
+		"keyring:service=litellm,username=dnguyen-nuc")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got != "lookup service litellm username dnguyen-nuc" {
+		t.Errorf("Resolve = %q, want every attribute passed in order", got)
+	}
+}
+
+func TestResolveKeyringRejectsBadAttributes(t *testing.T) {
+	stub(t, "secret-tool", `printf 'ran\n'`)
+
+	for _, spec := range []string{
+		"keyring:service=",
+		"keyring:=litellm",
+		"keyring:service=litellm,",
+		"keyring:service=a,service=b",
+	} {
+		if _, err := NewResolver().Resolve(context.Background(), spec); err == nil {
+			t.Errorf("Resolve(%q) succeeded, want an error", spec)
+		}
+	}
+}
+
 func TestResolveOnePasswordKeepsTheWholeURI(t *testing.T) {
 	stub(t, "op", `printf '%s' "read:$3"`)
 

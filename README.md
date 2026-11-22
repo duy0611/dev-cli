@@ -88,6 +88,7 @@ experiment.
 | `literal:https://example.com` | used as written |
 | `keychain:SERVICE` | `security find-generic-password -a "$USER" -s SERVICE -w` |
 | `keyring:SERVICE` | `secret-tool lookup service SERVICE` |
+| `keyring:KEY=VALUE[,KEY=VALUE…]` | `secret-tool lookup KEY VALUE …` |
 | `op://vault/item/field` | `op read` |
 
 Specs are resolved on every launch, so rotating a secret needs no restart and no

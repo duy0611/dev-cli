@@ -70,14 +70,44 @@ func (keyringBackend) Available(context.Context) bool {
 	return err == nil
 }
 
-// Get reads the secret stored under the `service` attribute ref, matching what
-// `secret-tool store --label=SERVICE service SERVICE` writes.
+// Get reads the secret matching ref's attributes. A bare name means the
+// `service` attribute, matching `secret-tool store --label=SERVICE service
+// SERVICE`; comma-separated key=value pairs name several attributes.
 func (keyringBackend) Get(ctx context.Context, ref string) (string, error) {
-	out, err := run(ctx, "secret-tool", "lookup", "service", ref)
+	attributes, err := keyringAttributes(ref)
+	if err != nil {
+		return "", fmt.Errorf("keyring spec %q: %w", ref, err)
+	}
+
+	out, err := run(ctx, "secret-tool", append([]string{"lookup"}, attributes...)...)
 	if err != nil {
 		return "", fmt.Errorf("keyring lookup of %q failed: %w", ref, err)
 	}
 	return strings.Trim(out, "\r\n"), nil
+}
+
+// keyringAttributes turns the part after `keyring:` into secret-tool's
+// attribute/value argv. A bare name is shorthand for service=NAME.
+func keyringAttributes(ref string) ([]string, error) {
+	if !strings.Contains(ref, "=") {
+		return []string{"service", ref}, nil
+	}
+
+	var attributes []string
+	seen := map[string]bool{}
+	for _, pair := range strings.Split(ref, ",") {
+		key, value, found := strings.Cut(strings.TrimSpace(pair), "=")
+		key, value = strings.TrimSpace(key), strings.TrimSpace(value)
+		if !found || key == "" || value == "" {
+			return nil, fmt.Errorf("attribute %q is not key=value", strings.TrimSpace(pair))
+		}
+		if seen[key] {
+			return nil, fmt.Errorf("attribute %q is repeated", key)
+		}
+		seen[key] = true
+		attributes = append(attributes, key, value)
+	}
+	return attributes, nil
 }
 
 // --- 1Password -------------------------------------------------------------------
