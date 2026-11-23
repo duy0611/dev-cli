@@ -31,6 +31,6 @@
   "overrideFeatureInstallOrder": [
     "ghcr.io/devcontainers/features/node"
   ],
-  "postCreateCommand": "sudo chown vscode:vscode /var/dev-state && mise install",
+  "postCreateCommand": "sudo chown vscode:vscode /var/dev-state && mkdir -p \"$CLAUDE_CONFIG_DIR\" && f=\"$CLAUDE_CONFIG_DIR/settings.json\" && { [ -s \"$f\" ] || echo '{}' > \"$f\"; } && jq '.statusLine = {type: \"command\", command: \"bash /usr/local/share/claude/statusline-command.sh\"}' \"$f\" > \"$f.tmp\" && mv \"$f.tmp\" \"$f\" && mise install",
   "remoteUser": "vscode"
 }
