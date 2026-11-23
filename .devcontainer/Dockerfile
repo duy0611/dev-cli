@@ -17,3 +17,7 @@ RUN cd /tmp/mise \
 # never runs and only the shims make the tools visible. A system install puts
 # its shims beside it, not under MISE_DATA_DIR.
 ENV PATH=/var/dev-state/mise/shims:/usr/local/share/mise/shims:$PATH
+
+# Outside CLAUDE_CONFIG_DIR, which the state volume hides. postCreateCommand
+# points Claude's statusLine at it.
+COPY .devcontainer/statusline-command.sh /usr/local/share/claude/statusline-command.sh

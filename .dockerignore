@@ -1,4 +1,6 @@
-# The devcontainer builds from the repository root only to reach the mise files.
+# The devcontainer builds from the repository root only to reach the mise files
+# and the statusline script.
 *
 !mise.toml
 !mise.devcontainer.toml
+!.devcontainer/statusline-command.sh
