@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.0](https://github.com/duy0611/dev-cli/compare/v0.24.0...v0.25.0) (2026-11-23)
+
+
+### Features
+
+* **devcontainer:** add Claude statusline to the dev container ([14cad29](https://github.com/duy0611/dev-cli/commit/14cad2929c10987e4189720f8b50d762be095f19))
+
 ## [0.24.0](https://github.com/duy0611/dev-cli/compare/v0.23.0...v0.24.0) (2026-11-22)
 
 
