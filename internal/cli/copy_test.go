@@ -296,8 +296,9 @@ func TestCopyRefusesComposeOnEitherSide(t *testing.T) {
 			a, _ := newTestApp(t)
 			seedWorkspace(t, a)
 			stubCopyEngine(t, `{}`)
-			insertRow(t, a, model.Container{Name: "web", SourceKind: model.SourceFolder, Source: "/x",
-				ConfigPath: filepath.Join(projectWithConfig(t), ".devcontainer", "devcontainer.json"),
+			webProject := projectWithConfig(t)
+			insertRow(t, a, model.Container{Name: "web", SourceKind: model.SourceFolder, Source: webProject,
+				ConfigPath: filepath.Join(webProject, ".devcontainer", "devcontainer.json"),
 				Mode:       model.ModeGuarded, PersistState: true})
 			err := runContainerCreate(t.Context(), a, "", "feat", composeProject(t),
 				createOpts{from: "web", copy: list, noStart: true})
@@ -308,8 +309,9 @@ func TestCopyRefusesComposeOnEitherSide(t *testing.T) {
 			a, _ := newTestApp(t)
 			seedWorkspace(t, a)
 			stubCopyEngine(t, `{}`)
-			insertRow(t, a, model.Container{Name: "web", SourceKind: model.SourceFolder, Source: "/x",
-				ConfigPath: filepath.Join(composeProject(t), ".devcontainer", "devcontainer.json"),
+			webProject := composeProject(t)
+			insertRow(t, a, model.Container{Name: "web", SourceKind: model.SourceFolder, Source: webProject,
+				ConfigPath: filepath.Join(webProject, ".devcontainer", "devcontainer.json"),
 				Mode:       model.ModeGuarded, PersistState: true})
 			err := runContainerCreate(t.Context(), a, "", "feat", projectWithConfig(t),
 				createOpts{from: "web", copy: list, noStart: true})

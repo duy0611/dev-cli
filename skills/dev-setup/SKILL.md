@@ -38,29 +38,28 @@ If a suitable provider and workspace are already listed, skip steps 3–4.
 container create` uses it as is and never edits it. Its optional
 `.devcontainer/agents.yaml` is applied automatically.
 
-**(b) A sibling of the project folder, `<project>-dev/`**, holding `agents.yaml` and
-notes, so nothing is written to the project repo. The container is generated
-from dev's catalog:
+**(b) A sibling of the project folder, `<project>-dev/`**, holding `agents.yaml`,
+a `devcontainer.json` and notes, so nothing is written to the project repo:
 
 ```sh
 mkdir -p <project>-dev
-cp <directory holding this SKILL.md>/templates/agents.yaml <project>-dev/agents.yaml   # then edit
-dev container create <name> --folder <project> --generate \
-  --tools node,gh,claude-code --agent-config <project>-dev/agents.yaml
+cp <directory holding this SKILL.md>/templates/devcontainer.json <project>-dev/devcontainer.json   # then edit
+cp <directory holding this SKILL.md>/templates/agents.yaml <project>-dev/agents.yaml               # then edit
+dev container create <name> --folder <project> \
+  --config <project>-dev/devcontainer.json --agent-config <project>-dev/agents.yaml
 ```
 
-The generated configuration is stored in dev's database (`DEV_STATE`, default
-`~/.local/state/dev`), not in the project folder. `agents.yaml` paths such as
-`./skills/x` resolve relative to that file, so skills can live in the sibling
-directory too.
+`--config` names the sibling's `devcontainer.json` (or `.devcontainer.json`);
+the project stays the folder and the container is built from that file. The
+path is stored, so `rebuild` re-reads it. `--config` is refused with
+`--generate`, `--no-folder` or `--tools`, and wins, with a warning, over a
+`.devcontainer/` the project does have. `agents.yaml` paths such as `./skills/x`
+resolve relative to that file, so skills can live in the sibling directory too.
 
-**Limit, stated plainly:** a hand-written `devcontainer.json` cannot yet live in
-the sibling directory. `dev container create` looks only for
-`<folder>/.devcontainer/devcontainer.json` or `<folder>/.devcontainer.json` and
-has no `--config` flag. With no such file in the project you get `--generate`
-(catalog tools only) or nothing. `templates/devcontainer.json` is therefore
-for the project's own `.devcontainer/` (layout a), or as a starting point.
-Proposed fix: `docs/specs/2026-11-25-external-config-design.md`.
+For a catalog-only container instead, skip the `devcontainer.json` and use
+`--generate --tools node,gh,claude-code`; the generated configuration is stored
+in dev's database (`DEV_STATE`, default `~/.local/state/dev`), not in the
+project folder.
 
 `--generate` against a folder that already ships a config is an error.
 
@@ -92,7 +91,7 @@ settings. Container commands take `--workspace NAME` to override the active one.
 
 ```sh
 dev container tools                      # catalog: node, gh, go, python, claude-code, ...
-dev container create <name> --folder <path> [--generate --tools a,b] \
+dev container create <name> --folder <path> [--generate --tools a,b | --config <file>] \
   [--agent-config <file>] [--mode guarded|unprotected|isolated]
 dev container config show <name>         # verify what it is built from
 dev container list

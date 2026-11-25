@@ -635,13 +635,12 @@ Unlike a folderless container, this one *does* bind-mount your folder: the
 generated configuration only supplies what the project lacks.
 
 To keep the setup beside the project, the
-[`dev-setup` skill](../skills/dev-setup/SKILL.md) lays out a sibling directory
-holding `agents.yaml`. A hand-written `devcontainer.json` cannot live there:
-`create` reads one only from the folder itself. A
-[proposal](specs/2026-11-25-external-config-design.md) covers a `--config` flag.
+[`dev-setup` skill](../skills/dev-setup/SKILL.md) lays out a sibling directory;
+the next section uses it for a hand-written `devcontainer.json` too.
 
-A folder that ships its own configuration always wins. `--generate` against one
-is an error rather than a silent shadowing:
+A folder that ships its own configuration wins over `--generate`, which against
+one is an error rather than a silent shadowing (`--config`, below, is the
+explicit override):
 
 ```
 dev: ~/code/api already has a devcontainer config; --generate would shadow it
@@ -688,6 +687,48 @@ A container created with `--no-persist-state` has no merge to show, and says so:
 what the CLI receives really is the project's file, unchanged. Live status is
 not part of the record — that answer comes from the engine, so it stays with
 `container list`.
+
+### Use a devcontainer.json kept outside the project
+
+When the project does not ship a `devcontainer.json` and you do not want one
+committed — a repository that is not yours, a team that has not adopted
+devcontainers — keep the file in a sibling directory and name it:
+
+```sh
+dev container create api --folder ~/work/api --config ~/work/api-dev/devcontainer.json
+```
+
+The project stays the folder (bind-mounted, the working directory) and the file
+is the configuration, with a custom image, Dockerfile, Features and lifecycle
+hooks the catalog cannot express. The path is resolved and stored on the
+container, so `dev container config show api` prints that file and `rebuild`
+reads it again without the flag. `dev` writes nothing to the project or to the
+file.
+
+- The file must be named `devcontainer.json` or `.devcontainer.json`: the
+  devcontainer CLI reads the layout around it and rejects other names (exit 2).
+  A missing file or one that is not a regular file is exit 3.
+- It cannot be combined with `--generate`, `--no-folder` or `--tools`: it is
+  the configuration, so there is nothing to generate (exit 2). All of these are
+  refused before anything is created.
+- If the project also has its own `.devcontainer/devcontainer.json`, `--config`
+  wins and `create` warns, naming the ignored file.
+- `--from SOURCE` passes on a config that is not at SOURCE's default location
+  (`.devcontainer/devcontainer.json`, `.devcontainer.json`): a path outside its
+  folder as is, with the shadow warning if the new folder has its own; one inside
+  it at the same place in the new folder (exit 3 if absent). `--config` on the
+  new container overrides it.
+- The project's `.devcontainer/agents.yaml` is still read from the project;
+  `--agent-config` points elsewhere.
+- Guarded mode is unchanged: the project's `.git` is still mounted read-only. The
+  agent cannot edit this file either, since it is outside the mount.
+- `--config` is a `create` flag only; the stored path is not changed afterwards.
+- On the k8s provider (experimental) the same stored path is read and used for the
+  host build; nothing k8s-specific is added.
+
+A relative `build.dockerfile` and `build.context` in the file resolve against
+the file's own directory, not the project, and `${localWorkspaceFolder}` is the
+project. `make smoke` checks both (`TestSmokeExternalConfig`).
 
 ### Change what a generated container installs
 
@@ -1887,7 +1928,7 @@ Removing the active workspace leaves none active rather than a dangling pointer.
 
 ```
 dev container create NAME [--folder PATH]...
-                         [--mode guarded|unprotected|isolated] [--generate] [--tools LIST] [--no-persist-state]
+                         [--mode guarded|unprotected|isolated] [--generate | --config PATH] [--tools LIST] [--no-persist-state]
                          [--agent-config PATH | --no-agent-config] [--no-start]
                          [--allow-privileged]
 dev container create NAME --no-folder [--tools LIST] [--no-persist-state]
@@ -1939,6 +1980,7 @@ primary, and the rest are extra folders (see
 | `--no-folder` | no host directory at all; work lives in a volume `dev` owns |
 | `--generate` | render a base Ubuntu configuration when the folder ships none |
 | `--tools` | comma-separated catalog tools for a generated container |
+| `--config` | use this `devcontainer.json` or `.devcontainer.json`, which may live outside the folder, instead of the folder's own (warns when it shadows one). Not with `--generate`, `--no-folder` or `--tools`. See [Use a devcontainer.json kept outside the project](#use-a-devcontainerjson-kept-outside-the-project) |
 | `--no-persist-state` | do not give the container a volume for its agents' configuration |
 | `--agent-config` | apply this agents.yaml instead of the project's `.devcontainer/agents.yaml` |
 | `--no-agent-config` | apply no agents.yaml, even if the project has one |

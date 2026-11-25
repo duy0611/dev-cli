@@ -33,3 +33,7 @@ Facts (from `docs/USAGE.md`):
 - No worktree containers.
 - After rotating a secret: `dev container sync <name>`.
 - Pass `-` as the value of an optional setting to clear it.
+
+`--config <file>` (a `devcontainer.json` kept outside the project) works here too
+and is experimental like the provider: the stored path is read for the host
+build, so it must stay reachable on the machine running `dev`.

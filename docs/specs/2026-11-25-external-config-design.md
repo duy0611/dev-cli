@@ -1,5 +1,8 @@
 # A devcontainer.json outside the project
 
+Status: implemented. The two open questions below concern the devcontainer
+CLI's own behaviour and are covered by `TestSmokeExternalConfig`.
+
 ## Problem
 
 Some projects do not ship a `devcontainer.json`, and their owners do not want
@@ -66,11 +69,16 @@ The project's `.devcontainer/agents.yaml` is still looked up under `Source` by
 
 A project-owned source has its `ConfigPath` read by `applyFrom` only as a
 marker (`fromProjectOwned`); the new container otherwise finds its own folder's
-config. A source whose `ConfigPath` is outside its `Source` makes that wrong:
-the copy would find nothing in its folder. Rule: when the source's `ConfigPath`
-is not under its `Source` and `--config` is absent, the new container inherits
-that path; `--config` overrides it. The `--copy image` compose check already
-reads both containers' paths and is unchanged.
+config. That is wrong when the source's `ConfigPath` is not where
+`dcconfig.Find(source)` looks: the copy would find nothing, or the wrong file,
+in its folder. Rule: when `--config` is absent and the source's `ConfigPath`
+differs from what `Find` returns for its `Source`, the new container inherits
+it. A path outside the source's folder is kept as is; one inside it (say
+`.devcontainer/python/devcontainer.json`) is rebased onto the new folder, and a
+missing file there is exit 3. `--config` overrides either. An inherited external
+config shadows the new folder's own `.devcontainer` with the usual warning. The
+`--copy image` compose check already reads both containers' paths and is
+unchanged.
 
 ### Errors
 
@@ -104,8 +112,8 @@ this file is out of reach by construction. The git guard still applies to
 
 ## Open questions
 
-Verify against the devcontainer CLI source (`npm pack @devcontainers/cli`)
-before implementing, and write the answers into `USAGE.md`:
+Both are answered on a real engine by `TestSmokeExternalConfig`
+(`test/smoke/externalconfig_test.go`); `USAGE.md` states the answers.
 
 1. With `--config` outside `--workspace-folder`, what anchors a relative
    `build.dockerfile` and `build.context`: the config's directory (the spec's
@@ -114,7 +122,7 @@ before implementing, and write the answers into `USAGE.md`:
 2. What `${localWorkspaceFolder}` expands to: expected `--workspace-folder`,
    hence the project. A file that relies on it must keep working.
 
-If either differs, the page documents it and the flag still ships.
+If either differs, `USAGE.md` documents it and the flag still ships.
 
 ## Kubernetes
 
