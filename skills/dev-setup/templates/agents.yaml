@@ -1,0 +1,27 @@
+# Minimal agents.yaml. Full reference: docs/agents.sample.yaml in the dev repo.
+# Applied on `dev container create` and `rebuild`, not on `start`.
+# Unknown keys are rejected. Never put a token here: reference ${NAME} and
+# define it with `dev workspace set NAME SPEC`.
+version: 1
+
+skills:
+  - git: https://github.com/obra/superpowers
+    paths:
+      - skills/writing-plans
+      - skills/systematic-debugging
+  # Local skills, relative to this file (must hold a SKILL.md):
+  # - path: ./skills/our-conventions
+
+mcp:
+  # needs node in the image; dev workspace set CONTEXT7_API_KEY <spec>
+  context7:
+    command: npx
+    args: ["-y", "@upstash/context7-mcp"]
+    env:
+      CONTEXT7_API_KEY: ${CONTEXT7_API_KEY}
+
+claude:
+  marketplaces:
+    claude-plugins-official: anthropics/claude-plugins-official
+  plugins:
+    - superpowers@claude-plugins-official

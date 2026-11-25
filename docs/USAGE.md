@@ -634,6 +634,12 @@ the flag.
 Unlike a folderless container, this one *does* bind-mount your folder: the
 generated configuration only supplies what the project lacks.
 
+To keep the setup beside the project, the
+[`dev-setup` skill](../skills/dev-setup/SKILL.md) lays out a sibling directory
+holding `agents.yaml`. A hand-written `devcontainer.json` cannot live there:
+`create` reads one only from the folder itself. A
+[proposal](specs/2026-11-25-external-config-design.md) covers a `--config` flag.
+
 A folder that ships its own configuration always wins. `--generate` against one
 is an error rather than a silent shadowing:
 
