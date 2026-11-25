@@ -214,6 +214,9 @@ dev container  create|list|start|stop|remove|rebuild|logs|shell|exec|agent|sync|
 Every container command accepts `--workspace NAME`, defaulting to the active
 workspace.
 
+To have an agent set up a provider, workspace and container for a project,
+import [`skills/dev-setup/`](skills/dev-setup/SKILL.md).
+
 Exit codes: `0` success, `1` the work failed, `2` the request was malformed,
 `3` something named does not exist.
 

@@ -1,0 +1,8 @@
+{
+  "name": "project",
+  "image": "mcr.microsoft.com/devcontainers/base:1-ubuntu-24.04",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  }
+}

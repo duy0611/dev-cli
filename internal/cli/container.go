@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/duy0611/dev-cli/internal/dcconfig"
@@ -65,7 +67,12 @@ type createOpts struct {
 	tools          []string
 	agentConfig    string
 	noAgentConfig  bool
-	from           string
+	// configFile is --config: a devcontainer.json kept outside the project.
+	configFile string
+	// configRel is a --from source's non-default config inside its folder,
+	// rebased onto the new folder by folderSource.
+	configRel string
+	from      string
 	// copy is --copy's entries as given, empty ones included, so a bad list is
 	// refused rather than read as none.
 	copy []string
@@ -102,6 +109,11 @@ func newContainerCreateCmd(a *app) *cobra.Command {
 			"project that ships its own .devcontainer configuration is used as it\n" +
 			"is; dev never edits it. For a folder with none, --generate\n" +
 			"builds a base Ubuntu configuration from the tools --tools names.\n\n" +
+			"--config PATH names a devcontainer.json (or .devcontainer.json) kept\n" +
+			"outside the project: the project stays the folder and PATH is the\n" +
+			"configuration, wherever it lives. It wins over the project's own file,\n" +
+			"with a warning, and is read again on every rebuild. dev never writes to\n" +
+			"it or to the project. Not with --generate, --no-folder or --tools.\n\n" +
 			"With --no-folder there is no host directory at all: the container's work\n" +
 			"lives in a volume dev creates and removes with it. That configuration is\n" +
 			"always generated, and kept in dev's own database.\n\n" +
@@ -119,9 +131,13 @@ func newContainerCreateCmd(a *app) *cobra.Command {
 			"configuration, its tools. The configuration is rendered afresh for this\n" +
 			"container, so the two never share a volume. --tools then takes +/-\n" +
 			"changes to the source's list, and the other flags override what is\n" +
-			"inherited. A source that uses its project's own config supplies no\n" +
-			"tools: the new container uses its own folder's .devcontainer, which\n" +
-			"must exist, and --tools is refused.\n\n" +
+			"inherited. A source whose config is not at its folder's default\n" +
+			"location passes it on unless --config names another: a path outside\n" +
+			"the folder as is (shadowing the new folder's own config, with a\n" +
+			"warning), one inside it at the same place in the new folder. Any other\n" +
+			"source that uses its project's own config supplies no tools: the new\n" +
+			"container uses its own folder's .devcontainer, which must exist, and\n" +
+			"--tools is refused.\n\n" +
 			"--copy image,state, with --from, skips the build and fills the state\n" +
 			"volume: image starts from the image SOURCE's container was created from\n" +
 			"(nothing is built; the configurations must match), state copies SOURCE's\n" +
@@ -155,6 +171,8 @@ func newContainerCreateCmd(a *app) *cobra.Command {
 		"comma-separated tools to install in a generated container (see: dev container tools)")
 	cmd.Flags().BoolVar(&opts.noPersistState, "no-persist-state", false,
 		"do not give the container a volume for its agents' configuration")
+	cmd.Flags().StringVar(&opts.configFile, "config", "",
+		"use this devcontainer.json (or .devcontainer.json) instead of the folder's own; it may live outside the folder")
 	cmd.Flags().StringVar(&opts.agentConfig, "agent-config", "",
 		"apply this agents.yaml instead of the project's .devcontainer/agents.yaml")
 	cmd.Flags().BoolVar(&opts.noAgentConfig, "no-agent-config", false,
@@ -185,6 +203,15 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 	}
 	if !opts.noFolder {
 		if err := refuseBroadFolder(folder); err != nil {
+			return err
+		}
+	}
+	if opts.configFile != "" {
+		if opts.generate || opts.noFolder || len(opts.tools) > 0 {
+			return usageErrorf("--config supplies the configuration; --generate, --no-folder and --tools have nothing to do")
+		}
+		var err error
+		if opts.configFile, err = resolveConfigFile(opts.configFile); err != nil {
 			return err
 		}
 	}
@@ -221,6 +248,21 @@ func runContainerCreate(ctx context.Context, a *app, workspace, name, folder str
 	src, err := applyFrom(a, wsName, &opts)
 	if err != nil {
 		return err
+	}
+	if opts.configFile == "" && src != nil && src.SourceKind == model.SourceFolder &&
+		src.GeneratedConfig == "" && src.ConfigPath != "" {
+		if def, ferr := dcconfig.Find(src.Source); ferr != nil || def != src.ConfigPath {
+			if opts.generate {
+				return usageErrorf("container %s uses a config outside its folder's default location; --generate has nothing to do", opts.from)
+			}
+			if within(src.Source, src.ConfigPath) {
+				// Its own folder is gone from under it, or the file is not where
+				// Find looks, so the copy's folder is searched at the same place.
+				opts.configRel, _ = filepath.Rel(src.Source, src.ConfigPath)
+			} else if opts.configFile, err = resolveConfigFile(src.ConfigPath); err != nil {
+				return err
+			}
+		}
 	}
 	// After the lookup, so a missing source is exit 3 whatever --copy says.
 	kinds, err := parseCopy(opts.copy, opts.from)
@@ -578,6 +620,31 @@ func refuseBroadFolder(folder string) error {
 	return nil
 }
 
+// resolveConfigFile resolves --config: an existing regular file the
+// devcontainer CLI will accept by name.
+func resolveConfigFile(path string) (string, error) {
+	resolved, err := xpath.ResolveFile(path)
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+		return "", notFoundErrorf("config %s does not exist", path)
+	}
+	if err != nil && strings.Contains(err.Error(), "not a file") {
+		return "", notFoundErrorf("config %s is not a regular file", path)
+	}
+	if err != nil {
+		return "", usageError(err)
+	}
+	if base := filepath.Base(resolved); base != "devcontainer.json" && base != ".devcontainer.json" {
+		return "", usageErrorf("--config must name a devcontainer.json or .devcontainer.json file")
+	}
+	return resolved, nil
+}
+
+// within reports whether path is under dir.
+func within(dir, path string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 // folderSource resolves a --folder to its source, project config or generated
 // document.
 func folderSource(ctx context.Context, wsName, name, folder string, mode model.Mode, opts createOpts, a *app) (source, configPath, generated, worktreeRepo string, err error) {
@@ -608,6 +675,22 @@ func folderSource(ctx context.Context, wsName, name, folder string, mode model.M
 		mount = worktreeMount(repo, source)
 	}
 	configPath, err = dcconfig.Find(source)
+	if opts.configRel != "" {
+		if opts.configFile, err = resolveConfigFile(filepath.Join(source, opts.configRel)); err != nil {
+			return "", "", "", "", err
+		}
+		configPath, err = dcconfig.Find(source)
+	}
+	if opts.configFile != "" {
+		if err == nil {
+			own, _ := filepath.EvalSymlinks(configPath)
+			if own != opts.configFile {
+				warnf(a, "--config %s is used; %s in %s is ignored", xpath.Shorten(opts.configFile),
+					strings.TrimPrefix(configPath, source+string(filepath.Separator)), xpath.Shorten(source))
+			}
+		}
+		return source, opts.configFile, "", worktreeRepo, nil
+	}
 	switch {
 	case err == nil && opts.generate:
 		// Generating would shadow the project's own definition.
