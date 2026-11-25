@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.0](https://github.com/duy0611/dev-cli/compare/v0.25.0...v0.26.0) (2026-11-25)
+
+
+### Features
+
+* **cli:** add --config to container create ([76bff4d](https://github.com/duy0611/dev-cli/commit/76bff4dbd13349029372f98977fb34a9cf5f5516))
+
 ## [0.25.0](https://github.com/duy0611/dev-cli/compare/v0.24.0...v0.25.0) (2026-11-23)
 
 
